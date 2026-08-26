@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Matches the canvas background drawn in PatchCanvas.kt, so there is no
+         flash of a different color between window and first frame. -->
+    <color name="canvas_background">#FF14171C</color>
+    <color name="launcher_background">#FF232830</color>
+</resources>

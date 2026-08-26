@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.PatchCanvas" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/canvas_background</item>
+        <item name="android:statusBarColor">@color/canvas_background</item>
+        <item name="android:navigationBarColor">@color/canvas_background</item>
+    </style>
+</resources>
