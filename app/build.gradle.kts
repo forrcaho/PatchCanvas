@@ -6,6 +6,28 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// ---- Release signing -------------------------------------------------------
+// Credentials come from ~/.gradle/gradle.properties on a dev machine, or from
+// environment variables in CI. Neither lives in this repository. If no
+// credentials are present the release build is left unsigned rather than
+// failing, so a fresh clone can still run `assembleDebug` and `test`.
+val storeFilePath: String? =
+    (findProperty("RELEASE_STORE_FILE") as String?) ?: System.getenv("RELEASE_STORE_FILE")
+val storePw: String? =
+    (findProperty("RELEASE_STORE_PASSWORD") as String?) ?: System.getenv("RELEASE_STORE_PASSWORD")
+val keyAliasName: String? =
+    (findProperty("RELEASE_KEY_ALIAS") as String?) ?: System.getenv("RELEASE_KEY_ALIAS")
+val keyPw: String? =
+    (findProperty("RELEASE_KEY_PASSWORD") as String?) ?: System.getenv("RELEASE_KEY_PASSWORD")
+
+val hasReleaseSigning = storeFilePath != null && file(storeFilePath).exists() &&
+    storePw != null && keyAliasName != null && keyPw != null
+
+// Version metadata: overridable from CI so a tagged release stamps the APK with
+// the tag name, while a local build keeps the checked-in defaults.
+val appVersionName: String = (findProperty("appVersionName") as String?) ?: "1.0"
+val appVersionCode: Int = ((findProperty("appVersionCode") as String?) ?: "1").toInt()
+
 android {
     namespace = "com.example.patch"
     compileSdk = 37
@@ -14,12 +36,26 @@ android {
         applicationId = "com.example.patch"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
+    }
+
+    if (hasReleaseSigning) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(storeFilePath!!)
+                storePassword = storePw
+                keyAlias = keyAliasName
+                keyPassword = keyPw
+            }
+        }
     }
 
     buildTypes {
         release {
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
