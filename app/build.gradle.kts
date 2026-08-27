@@ -29,11 +29,11 @@ val appVersionName: String = (findProperty("appVersionName") as String?) ?: "1.0
 val appVersionCode: Int = ((findProperty("appVersionCode") as String?) ?: "1").toInt()
 
 android {
-    namespace = "com.example.patch"
+    namespace = "io.github.forrcaho.patchcanvas"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.example.patch"
+        applicationId = "io.github.forrcaho.patchcanvas"
         minSdk = 26
         targetSdk = 37
         versionCode = appVersionCode

@@ -1,4 +1,4 @@
-package com.example.patch
+package io.github.forrcaho.patchcanvas
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture

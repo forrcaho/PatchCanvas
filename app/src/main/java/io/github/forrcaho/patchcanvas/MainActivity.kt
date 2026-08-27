@@ -1,4 +1,4 @@
-package com.example.patch
+package io.github.forrcaho.patchcanvas
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
