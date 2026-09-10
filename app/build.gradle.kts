@@ -34,7 +34,7 @@ android {
 
     defaultConfig {
         applicationId = "io.github.forrcaho.patchcanvas"
-        minSdk = 26
+        minSdk = 31
         targetSdk = 37
         versionCode = appVersionCode
         versionName = appVersionName
