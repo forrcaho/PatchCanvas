@@ -78,6 +78,14 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    testOptions {
+        unitTests {
+            // android.util.Log is a throwing stub in the unit-test android.jar; the
+            // error paths in PatchStore call it deliberately, so let it no-op instead.
+            isReturnDefaultValues = true
+        }
+    }
 }
 
 kotlin {
@@ -103,4 +111,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     testImplementation("junit:junit:4.13.2")
+    // The android.jar used for unit tests stubs org.json with methods that throw, so the
+    // real implementation goes on the test classpath ahead of it.
+    testImplementation("org.json:json:20250107")
 }

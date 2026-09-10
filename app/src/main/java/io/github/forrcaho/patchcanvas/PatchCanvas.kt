@@ -175,7 +175,7 @@ class PatchModule(
  * world modules (dp, inside the camera transform) and rails (px, screen space) so the
  * two cannot drift apart.
  */
-private fun portIn(
+internal fun portIn(
     rect: Rect,
     unit: Float,
     dir: PortDirection,
@@ -221,6 +221,17 @@ class Patch {
     fun add(type: ModuleType, at: Offset): PatchModule? {
         if (type.pinned != null) return null
         return PatchModule(nextId++, type, at).also { modules.add(it) }
+    }
+
+    /**
+     * Re-adds a module with its stored id, for reload. The counter is advanced past
+     * whatever came in so a restored patch cannot hand out an id it is already using;
+     * that makes nextId derived state rather than another field to keep in the file.
+     */
+    internal fun adopt(module: PatchModule) {
+        if (module.isPinned) return
+        modules.add(module)
+        if (module.id >= nextId) nextId = module.id + 1
     }
 
     fun remove(module: PatchModule) {
@@ -920,7 +931,10 @@ private fun DrawScope.drawModuleBox(
 // ---------------------------------------------------------------- demo state
 
 @Composable
-fun rememberDemoPatch(): Patch = remember {
+fun rememberDemoPatch(): Patch = remember { demoPatch() }
+
+/** The patch a fresh install opens with, before anything has been saved. */
+fun demoPatch(): Patch =
     Patch().apply {
         val steps = add(Types.Steps, Offset(40f, 40f))!!
         val osc = add(Types.Osc, Offset(220f, 40f))!!
@@ -933,4 +947,3 @@ fun rememberDemoPatch(): Patch = remember {
         connect(PortRef(env.id, PortDirection.OUTPUT, 0), PortRef(filter.id, PortDirection.INPUT, 1))
         connect(PortRef(filter.id, PortDirection.OUTPUT, 0), PortRef(OUT_ID, PortDirection.INPUT, 0))
     }
-}

@@ -10,21 +10,43 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.tooling.preview.Preview
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * The whole app is one full-bleed canvas. No chrome, no scaffold — anything drawn on
- * top would just be another thing for a finger to land on by accident.
+ * top would just be another thing for a finger to land on by accident. The context menu
+ * and the I/O rails are drawn inside the canvas for that reason, not above it.
  *
  * (Phase 5 of the roadmap revises that principle deliberately, once modules need knobs.
  * It holds until then.)
  */
 class MainActivity : ComponentActivity() {
+
+    private lateinit var store: PatchStore
+    private lateinit var patch: Patch
+
+    // The patch is owned here rather than by the composition so that onStop can save it
+    // without reaching into Compose state from a lifecycle callback.
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+
+        store = PatchStore(this)
+        patch = store.load() ?: demoPatch()
 
         // Ask for the panel's fastest mode. The reference device is 120Hz-capable but
         // idles its render rate at 60, and half the perceived latency of a tap is the
@@ -34,13 +56,39 @@ class MainActivity : ComponentActivity() {
             window.attributes = window.attributes.apply { preferredRefreshRate = fastest }
         }
 
-        setContent { PatchCanvasApp() }
+        // Autosave. Serialising inside the snapshot means the string can never be torn
+        // by an edit mid-write, and collectLatest plus a delay debounces the flood of
+        // positions a single module drag produces. onStop covers the ordinary exit;
+        // this covers being killed without one.
+        scope.launch {
+            snapshotFlow { patch.toJson() }
+                .distinctUntilChanged()
+                .collectLatest { json ->
+                    delay(SAVE_DEBOUNCE_MS)
+                    withContext(Dispatchers.IO) { store.write(json) }
+                }
+        }
+
+        setContent { PatchCanvasApp(patch) }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        store.write(patch.toJson())
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        scope.cancel()
+    }
+
+    private companion object {
+        const val SAVE_DEBOUNCE_MS = 500L
     }
 }
 
 @Composable
-fun PatchCanvasApp() {
-    val patch = rememberDemoPatch()
+fun PatchCanvasApp(patch: Patch) {
     // The canvas paints edge to edge, but the initial framing keeps the patch clear of
     // the cutout, the gesture bar and the corner radius. Measured on the reference
     // device in landscape: 66dp of cutout down one side, a 24dp gesture bar, and a 50dp
@@ -57,5 +105,5 @@ fun PatchCanvasApp() {
 @Preview(widthDp = 800, heightDp = 400, showBackground = true)
 @Composable
 private fun PatchCanvasPreview() {
-    PatchCanvasApp()
+    PatchCanvasApp(rememberDemoPatch())
 }
