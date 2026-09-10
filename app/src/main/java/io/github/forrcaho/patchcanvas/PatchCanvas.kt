@@ -641,7 +641,7 @@ fun PatchCanvas(
  * then move -- would otherwise open the menu instead of dragging the module. The cost
  * of waiting is small; the cost of a menu you did not ask for is losing your place.
  */
-private const val LONG_PRESS_SCALE = 1.5f
+private const val LONG_PRESS_SCALE = 1.25f
 
 private enum class GestureKind { Undecided, Tap, LongPress, MoveModule, Pan, Transform }
 
