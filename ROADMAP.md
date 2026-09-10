@@ -97,9 +97,14 @@ Bookkeeping that should not be discovered at release time.
   fallback disappears. Going to 31 buys two more things worth having: one storage model
   instead of a legacy branch (Phase 6 export), and `PerformanceHintManager` unconditionally
   (Phase 2). Android 12 is 2021, which is inside "reasonably high-end" by any reading.
-  Dial back to 29 if that turns out to exclude someone real.
+  Dial back to 29 if that turns out to exclude someone real. *(done)*
 
 ## Phase 1 -- A patch editor worth using, still silent
+
+**Code complete; only partly exercised on the device.** Everything below is written,
+compiles clean and is covered by 28 unit tests. The unit fix and the port pitch were
+verified on hardware by screenshot and tap test; the rails, the long-press menu and
+reload have not been.
 
 Everything here is independent of the audio engine, and all of it is load-bearing for
 what follows. Right now you cannot tell `pitch` from `fm` on screen, cannot add a
@@ -150,9 +155,12 @@ targets stay put. Flip it once before the fix and once after.
 - **Add and delete modules.** Long-press empty canvas for a palette, long-press a module
   to delete or duplicate. `Patch.add` exists and only `rememberDemoPatch` calls it.
   Note this adds a fourth outcome to the gesture loop and needs a press timeout.
-- **Persistence.** kotlinx.serialization to JSON, autosave to internal storage, restore
-  on launch, plus `rememberSaveable` for process death. Requires serializing `nextId`
-  so module identity survives a round trip.
+- **Persistence.** JSON to internal storage, autosave debounced, restored on launch.
+  Built on `org.json` rather than kotlinx.serialization: a patch file is untrusted input
+  needing entry-by-entry validation either way, and with that written the plugin and its
+  Kotlin-version coupling buy nothing but risk. `nextId` turned out not to need storing --
+  it is derived by advancing past the highest id adopted on load. Writes rename over a
+  sibling so a kill mid-write cannot truncate the patch.
 - **Insets.** The canvas is full-bleed with `enableEdgeToEdge()` and nothing accounts for
   any of it. Measured in landscape: **66dp** of cutout down one side (which side depends
   on rotation direction), a **24dp** gesture bar, and a **50dp** corner radius that clips
@@ -163,6 +171,28 @@ targets stay put. Flip it once before the fix and once after.
   it is the half that costs nothing to fix -- `Surface.setFrameRate()` or
   `preferredDisplayModeId`. Pointless to chase 10ms of audio latency while the visual
   confirmation lags by 17ms.
+
+### Pinned I/O rails
+
+`Out` was never really a module -- there is exactly one, a second is meaningless, and
+deleting it should be impossible -- but it was an ordinary node that happened to be
+special by convention. It and a new `In` are now welded to the viewport edges: unique,
+unaddable, undeletable, position-less, and drawn at constant size so they stay reachable
+at any zoom.
+
+The direction is not arbitrary. `drawCable` has always computed its slack as
+`(b.x - a.x) * 0.5`, so the geometry already assumed left-to-right flow; welding the
+source left and the sink right makes that explicit. Rails are 64dp rather than a module's
+116dp, since two full-width ones would cost a quarter of the landscape canvas forever.
+
+This introduced a second coordinate space -- rails in screen px, free modules in world dp
+-- so a cable can have one endpoint in each. Every cable is therefore resolved through
+`portScreen()` and drawn in screen space. The hit test needed no changes at all to cope,
+because it was already comparing in screen space: thesis #2 had prepared for this without
+knowing it.
+
+`In` is drawn dimmed and unpatchable until enabled, which it is not by default. See
+Phase 4 for why the guard is a headphone check rather than the limiter.
 
 *Done when:* building a patch from nothing on the phone is pleasant, and it is still
 there tomorrow.
@@ -243,10 +273,16 @@ mixer and mult module necessary rather than optional.
 | Clock | -- | frame-counted; this is the stable clock |
 | Steps | -- | clocked sequencer, pitch CV + gate out |
 | Mix / Mult | -- | forced by single-source inputs |
-| Out | `Limiter` | plus a DC blocker |
+| Out | `Limiter` | pinned right; plus a DC blocker |
+| In | -- | pinned left; mic capture, `RECORD_AUDIO`, off by default |
 
 The limiter is not polish. A feedback patch can reach full scale instantly, and this is
 an instrument used with headphones.
+
+It is not, however, the guard for the mic. A limiter prevents clipping, not feedback --
+it will happily limit a howl to a very loud steady tone. Mic into speaker is a guaranteed
+loop, mic into headphones is not, so enabling the `In` rail gates on a headphone route
+plus the `RECORD_AUDIO` grant. That is worth more than any amount of DSP.
 
 ## Phase 5 -- Playability
 
@@ -281,10 +317,17 @@ Also here: per-input attenuverters, without which CV routing is unusable in prac
 
 ## Testing
 
-Zero tests today against one `junit` dependency. The parts that repay tests most:
+28 tests as of Phase 1, against a suite that previously had a `junit` dependency and
+nothing else. Covered: the graph invariants, the port geometry, and every malformed-input
+path through the loader.
 
-- The pure graph model -- `connect` replacement semantics, cycle handling,
-  serialization round-trip. Plain JVM tests, cheap, and they pin down the thesis.
+Worth doing once rather than assuming -- check the suite can actually fail.
+Reintroducing the original 17.2dp port spacing fails three tests. Doing that also exposed
+a real gap, since spacing and centring are separate terms in `portIn` and only spacing
+was pinned. Mutation-checking a new test area is now the habit.
+
+Still to cover:
+
 - Camera and hit-test math. Pure functions, and the most novel code in the project.
 - The C++ graph, via a host-side binary that runs it offline and compares buffers.
   Audio bugs are miserable to diagnose on a device; catching them on the desktop is
