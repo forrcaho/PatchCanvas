@@ -203,3 +203,68 @@ class PortGeometryTest {
         assertEquals(PatchModule.PORT_PITCH * d, b.y - a.y, 0.001f)
     }
 }
+
+/**
+ * Menu layout is pure arithmetic that is tedious to check by hand and easy to get
+ * subtly wrong at a screen edge, which is exactly the case for pinning it in a test.
+ */
+class MenuLayoutTest {
+
+    private val d = 2.4375f                       // the reference device
+    private val screen = Size(2404f, 1080f)       // its landscape canvas, in px
+
+    private fun add(n: Int) = Types.palette.take(n).map { MenuItem.Add(it) }
+
+    @Test
+    fun `rows are minimised and then balanced`() {
+        // four items should be 2x2, not a row of three and an orphan
+        val four = menuLayout(add(4), Offset(1200f, 540f), d, screen)
+        val ys = four.tiles.map { it.first.top }.distinct()
+        val xs = four.tiles.map { it.first.left }.distinct()
+        assertEquals(2, ys.size)
+        assertEquals(2, xs.size)
+    }
+
+    @Test
+    fun `a small menu stays on one row`() {
+        val two = menuLayout(
+            listOf(MenuItem.Duplicate(1L), MenuItem.Delete(1L)),
+            Offset(1200f, 540f), d, screen,
+        )
+        assertEquals(1, two.tiles.map { it.first.top }.distinct().size)
+    }
+
+    @Test
+    fun `every tile lies inside the menu panel`() {
+        val layout = menuLayout(add(4), Offset(1200f, 540f), d, screen)
+        layout.tiles.forEach { (tile, _) ->
+            assertTrue(tile.left >= layout.rect.left && tile.right <= layout.rect.right)
+            assertTrue(tile.top >= layout.rect.top && tile.bottom <= layout.rect.bottom)
+        }
+    }
+
+    @Test
+    fun `the menu is clamped on screen wherever it is opened`() {
+        val corners = listOf(
+            Offset(0f, 0f),
+            Offset(screen.width, 0f),
+            Offset(0f, screen.height),
+            Offset(screen.width, screen.height),
+            Offset(screen.width / 2f, 0f),
+        )
+        corners.forEach { anchor ->
+            val r = menuLayout(add(4), anchor, d, screen).rect
+            assertTrue("left at $anchor", r.left >= 0f)
+            assertTrue("top at $anchor", r.top >= 0f)
+            assertTrue("right at $anchor", r.right <= screen.width)
+            assertTrue("bottom at $anchor", r.bottom <= screen.height)
+        }
+    }
+
+    @Test
+    fun `the menu clears the fingertip that opened it`() {
+        val anchor = Offset(1200f, 800f)
+        val r = menuLayout(add(4), anchor, d, screen).rect
+        assertTrue("menu should sit above the press", r.bottom < anchor.y)
+    }
+}

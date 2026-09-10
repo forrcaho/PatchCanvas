@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.withTimeout
+import kotlin.math.ceil
 import kotlin.math.min
 
 /*
@@ -749,16 +750,18 @@ private object MenuMetrics {
     const val SCREEN_MARGIN = 10f
 }
 
-private class MenuLayout(val rect: Rect, val tiles: List<Pair<Rect, MenuItem>>)
+internal class MenuLayout(val rect: Rect, val tiles: List<Pair<Rect, MenuItem>>)
 
-private fun menuLayout(
+internal fun menuLayout(
     items: List<MenuItem>,
     anchor: Offset,
     d: Float,
     canvas: Size,
 ): MenuLayout {
-    val cols = min(MenuMetrics.COLS, items.size).coerceAtLeast(1)
-    val rows = (items.size + cols - 1) / cols
+    // Use as few rows as the column cap allows, then spread the items evenly across
+    // them, so four items are 2x2 rather than a row of three and a lonely orphan.
+    val rows = ceil(items.size / MenuMetrics.COLS.toFloat()).toInt().coerceAtLeast(1)
+    val cols = ceil(items.size / rows.toFloat()).toInt().coerceAtLeast(1)
     val w = (MenuMetrics.PAD * 2 + cols * MenuMetrics.TILE_W + (cols - 1) * MenuMetrics.GAP) * d
     val h = (MenuMetrics.PAD * 2 + rows * MenuMetrics.TILE_H + (rows - 1) * MenuMetrics.GAP) * d
     val margin = MenuMetrics.SCREEN_MARGIN * d
