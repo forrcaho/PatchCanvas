@@ -98,7 +98,7 @@ class MainActivity : ComponentActivity() {
                 // The audio thread's tid exists only once the first callback has run,
                 // which is a burst or two after requestStart returns.
                 delay(HINT_ATTACH_DELAY_MS)
-                AudioEngine.attachPerformanceHint(this@MainActivity)
+                AudioEngine.attachPerformanceHint()
                 AudioEngine.logStatus()
             }
         }

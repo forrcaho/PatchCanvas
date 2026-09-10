@@ -5,6 +5,7 @@
 
 #include <unistd.h>
 
+#include <chrono>
 #include <cmath>
 #include <sstream>
 
@@ -91,6 +92,13 @@ void AudioEngine::stop() {
     stream_->requestStop();
     stream_->close();
     stream_.reset();
+
+    // Ordered deliberately: the stream is closed first, so no callback can still be
+    // holding the session pointer when it is freed.
+    if (auto *session = hintSession_.exchange(nullptr, std::memory_order_acq_rel)) {
+        APerformanceHint_closeSession(session);
+    }
+    audioThreadTid_.store(0, std::memory_order_relaxed);
 }
 
 oboe::DataCallbackResult AudioEngine::onAudioReady(oboe::AudioStream * /*stream*/,
@@ -101,6 +109,8 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(oboe::AudioStream * /*stream*
     if (audioThreadTid_.load(std::memory_order_relaxed) == 0) {
         audioThreadTid_.store(gettid(), std::memory_order_relaxed);
     }
+
+    const auto began = std::chrono::steady_clock::now();
 
     auto *out = static_cast<float *>(audioData);
     const float target = toneEnabled_.load(std::memory_order_relaxed) ? kToneGain : 0.0f;
@@ -116,7 +126,51 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(oboe::AudioStream * /*stream*
             *out++ = sample;
         }
     }
+
+    // The half of ADPF that makes it work: without a measured duration the governor is
+    // guessing, and it guesses badly for audio -- a thread that wakes, does a short
+    // burst and sleeps looks idle, so clocks drop and work migrates to little cores,
+    // and the next callback misses its deadline.
+    if (auto *session = hintSession_.load(std::memory_order_acquire)) {
+        const auto elapsed = std::chrono::steady_clock::now() - began;
+        APerformanceHint_reportActualWorkDuration(
+                session,
+                std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count());
+    }
+
     return oboe::DataCallbackResult::Continue;
+}
+
+bool AudioEngine::attachPerformanceHint() {
+    if (hintSession_.load(std::memory_order_acquire) != nullptr) return true;
+
+    const int32_t tid = audioThreadTid_.load(std::memory_order_relaxed);
+    if (tid == 0 || sampleRate_ <= 0 || framesPerBurst_ <= 0) return false;
+
+    // minSdk 33 makes the API callable, not the feature present: a device whose power
+    // HAL does not implement ADPF still returns null here, and that is not an error.
+    APerformanceHintManager *manager = APerformanceHint_getManager();
+    if (manager == nullptr) {
+        __android_log_print(ANDROID_LOG_INFO, kTag, "no ADPF manager on this device");
+        return false;
+    }
+
+    // One burst is the deadline: the callback must return before the next one is due.
+    const int64_t targetNanos =
+            static_cast<int64_t>(framesPerBurst_) * 1000000000LL / sampleRate_;
+
+    int32_t threads[] = {tid};
+    APerformanceHintSession *session =
+            APerformanceHint_createSession(manager, threads, 1, targetNanos);
+    if (session == nullptr) {
+        __android_log_print(ANDROID_LOG_WARN, kTag, "ADPF session refused");
+        return false;
+    }
+
+    hintSession_.store(session, std::memory_order_release);
+    __android_log_print(ANDROID_LOG_INFO, kTag, "ADPF attached tid=%d targetNs=%lld",
+                        tid, static_cast<long long>(targetNanos));
+    return true;
 }
 
 void AudioEngine::onErrorAfterClose(oboe::AudioStream * /*stream*/, oboe::Result result) {

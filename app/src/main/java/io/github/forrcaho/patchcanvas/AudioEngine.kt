@@ -1,7 +1,5 @@
 package io.github.forrcaho.patchcanvas
 
-import android.content.Context
-import android.os.PerformanceHintManager
 import android.util.Log
 
 /**
@@ -27,7 +25,6 @@ object AudioEngine {
     }
 
     private var started = false
-    private var hintSession: PerformanceHintManager.Session? = null
 
     fun start(): Boolean {
         if (!available || started) return started
@@ -38,8 +35,6 @@ object AudioEngine {
 
     fun stop() {
         if (!available || !started) return
-        hintSession?.close()
-        hintSession = null
         nativeStop()
         started = false
     }
@@ -51,40 +46,18 @@ object AudioEngine {
     /**
      * Aims a performance hint at the audio thread.
      *
-     * Tensor's governor is aggressive about parking work on little cores, and this is
-     * the supported way to say the thread has a deadline. The tid only exists once the
-     * first callback has run, so this is called a moment after start rather than during
-     * it.
+     * Entirely native. Creating the session is not realtime work so it happens here, on
+     * the main thread, a moment after start -- the audio thread's id only exists once
+     * the first callback has run. Reporting each callback's duration then happens on the
+     * audio thread through the NDK's plain C entry point, with no JVM attachment, which
+     * is what minSdk 33 buys: attaching the realtime thread to the JVM would expose it
+     * to GC suspension, and a thread parked at a safepoint is not filling the buffer.
      *
-     * Only the session is created here. The other half of ADPF -- reporting each
-     * callback's actual duration -- has to happen on the audio thread, and the Java API
-     * would mean a JNI call into the JVM from that thread, which is the one thing the
-     * realtime path must never do. The NDK's APerformanceHint does it without JNI but
-     * needs API 33; revisit if minSdk ever rises.
+     * False is a normal answer, not an error -- a device whose power HAL lacks ADPF
+     * simply does not get the hint.
      */
-    fun attachPerformanceHint(context: Context): Boolean {
-        if (!available || !started || hintSession != null) return hintSession != null
-
-        val tid = nativeAudioThreadTid()
-        val rate = nativeSampleRate()
-        val burst = nativeFramesPerBurst()
-        if (tid == 0 || rate <= 0 || burst <= 0) return false
-
-        // One burst is the deadline: the callback must return before the next is due.
-        val targetNanos = burst.toLong() * 1_000_000_000L / rate.toLong()
-
-        return try {
-            val manager = context.getSystemService(PerformanceHintManager::class.java)
-            hintSession = manager?.createHintSession(intArrayOf(tid), targetNanos)
-            if (hintSession != null) {
-                Log.i(TAG, "performance hint attached tid=$tid targetNs=$targetNanos")
-            }
-            hintSession != null
-        } catch (e: Exception) {
-            Log.w(TAG, "could not attach performance hint", e)
-            false
-        }
-    }
+    fun attachPerformanceHint(): Boolean =
+        if (available && started) nativeAttachPerformanceHint() else false
 
     /** What the stream actually negotiated, as key=value pairs. */
     fun status(): String = if (available) nativeStatus() else "state=UNAVAILABLE"
@@ -95,7 +68,5 @@ object AudioEngine {
     private external fun nativeStop()
     private external fun nativeSetToneEnabled(enabled: Boolean)
     private external fun nativeStatus(): String
-    private external fun nativeAudioThreadTid(): Int
-    private external fun nativeSampleRate(): Int
-    private external fun nativeFramesPerBurst(): Int
+    private external fun nativeAttachPerformanceHint(): Boolean
 }

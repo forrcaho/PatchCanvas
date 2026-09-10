@@ -93,11 +93,11 @@ Bookkeeping that should not be discovered at release time.
 
 - MIT `LICENSE`. *(done)*
 - README package paths corrected after the `com.example` move. *(done)*
-- `minSdk` 26 -> 31. The floor is 27, where Oboe first reaches AAudio and the OpenSL ES
-  fallback disappears. Going to 31 buys two more things worth having: one storage model
-  instead of a legacy branch (Phase 7 export), and `PerformanceHintManager` unconditionally
-  (Phase 2). Android 12 is 2021, which is inside "reasonably high-end" by any reading.
-  Dial back to 29 if that turns out to exclude someone real. *(done)*
+- `minSdk` 26 -> 33. The floor is 27, where Oboe first reaches AAudio and the OpenSL ES
+  fallback disappears; 31 adds one storage model instead of a legacy branch (Phase 7
+  export). It went to 33 in Phase 2 for ADPF -- see there, the reasoning is real rather
+  than tidiness. Android 13 is 2022, which is inside "reasonably high-end" by any
+  reading. *(done)*
 
 ## Phase 1 -- A patch editor worth using, still silent
 
@@ -210,10 +210,30 @@ purpose is to retire risk, not to make music.
   buffers as a multiple of the reported burst, request `PerformanceMode::LowLatency` with
   `SharingMode::Exclusive`.
 - Restrict the NDK build to `arm64-v8a` -- the reference device reports no other ABI.
-- Request a `PerformanceHintManager` session for the audio thread's TID with a target
-  work duration. Tensor's governor is aggressive about parking work on little cores, and
-  ADPF is the supported way to tell the scheduler this thread has a deadline. Free at
-  `minSdk` 31.
+- ADPF, entirely native, which is why `minSdk` is 33.
+
+  The framework has two halves. `createSession(tids, target)` declares that a thread has
+  a deadline; `reportActualWorkDuration` tells the governor what each cycle actually
+  cost. The second is the half that works: without it the governor guesses, and it
+  guesses badly for audio, because a thread that wakes, does a short burst and sleeps
+  looks idle -- so clocks drop, work migrates to little cores, and the next callback
+  misses its deadline. That is exactly Tensor's failure mode.
+
+  At API 31 `reportActualWorkDuration` exists only as a Java method, so calling it per
+  callback means attaching the audio thread to the JVM. That is not a matter of JNI
+  overhead: a JVM thread can be **suspended by the garbage collector**, and a thread
+  parked at a safepoint is not filling the buffer. This is the reason the audio thread
+  must never touch the JVM at all, and it does not relax at any API level.
+
+  API 33 exposes `android/performance_hint.h` -- the same calls as plain C in
+  `libandroid.so`, with no JVM attachment and no GC exposure. Session creation still
+  happens on the main thread, since it is not realtime work and the audio thread's id
+  only exists after the first callback.
+
+  This is the single exception to the no-calls-out rule, earned by having a native entry
+  point. Phase 3's bridge is unaffected: still a lock-free SPSC queue in each direction.
+  And 33 makes the API callable, not the feature present -- a device whose power HAL
+  lacks ADPF returns no manager, which is a normal answer rather than an error.
 - Log measured round-trip latency and XRun count on the actual phone, and confirm the
   stream actually came back MMAP/exclusive rather than silently falling back to shared.
 

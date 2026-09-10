@@ -1,5 +1,6 @@
 #pragma once
 
+#include <android/performance_hint.h>
 #include <oboe/Oboe.h>
 
 #include <atomic>
@@ -29,6 +30,13 @@ public:
 
     /** Key=value line describing what the stream actually negotiated. */
     std::string status() const;
+
+    /**
+     * Creates the ADPF session aimed at the audio thread. Called from the main thread a
+     * moment after start, once the first callback has published its tid -- deliberately
+     * not from the audio thread, since creating a session is not a realtime operation.
+     */
+    bool attachPerformanceHint();
 
     /** 0 until the first callback has run. Needed to aim a performance hint at it. */
     int32_t audioThreadTid() const { return audioThreadTid_.load(std::memory_order_relaxed); }
@@ -62,6 +70,15 @@ private:
     float gain_ = 0.0f;
 
     std::atomic<int32_t> audioThreadTid_{0};
+
+    /**
+     * Read by the audio thread every callback, written by the main thread once.
+     * APerformanceHint_reportActualWorkDuration is a plain C call into libandroid, so
+     * the audio thread can make it without attaching to the JVM -- which is the whole
+     * reason minSdk is 33. Attaching would expose this thread to GC suspension, and a
+     * thread parked at a safepoint is not filling the buffer.
+     */
+    std::atomic<APerformanceHintSession *> hintSession_{nullptr};
     int32_t sampleRate_ = 0;
     int32_t channelCount_ = 0;
     int32_t framesPerBurst_ = 0;

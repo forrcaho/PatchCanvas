@@ -32,19 +32,9 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetToneEnabled(JNIEnv *, j
     engine().setToneEnabled(enabled == JNI_TRUE);
 }
 
-JNIEXPORT jint JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeAudioThreadTid(JNIEnv *, jobject) {
-    return engine().audioThreadTid();
-}
-
-JNIEXPORT jint JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSampleRate(JNIEnv *, jobject) {
-    return engine().sampleRate();
-}
-
-JNIEXPORT jint JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeFramesPerBurst(JNIEnv *, jobject) {
-    return engine().framesPerBurst();
+JNIEXPORT jboolean JNICALL
+Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeAttachPerformanceHint(JNIEnv *, jobject) {
+    return engine().attachPerformanceHint() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jstring JNICALL
