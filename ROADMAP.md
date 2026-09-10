@@ -83,7 +83,7 @@ MMAP is most reliably available there. Being GrapheneOS matters more than it loo
   `RELEASING.md` is already the right distribution channel. No Play Store dependency,
   no store-policy surface, nothing to change.
 - **The USB-C port can be locked down** when the device is locked, which is worth
-  remembering before debugging USB MIDI in Phase 6 and blaming the code.
+  remembering before debugging USB MIDI in Phase 7 and blaming the code.
 
 ---
 
@@ -95,7 +95,7 @@ Bookkeeping that should not be discovered at release time.
 - README package paths corrected after the `com.example` move. *(done)*
 - `minSdk` 26 -> 31. The floor is 27, where Oboe first reaches AAudio and the OpenSL ES
   fallback disappears. Going to 31 buys two more things worth having: one storage model
-  instead of a legacy branch (Phase 6 export), and `PerformanceHintManager` unconditionally
+  instead of a legacy branch (Phase 7 export), and `PerformanceHintManager` unconditionally
   (Phase 2). Android 12 is 2021, which is inside "reasonably high-end" by any reading.
   Dial back to 29 if that turns out to exclude someone real. *(done)*
 
@@ -300,7 +300,48 @@ loop that was built to avoid exactly that kind of contention.
 
 Also here: per-input attenuverters, without which CV routing is unusable in practice.
 
-## Phase 6 -- App-ness
+## Phase 6 -- Subpatches
+
+A phone screen holds about 17 modules at zoom 1.0. A patch worth playing will exceed
+that, and panning around a flat sheet of forty nodes is a worse problem than the one
+tap-to-connect set out to solve. Conceptually coherent groupings are the answer:
+build a voice out of Osc, Env, VCA and Filter, then treat it as one node.
+
+**The rails already generalise, and that is the whole design.** `In` and `Out` mean
+"the boundary of this scope". At the top level that boundary happens to be the audio
+device; inside a group it is the group's own ports. Navigating into a subpatch is the
+same canvas with the same rails, so the mechanism for defining a composite's
+interface already exists and is already tested. Audulus -- touch-first modular on a
+tablet, the closest prior art to this project -- uses exactly this shape.
+
+**The audio graph never sees them.** Flatten before crossing into C++: a three-voice
+patch is twelve nodes in one flat topological sort, not a tree of nested processors.
+This is stated here so Phase 3 is not built in anticipation of nesting it does not
+need. The only cost is that each instance's internal modules need distinct runtime
+ids, which is an id-mapping problem rather than an architectural one.
+
+**Two features, not one.** *Grouping* collapses these particular modules into one
+box: one instance, purely organisational, and enough on its own to solve the screen
+problem. *Abstraction* defines a reusable type that can be stamped out many times,
+each instance with its own state -- considerably more work, needing a definition
+library and a file format that separates definitions from instances. Grouping is the
+natural first half of abstraction, so neither choice wastes the other.
+
+**Why after parameters.** A Voice macro whose filter cutoff cannot be reached from
+outside is half a feature. Exposing a knob through the boundary matters as much as
+exposing a port, and that needs parameters to exist.
+
+**Nothing to build early.** A composite is a `ModuleType` carrying an inner patch
+definition; `PatchModule`, `PortRef` and the connection model are unchanged, because
+each scope is just another flat graph. The one item with a deadline is the file
+format -- definitions and instances must be separable, and that wants deciding before
+Phase 5 hardens the schema. The loader already refuses unknown versions, so a bump is
+clean.
+
+A cheaper partial win, available any time: collapsing a module to a title-only strip
+buys back a good deal of the same screen space for far less work.
+
+## Phase 7 -- App-ness
 
 - Patch library: name, save, load, duplicate, browse.
 - Undo/redo. Falls out of Phase 3's command structs nearly free if they are designed to
@@ -344,7 +385,9 @@ use rather than by argument.
    is the first honest test.
 2. **Is constant panning worse than the problem it solved?** Drag-a-cable was rejected
    partly for occlusion. If a phone-sized viewport means panning between every port
-   pair, that trade may not pay. A minimap or collapsible modules may become necessary.
+   pair, that trade may not pay. Measured at ~17 modules on screen at zoom 1.0, which
+   is more headroom than feared -- but Phase 6 exists because a patch worth playing
+   will exceed it. A minimap or collapsed modules are the cheaper interim answers.
 3. **Does the unified gesture loop survive?** It already needs long-press (Phase 1) and
    may need knob-drag (Phase 5). At some point a single `awaitEachGesture` becomes the
    tangle it was written to avoid. Watch for it.
