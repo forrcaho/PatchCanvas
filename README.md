@@ -34,7 +34,18 @@ not a redundancy. The Compose compiler is applied as
 
 | Path | |
 | --- | --- |
-| `app/src/main/java/com/example/patch/PatchCanvas.kt` | Model, camera, gestures, drawing |
-| `app/src/main/java/com/example/patch/MainActivity.kt` | Full-bleed host for the canvas |
+| `app/src/main/java/io/github/forrcaho/patchcanvas/PatchCanvas.kt` | Model, camera, gestures, drawing |
+| `app/src/main/java/io/github/forrcaho/patchcanvas/MainActivity.kt` | Full-bleed host for the canvas |
 
 `rememberDemoPatch()` supplies the starting patch — five modules, five cables.
+
+## License
+
+MIT -- see [LICENSE](LICENSE).
+
+Planned dependencies are permissively licensed and compatible: Oboe (Apache-2.0)
+and the DaisySP core (MIT, which itself bundles the Plaits and Soundpipe MIT
+notices). The `DaisySP-LGPL` submodule is deliberately *not* used -- clone DaisySP
+without `--recursive` -- so nothing here carries a copyleft relinking obligation.
+Shipping those notices in an in-app licenses screen is a release requirement, not
+a courtesy.
