@@ -32,12 +32,38 @@ android {
     namespace = "io.github.forrcaho.patchcanvas"
     compileSdk = 37
 
+    // Pinned rather than left to AGP's default, so a second machine and CI
+    // build against the same toolchain instead of whatever they resolve.
+    ndkVersion = "28.2.13676358"
+
     defaultConfig {
         applicationId = "io.github.forrcaho.patchcanvas"
         minSdk = 31
         targetSdk = 37
         versionCode = appVersionCode
         versionName = appVersionName
+
+        // The reference device reports arm64-v8a and nothing else, and every phone
+        // this targets is 64-bit. Building one ABI keeps the APK small and removes a
+        // 32-bit DSP path nobody would ever exercise.
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
+
+        externalNativeBuild {
+            cmake {
+                // Oboe's prefab is built against the shared STL and the NDK defaults to
+                // the static one. Mixing them is rejected at configure time rather than
+                // failing mysteriously later, which is the better error.
+                arguments += "-DANDROID_STL=c++_shared"
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+        }
     }
 
     if (hasReleaseSigning) {
@@ -71,6 +97,9 @@ android {
 
     buildFeatures {
         compose = true
+        // Oboe ships its headers and .so as a prefab package inside its AAR, so there
+        // is no source checkout to vendor and no submodule to keep in step.
+        prefab = true
     }
 
     packaging {
@@ -95,6 +124,9 @@ kotlin {
 }
 
 dependencies {
+    // Transport only: Oboe gives a stream and a realtime callback, no DSP and no graph.
+    implementation("com.google.oboe:oboe:1.10.0")
+
     implementation("androidx.core:core-ktx:1.19.0")
     implementation("androidx.activity:activity-compose:1.13.0")
 

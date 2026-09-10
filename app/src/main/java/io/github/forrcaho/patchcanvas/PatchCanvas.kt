@@ -392,6 +392,9 @@ fun PatchCanvas(
     modifier: Modifier = Modifier,
     safeArea: PaddingValues = PaddingValues(),
     portTouchRadius: Dp = 24.dp,
+    /** Phase 2 scaffold: tapping the Out rail's body toggles a test tone. */
+    outputActive: Boolean = false,
+    onToggleOutput: () -> Unit = {},
 ) {
     val density = LocalDensity.current
     val layoutDirection = LocalLayoutDirection.current
@@ -492,7 +495,8 @@ fun PatchCanvas(
                     when (kind) {
                         GestureKind.Tap -> {
                             interaction = handleTap(
-                                patch, camera, frame, interaction, down.position, touchPx
+                                patch, camera, frame, interaction, down.position, touchPx,
+                                onToggleOutput,
                             )
                             return@awaitEachGesture
                         }
@@ -600,6 +604,15 @@ fun PatchCanvas(
 
         patch.pinned.forEach { rail ->
             val live = rail.id != IN_ID || patch.inputEnabled
+            if (rail.id == OUT_ID && outputActive) {
+                val r = frame.railRect(rail)
+                drawRoundRect(
+                    color = rail.type.accent.copy(alpha = 0.18f),
+                    topLeft = r.topLeft,
+                    size = r.size,
+                    cornerRadius = CornerRadius(PatchModule.CORNER * d, PatchModule.CORNER * d),
+                )
+            }
             drawModuleBox(
                 module = rail,
                 rect = frame.railRect(rail),
@@ -707,6 +720,7 @@ private fun handleTap(
     current: Interaction,
     screen: Offset,
     touchPx: Float,
+    onToggleOutput: () -> Unit,
 ): Interaction {
     if (current is Interaction.Menu) {
         val layout = menuLayout(menuItems(current.targetId), current.anchor, frame.density, frame.canvas)
@@ -731,6 +745,17 @@ private fun handleTap(
     }
 
     val port = patch.hitPort(camera, frame, screen, touchPx)
+
+    // Phase 2 scaffold: the Out rail's body is a test-tone switch. Only while idle, so
+    // it never eats the tap that cancels an armed connection.
+    if (port == null && current is Interaction.Idle) {
+        patch.module(OUT_ID)?.let { out ->
+            if (frame.railRect(out).contains(screen)) {
+                onToggleOutput()
+                return Interaction.Idle
+            }
+        }
+    }
 
     return when (current) {
         is Interaction.Idle -> {
