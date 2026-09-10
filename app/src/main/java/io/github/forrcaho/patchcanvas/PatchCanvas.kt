@@ -430,7 +430,8 @@ fun PatchCanvas(
             .fillMaxSize()
             .pointerInput(Unit) {
                 val slop = viewConfiguration.touchSlop
-                val longPressMs = viewConfiguration.longPressTimeoutMillis
+                val longPressMs =
+                    (viewConfiguration.longPressTimeoutMillis * LONG_PRESS_SCALE).toLong()
                 val touchPx = portTouchRadius.toPx()
 
                 awaitEachGesture {
@@ -628,6 +629,19 @@ fun PatchCanvas(
         }
     }
 }
+
+/**
+ * How much longer than the platform's touch-and-hold delay this canvas waits.
+ *
+ * Scaled rather than replaced, so a user who has changed Touch & hold delay for
+ * accessibility still gets their setting, proportionally.
+ *
+ * Longer suits this surface specifically. The long press only fires while the finger
+ * has not passed touch slop, so a hesitant drag -- finger down on a module, a beat,
+ * then move -- would otherwise open the menu instead of dragging the module. The cost
+ * of waiting is small; the cost of a menu you did not ask for is losing your place.
+ */
+private const val LONG_PRESS_SCALE = 1.5f
 
 private enum class GestureKind { Undecided, Tap, LongPress, MoveModule, Pan, Transform }
 
