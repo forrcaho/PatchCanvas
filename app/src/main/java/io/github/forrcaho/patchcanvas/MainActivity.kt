@@ -138,12 +138,17 @@ class MainActivity : ComponentActivity() {
                 }
         }
 
-        // Topology only. Reading ids, types and cables means dragging a module around
-        // does not re-emit -- position is not something the audio graph has an opinion
-        // about.
+        // Topology and knobs. Position is deliberately absent, so dragging a module
+        // around does not re-sync -- the audio graph has no opinion about where a module
+        // sits. Knobs very much are its business, and leaving them out of here meant a
+        // turned knob updated the model, saved to disk, and never reached the engine.
         scope.launch {
             snapshotFlow {
-                patch.modules.map { it.id to it.type.name } to patch.connections.toList()
+                Triple(
+                    patch.modules.map { it.id to it.type.name },
+                    patch.connections.toList(),
+                    patch.modules.map { it.params.toList() },
+                )
             }
                 .distinctUntilChanged()
                 .collect { graphSync.sync(patch) }

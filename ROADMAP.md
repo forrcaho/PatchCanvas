@@ -483,6 +483,49 @@ reset the graph: a route change must not cost you your patch.
 
 ## Phase 5 -- Playability
 
+**Parameters are done and on the device.** Every module has knobs, declared with the
+thing they describe -- range, curve, unit -- and crossing to the engine in real units so
+a node uses what it is given and the interface can say "1000Hz" rather than "0.63".
+Frequencies and times are exponential because hearing is.
+
+### The panel
+
+An opened module takes the whole screen bar a border, with its jacks on the edges and a
+stub of cable running off past each connected one: enough to say what is attached, not
+enough to pretend you can trace it. Following a cable means closing the panel, which is
+the trade that buys knobs this size.
+
+This roadmap called for a bottom sheet, and that was wrong. On a 443dp-tall landscape
+phone a sheet of four sliders takes 45% of the canvas and is modal, hiding the patch you
+are listening to while you turn the knob. Growing modules in place was the other
+candidate and was also wrong: it costs the dense view permanently, for controls only
+wanted one module at a time. A panel costs nothing at rest.
+
+Because it is screen space, a module in the canvas never changes size -- its jacks never
+move and no cable ever jumps, which growing in place would have caused. It owns the
+screen while open, so it has its own short gesture loop rather than another outcome
+bolted into the canvas one.
+
+### The panel needs more than one control
+
+A horizontal bar is the right default and the wrong universal:
+
+- **Stepped parameters want radio buttons**, not a bar. Dragging to pick "square" from
+  four named waveforms is the wrong gesture, and a bar cannot show the names.
+- **`Steps` needs a grid.** It plays a hardcoded pentatonic figure with no way to edit
+  it, which is the clearest case for the panel: sixteen steps of pitch and gate is
+  unrepresentable on a 116dp module and unremarkable across a screen. This is the
+  argument that settled the panel design in the first place.
+- An envelope would read better as a draggable ADSR curve than four bars.
+
+So the panel is a **per-module-type editor surface**, not a generic list of sliders.
+
+### Still outstanding
+
+Per-input **attenuverters**, without which CV routing is unusable in practice: with
+advisory typing, a full-scale CV into a cutoff sweeps six octaves, and the only control
+over that today is whatever drives the cable.
+
 Modules have ports but no knobs, which means nothing is tunable and the instrument is
 not yet an instrument. Parameter editing is the second hard touch problem after
 patching, and it directly contradicts a stated principle: `MainActivity` currently

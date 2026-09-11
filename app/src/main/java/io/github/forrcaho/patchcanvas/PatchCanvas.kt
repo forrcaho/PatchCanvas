@@ -702,7 +702,7 @@ fun PatchCanvas(
                     // An open panel owns the screen. Pan, zoom and patching all belong to
                     // the canvas behind it, so this is a separate and much simpler loop
                     // rather than another outcome bolted into the one below.
-                    val open = patch.free.firstOrNull { it.expanded }
+                    val open = patch.modules.firstOrNull { it.expanded }
                     if (open != null) {
                         val panel = panelRect(frame)
                         val knob = panelKnobAt(panel, frame.density, open, down.position)
@@ -809,8 +809,14 @@ fun PatchCanvas(
                             return@awaitEachGesture
                         }
                         GestureKind.LongPress -> {
-                            // A rail offers nothing to delete, so it opens no menu.
+                            // A rail offers nothing to delete, so it opens no menu -- but
+                            // it does have knobs, and tapping it is already its switch, so
+                            // holding is the way in to its panel.
                             interaction = if (hitModule != null && hitModule.isPinned) {
+                                if (hitModule.type.params.isNotEmpty()) {
+                                    patch.modules.forEach { it.expanded = false }
+                                    hitModule.expanded = true
+                                }
                                 Interaction.Idle
                             } else {
                                 Interaction.Menu(down.position, hitModule?.id)
@@ -964,7 +970,7 @@ fun PatchCanvas(
             }
         }
 
-        patch.free.firstOrNull { it.expanded }?.let { open ->
+        patch.modules.firstOrNull { it.expanded }?.let { open ->
             drawPanel(open, patch, panelRect(frame), d, screenMeasurer)
         }
 

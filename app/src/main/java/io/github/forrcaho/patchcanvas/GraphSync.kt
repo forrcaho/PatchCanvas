@@ -1,5 +1,7 @@
 package io.github.forrcaho.patchcanvas
 
+import android.util.Log
+
 /**
  * Node type ids, mirroring the enum in nodes.h. The numbering is part of the JNI
  * contract, so append rather than reorder.
@@ -46,17 +48,45 @@ interface GraphCommands {
     fun collectGarbage()
 }
 
-/** The real one. */
+/**
+ * The real one.
+ *
+ * Debug builds log every command that crosses, because "does this gesture disturb the
+ * audio graph?" is otherwise answered by guessing. Anything that changes a cable makes a
+ * 30ms crossfade, so a command arriving when none was expected is audible.
+ */
 object EngineCommands : GraphCommands {
-    override fun addNode(id: Long, type: NodeType) { AudioEngine.addNode(id, type) }
-    override fun removeNode(id: Long) { AudioEngine.removeNode(id) }
+    private const val TAG = "PatchSync"
+
+    private inline fun trace(what: () -> String) {
+        if (BuildConfig.DEBUG) Log.d(TAG, what())
+    }
+
+    override fun addNode(id: Long, type: NodeType) {
+        trace { "add $id $type" }
+        AudioEngine.addNode(id, type)
+    }
+
+    override fun removeNode(id: Long) {
+        trace { "remove $id" }
+        AudioEngine.removeNode(id)
+    }
+
     override fun connect(srcId: Long, srcPort: Int, dstId: Long, dstPort: Int) {
+        trace { "connect $srcId[$srcPort] -> $dstId[$dstPort]" }
         AudioEngine.connect(srcId, srcPort, dstId, dstPort)
     }
-    override fun disconnect(dstId: Long, dstPort: Int) { AudioEngine.disconnect(dstId, dstPort) }
+
+    override fun disconnect(dstId: Long, dstPort: Int) {
+        trace { "disconnect $dstId[$dstPort]" }
+        AudioEngine.disconnect(dstId, dstPort)
+    }
+
     override fun setParam(id: Long, index: Int, value: Float) {
+        trace { "param $id[$index] = $value" }
         AudioEngine.setParam(id, index, value)
     }
+
     override fun collectGarbage() { AudioEngine.collectGarbage() }
 }
 
