@@ -105,7 +105,7 @@ class GraphSyncTest {
     }
 
     @Test
-    fun `re-patching an occupied input disconnects before connecting`() {
+    fun `re-patching an occupied input sends no disconnect`() {
         val patch = demoPatch()
         val a = patch.add(Types.Osc, Offset.Zero)!!
         patch.connect(PortRef(a.id, PortDirection.OUTPUT, 0), PortRef(OUT_ID, PortDirection.INPUT, 0))
@@ -116,10 +116,32 @@ class GraphSyncTest {
         patch.connect(PortRef(b.id, PortDirection.OUTPUT, 0), PortRef(OUT_ID, PortDirection.INPUT, 0))
         sync.sync(patch)
 
-        val disconnect = rec.log.indexOfFirst { it == Cmd.Disconnect(OUT_ID, 0) }
-        val connect = rec.log.indexOfFirst { it == Cmd.Connect(b.id, 0, OUT_ID, 0) }
-        assertTrue("expected the old cable dropped", disconnect >= 0)
-        assertTrue("and dropped before the new one lands", disconnect < connect)
+        // Inputs are single-source, so the connect already replaces. Sending a
+        // disconnect as well makes the engine fade the old source out to silence and the
+        // new one in from silence, and since both arrive in the same drain the second
+        // fade starts from silence rather than from what was playing -- which steps.
+        // Letting the connect stand alone is what makes this an actual crossfade.
+        assertTrue(
+            "a replacement must not disconnect first",
+            rec.log.none { it == Cmd.Disconnect(OUT_ID, 0) },
+        )
+        assertTrue(rec.log.contains(Cmd.Connect(b.id, 0, OUT_ID, 0)))
+    }
+
+    @Test
+    fun `a cable removed outright still disconnects`() {
+        val patch = demoPatch()
+        sync.sync(patch)
+        rec.clear()
+
+        val cable = patch.connections.first { it.to.moduleId == OUT_ID }
+        patch.disconnect(cable.to)
+        sync.sync(patch)
+
+        assertTrue(
+            "nothing replaced it, so the disconnect must still be sent",
+            rec.log.contains(Cmd.Disconnect(cable.to.moduleId, cable.to.index)),
+        )
     }
 
     @Test

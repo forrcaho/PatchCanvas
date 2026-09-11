@@ -72,7 +72,9 @@ void Graph::reset() {
 
 int32_t Graph::indexOf(int64_t id) const {
     for (int32_t i = 0; i < kMaxNodes; ++i) {
-        if (nodes_[i].used && nodes_[i].id == id) return i;
+        // A dying node is still rendering for someone's crossfade, but it is no longer
+        // addressable -- the same id may legitimately be added again.
+        if (nodes_[i].used && !nodes_[i].dying && nodes_[i].id == id) return i;
     }
     return -1;
 }
@@ -84,24 +86,75 @@ int32_t Graph::freeSlot() const {
     return -1;
 }
 
+void Graph::repatch(InputRef &ref, int32_t sourceIndex, int32_t sourcePort) {
+    // Whatever the port was heading for becomes what it now fades out of, so the old
+    // signal keeps playing all the way down instead of freezing at its last value.
+    //
+    // Unless a ramp was queued this same drain and has not rendered a sample yet: then
+    // its "from" is still the true previous signal, and overwriting it would fade from
+    // an intermediate target that was never actually heard.
+    const bool queuedButUnrendered =
+            ref.rampRemaining > 0 && ref.rampRemaining == ref.rampLength;
+    if (!queuedButUnrendered) {
+        ref.fromIndex = ref.sourceIndex;
+        ref.fromPort = ref.sourcePort;
+    }
+    ref.sourceIndex = sourceIndex;
+    ref.sourcePort = sourcePort;
+    ref.rampLength = sourceIndex >= 0 ? rampInSamples_ : rampOutSamples_;
+    ref.rampRemaining = ref.rampLength;
+}
+
 void Graph::retire(int32_t slot) {
-    // Anything pointing at this slot has to forget it first. Slots are reused, so a
-    // stale reference would not dangle -- it would silently reconnect to whatever
-    // moved in, which is worse because it looks like it works.
+    // Anything pointing at this slot starts fading out of it. The node is not freed
+    // yet: it is still the source of those crossfades, and cutting it here would put
+    // back exactly the thump the crossfade exists to remove.
     for (auto &record : nodes_) {
         if (!record.used) continue;
         for (auto &ref : record.inputs) {
-            if (ref.sourceIndex == slot) ref = InputRef{};
+            if (ref.sourceIndex == slot) repatch(ref, -1, 0);
         }
     }
     if (outIndex_ == slot) outIndex_ = -1;
 
-    // Handed back rather than deleted: freeing here would be an allocation call on the
-    // audio thread. If the return queue is full the node leaks, which is the correct
-    // trade against blocking.
-    garbage_.push(nodes_[slot].node);
-    nodes_[slot] = Record{};
+    nodes_[slot].dying = rampOutSamples_ + kBlockSize;
     dirty_ = true;
+}
+
+void Graph::reapDying(int32_t frames) {
+    bool reaped = false;
+    for (int32_t i = 0; i < kMaxNodes; ++i) {
+        Record &record = nodes_[i];
+        if (!record.used || record.dying <= 0) continue;
+
+        record.dying -= frames;
+        if (record.dying > 0) continue;
+
+        // The fades that were reading it have finished, so nothing can reference it any
+        // more -- but say so explicitly rather than relying on the arithmetic, because a
+        // reused slot would silently reconnect rather than crash.
+        for (auto &other : nodes_) {
+            for (auto &ref : other.inputs) {
+                if (ref.fromIndex == i) ref.fromIndex = -1;
+                if (ref.sourceIndex == i) ref.sourceIndex = -1;
+            }
+        }
+
+        // Handed back rather than deleted: freeing here would be an allocation call on
+        // the audio thread. If the return queue is full the node leaks, which is the
+        // correct trade against blocking.
+        garbage_.push(record.node);
+        record = Record{};
+        reaped = true;
+    }
+
+    // Rebuilt here and not merely marked dirty. process() runs once per inner block but
+    // applyCommands only once per callback, so a slot freed at the end of one block
+    // would still be sitting in the evaluation order when the next block walked it.
+    if (reaped) {
+        rebuildOrder();
+        dirty_ = false;
+    }
 }
 
 void Graph::applyCommands() {
@@ -131,7 +184,7 @@ void Graph::applyCommands() {
                 const int32_t src = indexOf(cmd.srcId);
                 if (dst < 0 || src < 0) break;
                 if (cmd.dstPort < 0 || cmd.dstPort >= kMaxPorts) break;
-                nodes_[dst].inputs[cmd.dstPort] = InputRef{src, cmd.srcPort};
+                repatch(nodes_[dst].inputs[cmd.dstPort], src, cmd.srcPort);
                 dirty_ = true;
                 break;
             }
@@ -139,7 +192,7 @@ void Graph::applyCommands() {
                 const int32_t dst = indexOf(cmd.id);
                 if (dst < 0) break;
                 if (cmd.dstPort < 0 || cmd.dstPort >= kMaxPorts) break;
-                nodes_[dst].inputs[cmd.dstPort] = InputRef{};
+                repatch(nodes_[dst].inputs[cmd.dstPort], -1, 0);
                 dirty_ = true;
                 break;
             }
@@ -193,17 +246,48 @@ void Graph::rebuildOrder() {
 void Graph::process(int32_t frames) {
     for (int32_t i = 0; i < orderCount_; ++i) {
         Record &record = nodes_[order_[i]];
+        // Belt and braces against an order that has outlived a slot. Cheap, and the
+        // alternative is a null dereference on the audio thread.
+        if (!record.used || record.node == nullptr) continue;
         Node *node = record.node;
 
         const int32_t ins = node->inputCount();
         for (int32_t p = 0; p < ins; ++p) {
-            const InputRef &ref = record.inputs[p];
+            InputRef &ref = record.inputs[p];
             const bool live = ref.sourceIndex >= 0 && nodes_[ref.sourceIndex].used;
-            node->setInput(p, live ? nodes_[ref.sourceIndex].node->output(ref.sourcePort)
-                                   : silence_.data());
+            const float *source = live
+                    ? nodes_[ref.sourceIndex].node->output(ref.sourcePort)
+                    : silence_.data();
+
+            if (ref.rampRemaining > 0) {
+                const bool fromLive = ref.fromIndex >= 0 && nodes_[ref.fromIndex].used;
+                const float *previous = fromLive
+                        ? nodes_[ref.fromIndex].node->output(ref.fromPort)
+                        : silence_.data();
+
+                float *blend = ramp_[p].data();
+                for (int32_t i = 0; i < frames; ++i) {
+                    const float linear = ref.rampRemaining > 0
+                            ? 1.0f - static_cast<float>(ref.rampRemaining) /
+                                     static_cast<float>(ref.rampLength)
+                            : 1.0f;
+                    // Smoothstep rather than linear: a straight ramp is continuous in
+                    // value but not in slope, and those two corners are audible as a
+                    // soft thump at each end of the fade.
+                    const float t = linear * linear * (3.0f - 2.0f * linear);
+                    blend[i] = previous[i] * (1.0f - t) + source[i] * t;
+                    if (ref.rampRemaining > 0) --ref.rampRemaining;
+                }
+                node->setInput(p, blend);
+            } else {
+                node->setInput(p, source);
+                ref.fromIndex = -1;
+            }
         }
         node->process(frames);
     }
+
+    reapDying(frames);
 }
 
 const float *Graph::outputL() const {

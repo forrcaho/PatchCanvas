@@ -76,8 +76,16 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
         val nodes = patch.modules.associate { it.id to NodeType.of(it.type) }
         val cables = patch.connections.toSet()
 
+        val replaced = (cables - syncedCables).map { it.to }.toSet()
+
         (syncedCables - cables).forEach {
-            commands.disconnect(it.to.moduleId, it.to.index)
+            // A connect to the same input supersedes a disconnect, because inputs are
+            // single-source. Sending both makes the engine fade the old source out to
+            // silence and then fade the new one in from silence -- and since they arrive
+            // in the same drain, the second fade starts from silence rather than from
+            // what was playing, which steps. Letting the connect stand on its own is
+            // what makes replacing a cable an actual crossfade.
+            if (it.to !in replaced) commands.disconnect(it.to.moduleId, it.to.index)
         }
 
         (syncedNodes.keys - nodes.keys).forEach { commands.removeNode(it) }

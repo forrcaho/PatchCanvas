@@ -4,6 +4,7 @@
 // compile and run on the desk. Audio bugs are miserable to diagnose on a device, and
 // the evaluation order is the part most worth pinning down before it ever gets there.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -28,6 +29,26 @@ float energy(const float *buffer, int32_t frames) {
     float total = 0.0f;
     for (int32_t i = 0; i < frames; ++i) total += std::fabs(buffer[i]);
     return total;
+}
+
+/** Renders several blocks end to end, so a transition can be examined across them. */
+std::vector<float> render(Graph &graph, int blocks) {
+    std::vector<float> all;
+    for (int b = 0; b < blocks; ++b) {
+        graph.process(kBlockSize);
+        const float *left = graph.outputL();
+        all.insert(all.end(), left, left + kBlockSize);
+    }
+    return all;
+}
+
+/** The largest jump between adjacent samples: what a click actually is. */
+float maxStep(const std::vector<float> &samples) {
+    float worst = 0.0f;
+    for (std::size_t i = 1; i < samples.size(); ++i) {
+        worst = std::max(worst, std::fabs(samples[i] - samples[i - 1]));
+    }
+    return worst;
 }
 
 bool finite(const float *buffer, int32_t frames) {
@@ -55,6 +76,57 @@ void signalReachesTheOutputWithinOneBlock() {
     // non-zero output here means the topological order really did put Osc first.
     check(energy(graph.outputL(), kBlockSize) > 0.0f, "output is non-zero on the first block");
     check(energy(graph.outputR(), kBlockSize) == 0.0f, "unconnected right stays silent");
+}
+
+void unpatchingFadesTheSignalNotADcLevel() {
+    std::printf("unpatching fades the signal, not a DC level\n");
+    Graph graph;
+    graph.setSampleRate(48000);
+
+    graph.postAdd(1, NodeType::Osc);
+    graph.postAdd(2, NodeType::Out);
+    graph.postConnect(1, 0, 2, 0);
+    graph.applyCommands();
+    render(graph, 16);
+
+    graph.postDisconnect(2, 0);
+    graph.applyCommands();
+    const auto tail = render(graph, 48);
+
+    int crossings = 0;
+    for (std::size_t i = 1; i < tail.size(); ++i) {
+        if ((tail[i - 1] < 0.0f) != (tail[i] < 0.0f)) ++crossings;
+    }
+
+    // 220Hz across a 30ms fade is roughly thirteen half-cycles. Fading from a frozen
+    // value instead would stop the oscillation dead and glide a DC level to zero, which
+    // crosses at most once -- inaudible as a click and very audible as a thump.
+    check(crossings > 4, "the signal keeps oscillating all the way down");
+    check(maxStep(tail) < 0.05f, "and still does not step");
+}
+
+void replacingASourceCrossfades() {
+    std::printf("replacing a source crossfades\n");
+    Graph graph;
+    graph.setSampleRate(48000);
+
+    graph.postAdd(1, NodeType::Osc);
+    graph.postAdd(2, NodeType::Osc);
+    graph.postAdd(3, NodeType::Out);
+    graph.postConnect(1, 0, 3, 0);
+    graph.applyCommands();
+    render(graph, 16);
+
+    // Both orderings, because the UI may coalesce a replacement into a bare connect or
+    // may still send the redundant disconnect first.
+    graph.postDisconnect(3, 0);
+    graph.postConnect(2, 0, 3, 0);
+    graph.applyCommands();
+    const auto swapped = render(graph, 64);
+
+    check(maxStep(swapped) < 0.05f, "swapping sources does not step");
+    check(energy(swapped.data(), static_cast<int32_t>(swapped.size())) > 0.0f,
+          "and the new source arrives");
 }
 
 void aChainIsOrderedEndToEnd() {
@@ -88,8 +160,40 @@ void disconnectingSilencesTheOutput() {
 
     graph.postDisconnect(2, 0);
     graph.applyCommands();
-    graph.process(kBlockSize);
-    check(energy(graph.outputL(), kBlockSize) == 0.0f, "silent after the cut");
+    // Silence arrives after the declick ramp, not on the next sample. That delay is the
+    // feature; asserting immediate silence would be asserting the click back.
+    render(graph, 64);
+    check(energy(graph.outputL(), kBlockSize) == 0.0f, "silent once the ramp has run");
+}
+
+void patchingDoesNotStep() {
+    std::printf("patching does not step\n");
+    Graph graph;
+    graph.setSampleRate(48000);
+
+    graph.postAdd(1, NodeType::Osc);
+    graph.postAdd(2, NodeType::Out);
+    graph.applyCommands();
+    render(graph, 4); // settle at silence
+
+    graph.postConnect(1, 0, 2, 0);
+    graph.applyCommands();
+    const auto onConnect = render(graph, 64);
+
+    graph.postDisconnect(2, 0);
+    graph.applyCommands();
+    const auto onDisconnect = render(graph, 64);
+
+    // A hard patch would step by the source's instantaneous value, which for a
+    // full-scale oscillator is up to 1.0. The oscillator's own slope is about 0.03 per
+    // sample at 220Hz, so anything near that means the transition was ramped, not cut.
+    // Tightened from 0.1: with a 10ms smoothstep the envelope contributes almost
+    // nothing, so what is left should be barely more than the oscillator's own slope
+    // of about 0.03 per sample at 220Hz.
+    check(maxStep(onConnect) < 0.05f, "connecting does not step");
+    check(maxStep(onDisconnect) < 0.05f, "disconnecting does not step");
+    check(energy(onConnect.data(), static_cast<int32_t>(onConnect.size())) > 0.0f,
+          "and the signal does arrive");
 }
 
 void aReusedSlotDoesNotInheritOldCables() {
@@ -106,7 +210,7 @@ void aReusedSlotDoesNotInheritOldCables() {
 
     graph.postRemove(1);
     graph.applyCommands();
-    graph.process(kBlockSize);
+    render(graph, 64);
     check(energy(graph.outputL(), kBlockSize) == 0.0f, "silent once the source is gone");
 
     // The interesting half. Slots are reused, so a reference left pointing at the old
@@ -114,7 +218,7 @@ void aReusedSlotDoesNotInheritOldCables() {
     // is worse than a crash because it looks like it works.
     graph.postAdd(3, NodeType::Osc);
     graph.applyCommands();
-    graph.process(kBlockSize);
+    render(graph, 64);
     check(energy(graph.outputL(), kBlockSize) == 0.0f,
           "a new node in the freed slot is NOT silently patched in");
 
@@ -202,6 +306,9 @@ void commandsSurviveAPartialBlock() {
 
 int main() {
     signalReachesTheOutputWithinOneBlock();
+    patchingDoesNotStep();
+    unpatchingFadesTheSignalNotADcLevel();
+    replacingASourceCrossfades();
     aChainIsOrderedEndToEnd();
     disconnectingSilencesTheOutput();
     aReusedSlotDoesNotInheritOldCables();
