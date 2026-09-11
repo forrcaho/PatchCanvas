@@ -269,6 +269,9 @@ for. *(done)*
 
 ## Phase 3 -- The bridge
 
+**Done, and verified on the device.** Patching a cable changes what you hear, live, with
+no dropout and no click. 22 native checks and 44 JVM tests.
+
 The spine of the project, and the highest-risk design. Worth getting right before the
 module set grows enough to make changing it expensive.
 
@@ -300,7 +303,38 @@ corrupting audio somewhere downstream. Develop with it on.
 Note this is a deliberate opt-in: GrapheneOS enables MTE by default only for apps
 *without* bundled native libraries, and from Phase 2 onward this app has one.
 
+### Declicking, which was most of the work
+
+Changing a cable swaps one signal for another between two samples, and that step is
+broadband -- the same defect that made closing the stream pop, now at every patch. Each
+input port is a 30ms smoothstep crossfade between its old source and its new one.
+
+Six wrong answers on the way, most of which sounded better than the last while still
+being wrong:
+
+- A ramp whose origin follows the output restarts from a new place at every block
+  boundary. The origin must stay fixed for the ramp's duration.
+- 2ms is shorter than one cycle of a bass note, so fading a signal in over it is itself
+  a transient. A linear ramp is continuous in value but not in slope, and those corners
+  are audible. Smoothstep over 30ms fixes both.
+- Asymmetric lengths were a wrong theory: 10ms sounded clean on the phone's speaker and
+  was plainly audible on earbuds. The shorter side was not better, only harder to hear.
+- **The one that mattered:** fading out from a frozen *value* stops the waveform dead and
+  glides a DC level to zero. Not a click, a thump. The fade has to be a true crossfade
+  between two live sources. The test counts zero crossings, because "it fades" and "it
+  fades as a signal" are different claims and only the second is quiet.
+- That forces deferred removal: a node cannot be freed the moment it is removed, because
+  whatever it fed is still crossfading out of it.
+- Which exposed a crash the sanitizer caught at once -- reaping happens per block but
+  the evaluation order was rebuilt only per callback, so a freed slot stayed in the order.
+
+Replacing a source was the last one, and it was not in the engine at all. `GraphSync`
+sent disconnect *and* connect, so the second fade began from the silence the first had
+aimed at. Inputs are single-source, so a connect already replaces; the disconnect was
+redundant and harmful. That is what makes swapping a cable a real crossfade.
+
 *Done when:* tapping a cable changes what you hear, with no clicks and no dropouts.
+*(done)*
 
 ## Phase 4 -- Modules worth patching
 
