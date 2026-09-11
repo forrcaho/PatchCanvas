@@ -54,9 +54,11 @@ public:
     int32_t outputCount() const override { return 1; }
     void prepare(int32_t sampleRate) override;
     void process(int32_t frames) override;
+    void setParam(int32_t index, float value) override;
 
 private:
     daisysp::Oscillator osc_;
+    float tuneSemitones_ = 0.0f;
 };
 
 /** State-variable filter, lowpass tap. */
@@ -66,9 +68,11 @@ public:
     int32_t outputCount() const override { return 1; }
     void prepare(int32_t sampleRate) override;
     void process(int32_t frames) override;
+    void setParam(int32_t index, float value) override;
 
 private:
     daisysp::Svf svf_;
+    float cutoffHz_ = 1000.0f;
 };
 
 class EnvNode : public Node {
@@ -77,6 +81,7 @@ public:
     int32_t outputCount() const override { return 1; }
     void prepare(int32_t sampleRate) override;
     void process(int32_t frames) override;
+    void setParam(int32_t index, float value) override;
 
 private:
     daisysp::Adsr adsr_;
@@ -88,6 +93,11 @@ public:
     int32_t inputCount() const override { return 2; }  // in, cv
     int32_t outputCount() const override { return 1; }
     void process(int32_t frames) override;
+    void setParam(int32_t index, float value) override;
+
+private:
+    /** Added to the control voltage, so a VCA with nothing patched can still be open. */
+    float bias_ = 0.0f;
 };
 
 /**
@@ -104,10 +114,12 @@ public:
     int32_t outputCount() const override { return 1; } // gate
     void prepare(int32_t sampleRate) override;
     void process(int32_t frames) override;
+    void setParam(int32_t index, float value) override;
 
 private:
     int64_t counter_ = 0;
-    int64_t period_ = 24000; // 120bpm at 48k, until Phase 5 gives it a parameter
+    int64_t period_ = 24000;
+    float bpm_ = 120.0f;
 };
 
 /** Eight steps, advanced by a rising edge on its clock input. */
@@ -116,10 +128,13 @@ public:
     int32_t inputCount() const override { return 1; }  // clock
     int32_t outputCount() const override { return 2; } // pitch, gate
     void process(int32_t frames) override;
+    void setParam(int32_t index, float value) override;
 
 private:
     static constexpr int32_t kSteps = 8;
     int32_t step_ = 0;
+    int32_t length_ = kSteps;
+    float transpose_ = 0.0f;
     bool wasHigh_ = false;
 };
 
@@ -129,6 +144,10 @@ public:
     int32_t inputCount() const override { return 4; }
     int32_t outputCount() const override { return 1; }
     void process(int32_t frames) override;
+    void setParam(int32_t index, float value) override;
+
+private:
+    float level_[4] = {1.0f, 1.0f, 1.0f, 1.0f};
 };
 
 /**
@@ -143,8 +162,10 @@ public:
     int32_t outputCount() const override { return 2; } // mirrored, for the engine to read
     void prepare(int32_t sampleRate) override;
     void process(int32_t frames) override;
+    void setParam(int32_t index, float value) override;
 
 private:
+    float level_ = 1.0f;
     daisysp::DcBlock dcLeft_;
     daisysp::DcBlock dcRight_;
     daisysp::Limiter limitLeft_;
@@ -166,9 +187,16 @@ public:
 
     /** Audio thread, before process(). Null means silence. */
     void setSource(const float *mono) { source_ = mono; }
+    void setParam(int32_t index, float value) override;
 
 private:
     const float *source_ = nullptr;
+    /**
+     * Unprocessed input is raw by request, so a phone mic at talking distance arrives
+     * far below what an oscillator produces. This was a constant; it is a knob because
+     * the right amount depends on the room.
+     */
+    float gain_ = 8.0f;
 };
 
 /** Allocates a node for a type. Never called on the audio thread. */

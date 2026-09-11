@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -98,11 +99,70 @@ enum class SignalKind(val cable: Color, val idle: Color) {
 
 data class Port(val name: String, val kind: SignalKind)
 
+/**
+ * How a knob's travel maps to its value.
+ *
+ * Frequencies and times are exponential because hearing is: the interesting half of a
+ * 20Hz-18kHz sweep is all below 2kHz, and a linear knob would spend nine tenths of its
+ * travel above it. Stepped values land on a choice rather than between two.
+ */
+enum class ParamCurve { LINEAR, EXPONENTIAL, STEPPED }
+
+/**
+ * A knob.
+ *
+ * Values cross to the engine in real units -- hertz, seconds, beats per minute -- rather
+ * than normalised, so a node uses what it is given and the interface can say "440 Hz"
+ * instead of "0.63". The range and the curve belong here, with the thing being
+ * described.
+ */
+data class Param(
+    val name: String,
+    val min: Float,
+    val max: Float,
+    val default: Float,
+    val unit: String = "",
+    val curve: ParamCurve = ParamCurve.LINEAR,
+) {
+    /** Knob travel, 0..1, to a value. */
+    fun valueAt(position: Float): Float {
+        val t = position.coerceIn(0f, 1f)
+        return when (curve) {
+            ParamCurve.LINEAR -> min + t * (max - min)
+            ParamCurve.STEPPED -> kotlin.math.round(min + t * (max - min))
+            ParamCurve.EXPONENTIAL -> min * kotlin.math.exp(t * kotlin.math.ln(max / min))
+        }
+    }
+
+    /** A value back to knob travel, so a restored patch shows its knobs where they are. */
+    fun positionOf(value: Float): Float {
+        val v = value.coerceIn(minOf(min, max), maxOf(min, max))
+        return when (curve) {
+            ParamCurve.LINEAR, ParamCurve.STEPPED ->
+                if (max == min) 0f else (v - min) / (max - min)
+            ParamCurve.EXPONENTIAL ->
+                if (max == min) 0f else (kotlin.math.ln(v / min) / kotlin.math.ln(max / min))
+        }.coerceIn(0f, 1f)
+    }
+
+    /** For display: enough precision to be useful, not so much it is noise. */
+    fun format(value: Float): String {
+        val text = when {
+            curve == ParamCurve.STEPPED -> value.toInt().toString()
+            kotlin.math.abs(value) >= 100f -> value.toInt().toString()
+            kotlin.math.abs(value) >= 10f -> "%.1f".format(value)
+            else -> "%.3f".format(value).trimEnd('0').trimEnd('.')
+        }
+        return if (unit.isEmpty()) text else "$text$unit"
+    }
+}
+
 data class ModuleType(
     val name: String,
     val inputs: List<Port>,
     val outputs: List<Port>,
     val accent: Color,
+    val params: List<Param> = emptyList(),
     /**
      * Non-null for the I/O rails. A pinned type is unique, cannot be added or deleted,
      * has no stored position, and draws at constant size on a viewport edge.
@@ -115,45 +175,83 @@ object Types {
     private val C = SignalKind.CV
     private val G = SignalKind.GATE
 
+    private val LIN = ParamCurve.LINEAR
+    private val EXP = ParamCurve.EXPONENTIAL
+    private val STEP = ParamCurve.STEPPED
+
     val Osc = ModuleType(
         "Osc", listOf(Port("pitch", C), Port("fm", C)), listOf(Port("out", A)),
         Color(0xFF7FD1C1),
+        params = listOf(
+            Param("tune", -24f, 24f, 0f, "st", LIN),
+            Param("wave", 0f, 3f, 0f, "", STEP),
+        ),
     )
     val Filter = ModuleType(
         "Filter", listOf(Port("in", A), Port("cutoff", C)), listOf(Port("out", A)),
         Color(0xFFE0A24B),
+        params = listOf(
+            // The knob sets where a cable's zero sits; the cable moves it in octaves
+            // from there, which is how a cutoff input behaves on hardware.
+            Param("cutoff", 20f, 18000f, 1000f, "Hz", EXP),
+            Param("res", 0f, 0.95f, 0.3f, "", LIN),
+        ),
     )
     val Env = ModuleType(
         "Env", listOf(Port("gate", G)), listOf(Port("out", C)),
         Color(0xFFB98FE0),
+        params = listOf(
+            Param("A", 0.001f, 5f, 0.005f, "s", EXP),
+            Param("D", 0.001f, 5f, 0.12f, "s", EXP),
+            Param("S", 0f, 1f, 0.6f, "", LIN),
+            Param("R", 0.001f, 10f, 0.25f, "s", EXP),
+        ),
     )
     val Vca = ModuleType(
         "VCA", listOf(Port("in", A), Port("cv", C)), listOf(Port("out", A)),
         Color(0xFFE07A9B),
+        // Added to the control voltage, so a VCA with nothing patched can still open.
+        params = listOf(Param("bias", 0f, 1f, 0f, "", LIN)),
     )
     val Clock = ModuleType(
         "Clock", emptyList(), listOf(Port("gate", G)),
         Color(0xFFD9C46A),
+        params = listOf(Param("bpm", 20f, 300f, 120f, "", LIN)),
     )
     val Steps = ModuleType(
         "Steps", listOf(Port("clock", G)), listOf(Port("pitch", C), Port("gate", G)),
         Color(0xFF6FA8E5),
+        params = listOf(
+            Param("len", 1f, 8f, 8f, "", STEP),
+            Param("transp", -24f, 24f, 0f, "st", LIN),
+        ),
     )
     val Mix = ModuleType(
         "Mix",
         listOf(Port("a", A), Port("b", A), Port("c", A), Port("d", A)),
         listOf(Port("out", A)),
         Color(0xFF9AA6B5),
+        params = listOf(
+            Param("a", 0f, 2f, 1f, "", LIN),
+            Param("b", 0f, 2f, 1f, "", LIN),
+            Param("c", 0f, 2f, 1f, "", LIN),
+            Param("d", 0f, 2f, 1f, "", LIN),
+        ),
     )
 
     /** Signal flows left to right, so the sink is welded right and the source left. */
     val Out = ModuleType(
         "Out", listOf(Port("L", A), Port("R", A)), emptyList(),
-        Color(0xFFE0E0E0), Edge.RIGHT,
+        Color(0xFFE0E0E0),
+        params = listOf(Param("level", 0f, 2f, 1f, "", LIN)),
+        pinned = Edge.RIGHT,
     )
     val In = ModuleType(
         "In", emptyList(), listOf(Port("L", A), Port("R", A)),
-        Color(0xFF7FB0E5), Edge.LEFT,
+        Color(0xFF7FB0E5),
+        // Was a constant, and the right amount depends on the room.
+        params = listOf(Param("gain", 0.25f, 64f, 8f, "x", EXP)),
+        pinned = Edge.LEFT,
     )
 
     /**
@@ -186,14 +284,30 @@ class PatchModule(
 ) {
     var position by mutableStateOf(position)
 
+    /** Knob values in real units, one per declared parameter, starting at their defaults. */
+    val params: SnapshotStateList<Float> =
+        mutableStateListOf<Float>().apply { addAll(type.params.map { it.default }) }
+
+    fun setParam(index: Int, value: Float) {
+        if (index in params.indices) params[index] = value
+    }
+
     val isPinned: Boolean get() = type.pinned != null
 
     /**
-     * Height follows port count at a fixed pitch rather than dividing a constant, so
-     * adjacent ports are never closer than PORT_PITCH no matter how many a module has.
-     * That makes crowding impossible by construction instead of a case to disambiguate.
+     * Open on the panel.
+     *
+     * The open view is a screen-space panel covering nearly everything rather than the
+     * module growing in place, so a module in the canvas never changes size -- its jacks
+     * never move and no cable ever jumps. A view state, not part of the patch: a saved
+     * file describes an instrument, not which panel you were looking at.
      */
+    var expanded by mutableStateOf(false)
+
     val height: Float get() = heightFor(type)
+
+    /** The ports' band. Equal to the body, now that opening a module leaves the canvas. */
+    val portsBody: Float get() = portsBodyFor(type)
 
     val width: Float get() = if (isPinned) RAIL_WIDTH else WIDTH
 
@@ -217,17 +331,30 @@ class PatchModule(
         const val PORT_RADIUS_ARMED = 9f
         const val LABEL_INSET = 13f
 
+        // The open panel, all in dp of screen. Sized generously because this view has
+        // the screen to itself and a knob you cannot hit accurately is not a knob.
+        const val PANEL_MARGIN = 22f
+        const val PANEL_HEADER = 42f
+        const val PANEL_SIDE = 108f
+        const val PANEL_ROW_MAX = 76f
+        const val PANEL_BAR = 16f
+        const val PANEL_STUB = 26f
+
         /**
-         * Height follows port count at a fixed pitch rather than dividing a constant, so
-         * adjacent ports are never closer than PORT_PITCH no matter how many a module
-         * has. That makes crowding impossible by construction rather than a case to
-         * disambiguate. Derived from the type alone so the add menu can centre a module
-         * it has not created yet.
+         * The ports' share of the box. Height follows port count at a fixed pitch rather
+         * than dividing a constant, so adjacent ports are never closer than PORT_PITCH no
+         * matter how many a module has -- crowding is impossible by construction rather
+         * than a case to disambiguate.
          */
-        fun heightFor(type: ModuleType): Float {
+        fun portsBodyFor(type: ModuleType): Float {
             val ports = maxOf(type.inputs.size, type.outputs.size, 1)
-            return HEADER + maxOf(MIN_BODY, ports * PORT_PITCH)
+            return maxOf(MIN_BODY, ports * PORT_PITCH)
         }
+
+        /** Closed height. Derived from the type alone, so the add menu can centre one. */
+        fun heightFor(type: ModuleType): Float = HEADER + portsBodyFor(type)
+
+
     }
 }
 
@@ -242,13 +369,75 @@ internal fun portIn(
     dir: PortDirection,
     index: Int,
     count: Int,
+    /**
+     * The ports' band, in the same units as the rect. Given rather than derived from the
+     * rect's height, because a module that is open is taller and its jacks must not
+     * move -- every cable attached to it would jump.
+     */
+    bodyHeight: Float,
 ): Offset {
     val x = if (dir == PortDirection.INPUT) rect.left else rect.right
     val bodyTop = rect.top + PatchModule.HEADER * unit
-    val bodyHeight = rect.height - PatchModule.HEADER * unit
     val span = (count - 1) * PatchModule.PORT_PITCH * unit
     val first = bodyTop + (bodyHeight - span) / 2f
     return Offset(x, first + index * PatchModule.PORT_PITCH * unit)
+}
+
+// ---------------------------------------------------------------- the open panel
+//
+// An opened module takes the screen, leaving a border through which the canvas is still
+// visible. Its jacks sit on the edges with the cables running off past them, so you can
+// see what is attached without the whole graph competing for attention -- to see where
+// a cable goes, or to move one, you close the panel. All screen space, in px.
+
+internal fun panelRect(frame: Frame): Rect {
+    val m = PatchModule.PANEL_MARGIN * frame.density
+    return Rect(
+        frame.insetLeft + m,
+        frame.insetTop + m,
+        frame.canvas.width - frame.insetRight - m,
+        frame.canvas.height - frame.insetBottom - m,
+    )
+}
+
+private fun panelBody(panel: Rect, d: Float) =
+    Rect(panel.left, panel.top + PatchModule.PANEL_HEADER * d, panel.right, panel.bottom)
+
+/** Where a jack sits on the panel's edge, spread down the body. */
+internal fun panelPort(panel: Rect, d: Float, dir: PortDirection, index: Int, count: Int): Offset {
+    val body = panelBody(panel, d)
+    val pitch = minOf(PatchModule.PANEL_ROW_MAX * d, body.height / (count + 1))
+    val span = (count - 1) * pitch
+    val first = body.top + (body.height - span) / 2f
+    return Offset(if (dir == PortDirection.INPUT) panel.left else panel.right, first + index * pitch)
+}
+
+/** A knob's row: label, value and the bar beneath them. */
+internal fun panelRow(panel: Rect, d: Float, index: Int, count: Int): Rect {
+    val body = panelBody(panel, d)
+    val side = PatchModule.PANEL_SIDE * d
+    val rowHeight = minOf(PatchModule.PANEL_ROW_MAX * d, body.height / maxOf(count, 1))
+    val block = rowHeight * count
+    val top = body.top + (body.height - block) / 2f + index * rowHeight
+    return Rect(panel.left + side, top, panel.right - side, top + rowHeight)
+}
+
+internal fun panelKnobAt(panel: Rect, d: Float, module: PatchModule, at: Offset): Int? {
+    val count = module.type.params.size
+    module.type.params.indices.forEach { i ->
+        // Generous vertically: the rows are the only targets on the panel, so a near
+        // miss should still land rather than do nothing.
+        if (panelRow(panel, d, i, count).inflate(6f * d).contains(at)) return i
+    }
+    return null
+}
+
+/** Knob travel, 0..1, from a screen x on the panel. */
+internal fun panelKnobPosition(panel: Rect, d: Float, screenX: Float): Float {
+    val side = PatchModule.PANEL_SIDE * d
+    val left = panel.left + side
+    val right = panel.right - side
+    return ((screenX - left) / (right - left)).coerceIn(0f, 1f)
 }
 
 data class PortRef(val moduleId: Long, val dir: PortDirection, val index: Int)
@@ -409,7 +598,7 @@ class Camera(private val density: Float) {
  * Built identically by the gesture handler and the draw pass so the two agree about
  * where the rails are.
  */
-private class Frame(
+internal class Frame(
     val canvas: Size,
     val density: Float,
     val insetLeft: Float,
@@ -445,9 +634,10 @@ private fun portScreen(
     val count = module.ports(ref.dir).size
     if (ref.index >= count) return null
     return if (module.isPinned) {
-        portIn(frame.railRect(module), frame.density, ref.dir, ref.index, count)
+        portIn(frame.railRect(module), frame.density, ref.dir, ref.index, count,
+               module.portsBody * frame.density)
     } else {
-        camera.toScreen(portIn(module.bounds, 1f, ref.dir, ref.index, count))
+        camera.toScreen(portIn(module.bounds, 1f, ref.dir, ref.index, count, module.portsBody))
     }
 }
 
@@ -508,6 +698,56 @@ fun PatchCanvas(
                 awaitEachGesture {
                     val frame = frameFor(Size(size.width.toFloat(), size.height.toFloat()))
                     val down = awaitFirstDown(requireUnconsumed = false)
+
+                    // An open panel owns the screen. Pan, zoom and patching all belong to
+                    // the canvas behind it, so this is a separate and much simpler loop
+                    // rather than another outcome bolted into the one below.
+                    val open = patch.free.firstOrNull { it.expanded }
+                    if (open != null) {
+                        val panel = panelRect(frame)
+                        val knob = panelKnobAt(panel, frame.density, open, down.position)
+                        var moved = false
+
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val pressed = event.changes.filter { it.pressed }
+                            if (pressed.isEmpty()) break
+                            val change = pressed.first()
+                            if ((change.position - down.position).getDistance() > slop) {
+                                moved = true
+                            }
+                            if (knob != null) {
+                                val param = open.type.params[knob]
+                                open.setParam(
+                                    knob,
+                                    param.valueAt(
+                                        panelKnobPosition(panel, frame.density, change.position.x),
+                                    ),
+                                )
+                            }
+                            change.consume()
+                        }
+
+                        if (!moved) {
+                            if (knob != null) {
+                                // A tap on a knob jumps there, which is faster than
+                                // dragging when you already know where you want it.
+                                val param = open.type.params[knob]
+                                open.setParam(
+                                    knob,
+                                    param.valueAt(
+                                        panelKnobPosition(panel, frame.density, down.position.x),
+                                    ),
+                                )
+                            } else if (!panel.contains(down.position)) {
+                                // The border is the way out. Tapping the panel itself does
+                                // nothing, so a missed knob never closes what you are
+                                // working on.
+                                open.expanded = false
+                            }
+                        }
+                        return@awaitEachGesture
+                    }
 
                     var kind = GestureKind.Undecided
                     var draggedModule: PatchModule? = null
@@ -724,6 +964,10 @@ fun PatchCanvas(
             }
         }
 
+        patch.free.firstOrNull { it.expanded }?.let { open ->
+            drawPanel(open, patch, panelRect(frame), d, screenMeasurer)
+        }
+
         (interaction as? Interaction.Menu)?.let { menu ->
             drawMenu(menuLayout(menuItems(menu.targetId), menu.anchor, d, size), d, screenMeasurer)
         }
@@ -849,6 +1093,16 @@ private fun handleTap(
                 return Interaction.Idle
             }
         }
+
+        patch.hitModule(camera, frame, screen)?.let { module ->
+            // Tapping a module's body opens its panel. One at a time: the panel takes the
+            // screen, so there is nowhere for a second one to go.
+            if (!module.isPinned && module.type.params.isNotEmpty()) {
+                patch.modules.forEach { it.expanded = false }
+                module.expanded = true
+                return Interaction.Idle
+            }
+        }
     }
 
     return when (current) {
@@ -877,6 +1131,9 @@ private fun handleTap(
  * cables silently dropped by the engine, so it is asserted in a test rather than trusted.
  */
 internal const val MAX_PORTS = 4
+
+/** Mirrors kMaxParams in node.h. A fifth knob would simply never reach the engine. */
+internal const val MAX_PARAMS = 4
 
 /** Column cap for the context menu, visible to tests. */
 internal const val MENU_COLS = 4
@@ -985,6 +1242,23 @@ private val TitleStyle = TextStyle(
     color = Color(0xFFC9D0DA),
 )
 
+private val PanelTitleStyle = TextStyle(
+    fontSize = 20.sp,
+    fontWeight = FontWeight.Medium,
+    color = Color(0xFFE4E7EC),
+)
+
+private val PanelParamStyle = TextStyle(
+    fontSize = 14.sp,
+    color = Color(0xFF98A0AD),
+)
+
+private val PanelValueStyle = TextStyle(
+    fontSize = 16.sp,
+    fontWeight = FontWeight.Medium,
+    color = Color(0xFFE4E7EC),
+)
+
 private val PortLabelStyle = TextStyle(
     fontSize = 9.sp,
     color = Color(0xFF98A0AD),
@@ -1052,7 +1326,7 @@ private fun DrawScope.drawModuleBox(
         val ports = module.ports(dir)
         ports.forEachIndexed { i, port ->
             val ref = PortRef(module.id, dir, i)
-            val at = portIn(rect, unit, dir, i, ports.size)
+            val at = portIn(rect, unit, dir, i, ports.size, module.portsBody * unit)
             val lit = ref == armed
             // Idle colour comes from what the port carries, so audio, CV and gate are
             // distinguishable at a glance without reading a label.
@@ -1075,6 +1349,106 @@ private fun DrawScope.drawModuleBox(
                 )
             }
         }
+    }
+}
+
+/**
+ * The open module, filling the screen.
+ *
+ * Its jacks sit on the panel edge with a stub of cable running off past it: enough to
+ * say what is attached, not enough to pretend you can trace it. Following a cable, or
+ * moving one, means closing the panel -- which is the trade that buys knobs this size.
+ */
+private fun DrawScope.drawPanel(
+    module: PatchModule,
+    patch: Patch,
+    panel: Rect,
+    d: Float,
+    measurer: TextMeasurer,
+) {
+    val corner = CornerRadius(14f * d, 14f * d)
+
+    // Opaque, and slightly lifted from the canvas showing through the border.
+    drawRoundRect(Color(0xE6000000), panel.topLeft, panel.size, corner)
+    drawRoundRect(Color(0xFF1B1F26), panel.topLeft, panel.size, corner)
+    drawRoundRect(
+        module.type.accent.copy(alpha = 0.7f), panel.topLeft, panel.size, corner,
+        style = Stroke(width = 2f * d),
+    )
+
+    val title = measurer.measure(module.type.name, PanelTitleStyle)
+    drawText(
+        title,
+        topLeft = Offset(
+            panel.left + (panel.width - title.size.width) / 2f,
+            panel.top + (PatchModule.PANEL_HEADER * d - title.size.height) / 2f,
+        ),
+    )
+
+    // Jacks, with a stub for the ones carrying something.
+    PortDirection.entries.forEach { dir ->
+        val ports = module.ports(dir)
+        ports.forEachIndexed { index, port ->
+            val ref = PortRef(module.id, dir, index)
+            val at = panelPort(panel, d, dir, index, ports.size)
+            val patched = patch.connections.any {
+                if (dir == PortDirection.INPUT) it.to == ref else it.from == ref
+            }
+
+            if (patched) {
+                val away = if (dir == PortDirection.INPUT) -1f else 1f
+                drawLine(
+                    color = port.kind.cable,
+                    start = at,
+                    end = Offset(at.x + away * PatchModule.PANEL_STUB * d, at.y),
+                    strokeWidth = 3f * d,
+                )
+            }
+            drawCircle(
+                color = if (patched) port.kind.cable else port.kind.idle,
+                radius = (if (patched) 8f else 6f) * d,
+                center = at,
+            )
+
+            val label = measurer.measure(port.name, PortLabelStyle)
+            val x = if (dir == PortDirection.INPUT) at.x + 16f * d
+                    else at.x - 16f * d - label.size.width
+            drawText(label, topLeft = Offset(x, at.y - label.size.height / 2f))
+        }
+    }
+
+    // Knobs.
+    val count = module.type.params.size
+    module.type.params.forEachIndexed { index, param ->
+        val row = panelRow(panel, d, index, count)
+        val value = module.params.getOrElse(index) { param.default }
+
+        val name = measurer.measure(param.name, PanelParamStyle)
+        drawText(name, topLeft = Offset(row.left, row.top + 4f * d))
+
+        val reading = measurer.measure(param.format(value), PanelValueStyle)
+        drawText(
+            reading,
+            topLeft = Offset(row.right - reading.size.width, row.top + 2f * d),
+        )
+
+        val barHeight = PatchModule.PANEL_BAR * d
+        val barTop = row.bottom - barHeight - 10f * d
+        val radius = CornerRadius(barHeight / 2f, barHeight / 2f)
+
+        drawRoundRect(
+            color = Color(0xFF12151A),
+            topLeft = Offset(row.left, barTop),
+            size = Size(row.width, barHeight),
+            cornerRadius = radius,
+        )
+        val filled = row.width * param.positionOf(value)
+        drawRoundRect(
+            color = module.type.accent,
+            topLeft = Offset(row.left, barTop),
+            size = Size(filled.coerceAtLeast(barHeight), barHeight),
+            cornerRadius = radius,
+        )
     }
 }
 

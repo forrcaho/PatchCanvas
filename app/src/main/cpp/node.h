@@ -6,6 +6,7 @@
 /** Frames processed per inner block. 96-frame bursts divide by this exactly. */
 constexpr int32_t kBlockSize = 32;
 constexpr int32_t kMaxPorts = 4;
+constexpr int32_t kMaxParams = 4;
 
 /**
  * A graph node.
@@ -26,6 +27,19 @@ public:
     virtual int32_t outputCount() const = 0;
 
     virtual void prepare(int32_t sampleRate) { sampleRate_ = sampleRate; }
+
+    /**
+     * A knob moved. Values arrive in real units -- hertz, seconds, beats per minute --
+     * rather than normalised, because the range and the curve belong to the thing being
+     * described and the interface should be able to say "440 Hz" rather than "0.63".
+     *
+     * Called from applyCommands on the audio thread, so an implementation may compute
+     * coefficients but must not allocate.
+     */
+    virtual void setParam(int32_t index, float value) {
+        (void) index;
+        (void) value;
+    }
     virtual void process(int32_t frames) = 0;
 
     void setInput(int32_t port, const float *buffer) { inputs_[port] = buffer; }

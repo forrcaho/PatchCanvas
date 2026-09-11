@@ -42,6 +42,7 @@ interface GraphCommands {
     fun removeNode(id: Long)
     fun connect(srcId: Long, srcPort: Int, dstId: Long, dstPort: Int)
     fun disconnect(dstId: Long, dstPort: Int)
+    fun setParam(id: Long, index: Int, value: Float)
     fun collectGarbage()
 }
 
@@ -53,6 +54,9 @@ object EngineCommands : GraphCommands {
         AudioEngine.connect(srcId, srcPort, dstId, dstPort)
     }
     override fun disconnect(dstId: Long, dstPort: Int) { AudioEngine.disconnect(dstId, dstPort) }
+    override fun setParam(id: Long, index: Int, value: Float) {
+        AudioEngine.setParam(id, index, value)
+    }
     override fun collectGarbage() { AudioEngine.collectGarbage() }
 }
 
@@ -71,11 +75,13 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
 
     private var syncedNodes = emptyMap<Long, NodeType>()
     private var syncedCables = emptySet<Connection>()
+    private var syncedParams = emptyMap<Long, List<Float>>()
 
     /** Forget what the engine has, so the next sync re-sends everything. */
     fun invalidate() {
         syncedNodes = emptyMap()
         syncedCables = emptySet()
+        syncedParams = emptyMap()
     }
 
     fun sync(patch: Patch) {
@@ -109,8 +115,22 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
             commands.connect(it.from.moduleId, it.from.index, it.to.moduleId, it.to.index)
         }
 
+        // Knobs last, and every knob of a node that was just added: the engine's node
+        // starts at its own C++ defaults, which are not required to agree with the ones
+        // declared here, and a patch loaded from disk has values for all of them.
+        val params = patch.modules.associate { it.id to it.params.toList() }
+        params.forEach { (id, values) ->
+            val previous = syncedParams[id]
+            values.forEachIndexed { index, value ->
+                if (previous == null || previous.getOrNull(index) != value) {
+                    commands.setParam(id, index, value)
+                }
+            }
+        }
+
         syncedNodes = nodes
         syncedCables = cables
+        syncedParams = params
 
         // Whatever the audio thread retired during the last block is ours to free.
         commands.collectGarbage()

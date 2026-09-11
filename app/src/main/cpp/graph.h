@@ -61,6 +61,7 @@ public:
     bool postRemove(int64_t id);
     bool postConnect(int64_t srcId, int32_t srcPort, int64_t dstId, int32_t dstPort);
     bool postDisconnect(int64_t dstId, int32_t dstPort);
+    bool postSetParam(int64_t id, int32_t paramIndex, float value);
     /** Frees everything the audio thread handed back. Never called from the callback. */
     void collectGarbage();
     /** Frees anything still owned, after the stream has stopped. */
@@ -75,7 +76,7 @@ public:
     const float *outputR() const;
 
 private:
-    enum class CommandType : int32_t { Add, Remove, Connect, Disconnect };
+    enum class CommandType : int32_t { Add, Remove, Connect, Disconnect, SetParam };
 
     struct Command {
         CommandType type = CommandType::Add;
@@ -85,6 +86,8 @@ private:
         int32_t dstPort = 0;
         NodeType nodeType = NodeType::Unknown;
         Node *node = nullptr;
+        int32_t paramIndex = 0;
+        float value = 0.0f;
     };
 
     /**

@@ -19,16 +19,6 @@ inline bool gateHigh(float value) { return value > 0.5f; }
  * gives modules parameters, so this is what Steps plays until then -- chosen to be
  * obviously musical, so a wrong clock or a dead gate is audible rather than ambiguous.
  */
-/**
- * A preamp for the microphone.
- *
- * Unprocessed input is raw by request -- no automatic gain, which is the whole point of
- * asking for it -- so a phone mic at talking distance arrives far below the level an
- * oscillator produces. Eighteen decibels puts it in the same world. Provisional until
- * Phase 5 gives it a knob, which is where it belongs.
- */
-constexpr float kInputGain = 8.0f;
-
 constexpr float kPattern[8] = {
         0.0f, 3.0f / 12.0f, 7.0f / 12.0f, 10.0f / 12.0f,
         12.0f / 12.0f, 10.0f / 12.0f, 7.0f / 12.0f, 3.0f / 12.0f,
@@ -60,9 +50,28 @@ void OscNode::process(int32_t frames) {
         // Per sample rather than per block, deliberately: signal types are advisory, so
         // patching audio into an FM input is allowed and is a real technique. Updating
         // only at block rate would quantise that to the control rate and ruin it.
-        const float octaves = clampf(pitch[i] + fm[i], -6.0f, 6.0f);
+        const float octaves = clampf(pitch[i] + fm[i] + tuneSemitones_ / 12.0f, -6.0f, 6.0f);
         osc_.SetFreq(kMiddleC * std::exp2(octaves));
         o[i] = osc_.Process();
+    }
+}
+
+void OscNode::setParam(int32_t index, float value) {
+    switch (index) {
+        case 0: tuneSemitones_ = clampf(value, -24.0f, 24.0f); break;
+        case 1: {
+            // Discrete, so the knob lands on a waveform rather than between two.
+            const auto wave = static_cast<uint8_t>(clampf(value, 0.0f, 3.0f) + 0.5f);
+            static const uint8_t kWaves[4] = {
+                    daisysp::Oscillator::WAVE_POLYBLEP_SAW,
+                    daisysp::Oscillator::WAVE_POLYBLEP_SQUARE,
+                    daisysp::Oscillator::WAVE_POLYBLEP_TRI,
+                    daisysp::Oscillator::WAVE_SIN,
+            };
+            osc_.SetWaveform(kWaves[wave]);
+            break;
+        }
+        default: break;
     }
 }
 
@@ -88,9 +97,19 @@ void FilterNode::process(int32_t frames) {
         // it quietly meant audio-rate filter modulation did not work while audio-rate FM
         // did. There is no control rate here; this was the one place pretending there was.
         const float octaves = clampf(cutoff[i], -6.0f, 6.0f);
-        svf_.SetFreq(clampf(1000.0f * std::exp2(octaves), 20.0f, 18000.0f));
+        svf_.SetFreq(clampf(cutoffHz_ * std::exp2(octaves), 20.0f, 18000.0f));
         svf_.Process(in[i]);
         o[i] = svf_.Low();
+    }
+}
+
+void FilterNode::setParam(int32_t index, float value) {
+    switch (index) {
+        // The knob sets where a cable's zero sits; the cable moves it in octaves from
+        // there, which is how a cutoff input behaves on hardware.
+        case 0: cutoffHz_ = clampf(value, 20.0f, 18000.0f); break;
+        case 1: svf_.SetRes(clampf(value, 0.0f, 0.95f)); break;
+        default: break;
     }
 }
 
@@ -115,6 +134,16 @@ void EnvNode::process(int32_t frames) {
     }
 }
 
+void EnvNode::setParam(int32_t index, float value) {
+    switch (index) {
+        case 0: adsr_.SetAttackTime(clampf(value, 0.001f, 5.0f)); break;
+        case 1: adsr_.SetDecayTime(clampf(value, 0.001f, 5.0f)); break;
+        case 2: adsr_.SetSustainLevel(clampf(value, 0.0f, 1.0f)); break;
+        case 3: adsr_.SetReleaseTime(clampf(value, 0.001f, 10.0f)); break;
+        default: break;
+    }
+}
+
 // ---------------------------------------------------------------- VCA
 
 void VcaNode::process(int32_t frames) {
@@ -122,8 +151,12 @@ void VcaNode::process(int32_t frames) {
     const float *in = input(0);
     const float *cv = input(1);
     for (int32_t i = 0; i < frames; ++i) {
-        o[i] = in[i] * clampf(cv[i], 0.0f, 1.0f);
+        o[i] = in[i] * clampf(cv[i] + bias_, 0.0f, 1.0f);
     }
+}
+
+void VcaNode::setParam(int32_t index, float value) {
+    if (index == 0) bias_ = clampf(value, 0.0f, 1.0f);
 }
 
 // ---------------------------------------------------------------- Clock
@@ -143,6 +176,14 @@ void ClockNode::process(int32_t frames) {
     }
 }
 
+void ClockNode::setParam(int32_t index, float value) {
+    if (index != 0) return;
+    bpm_ = clampf(value, 20.0f, 300.0f);
+    period_ = static_cast<int64_t>(static_cast<float>(sampleRate_) * 60.0f / bpm_);
+    if (period_ < 2) period_ = 2;
+    if (counter_ >= period_) counter_ = 0;
+}
+
 // ---------------------------------------------------------------- Steps
 
 void StepsNode::process(int32_t frames) {
@@ -153,12 +194,24 @@ void StepsNode::process(int32_t frames) {
     for (int32_t i = 0; i < frames; ++i) {
         const bool high = gateHigh(clock[i]);
         if (high && !wasHigh_) {
-            step_ = (step_ + 1) % kSteps;
+            step_ = (step_ + 1) % (length_ > 0 ? length_ : 1);
         }
         wasHigh_ = high;
 
-        pitch[i] = kPattern[step_];
+        pitch[i] = kPattern[step_] + transpose_ / 12.0f;
         gate[i] = high ? 1.0f : 0.0f;
+    }
+}
+
+void StepsNode::setParam(int32_t index, float value) {
+    switch (index) {
+        case 0: {
+            length_ = static_cast<int32_t>(clampf(value, 1.0f, static_cast<float>(kSteps)) + 0.5f);
+            if (step_ >= length_) step_ = 0;
+            break;
+        }
+        case 1: transpose_ = clampf(value, -24.0f, 24.0f); break;
+        default: break;
     }
 }
 
@@ -174,8 +227,12 @@ void MixNode::process(int32_t frames) {
         // Summed, not averaged: an unused input contributes silence, and averaging would
         // make a patch quieter simply for having spare inputs. The limiter catches the
         // rest.
-        o[i] = a[i] + b[i] + c[i] + d[i];
+        o[i] = a[i] * level_[0] + b[i] * level_[1] + c[i] * level_[2] + d[i] * level_[3];
     }
+}
+
+void MixNode::setParam(int32_t index, float value) {
+    if (index >= 0 && index < 4) level_[index] = clampf(value, 0.0f, 2.0f);
 }
 
 // ---------------------------------------------------------------- Out
@@ -197,8 +254,8 @@ void OutNode::process(int32_t frames) {
     // DC first, then limit. A blocked offset would otherwise eat the limiter's headroom
     // while being inaudible itself.
     for (int32_t i = 0; i < frames; ++i) {
-        left[i] = dcLeft_.Process(inLeft[i]);
-        right[i] = dcRight_.Process(inRight[i]);
+        left[i] = dcLeft_.Process(inLeft[i] * level_);
+        right[i] = dcRight_.Process(inRight[i] * level_);
     }
     // DaisySP's Limiter multiplies everything by a fixed 0.7 whether it is loud or not,
     // which is seven decibels given away before any limiting has happened -- a fader,
@@ -208,6 +265,10 @@ void OutNode::process(int32_t frames) {
     constexpr float kMakeUp = 1.0f / 0.7f;
     limitLeft_.ProcessBlock(left, static_cast<size_t>(frames), kMakeUp);
     limitRight_.ProcessBlock(right, static_cast<size_t>(frames), kMakeUp);
+}
+
+void OutNode::setParam(int32_t index, float value) {
+    if (index == 0) level_ = clampf(value, 0.0f, 2.0f);
 }
 
 // ---------------------------------------------------------------- In
@@ -225,10 +286,14 @@ void InNode::process(int32_t frames) {
     // The device microphone is mono, so both rails carry the same signal. Spreading it
     // would be inventing a stereo image that is not there.
     for (int32_t i = 0; i < frames; ++i) {
-        const float sample = source_[i] * kInputGain;
+        const float sample = source_[i] * gain_;
         left[i] = sample;
         right[i] = sample;
     }
+}
+
+void InNode::setParam(int32_t index, float value) {
+    if (index == 0) gain_ = clampf(value, 0.0f, 64.0f);
 }
 
 // ---------------------------------------------------------------- factory

@@ -138,8 +138,9 @@ class PortGeometryTest {
     fun `adjacent ports are exactly one pitch apart`() {
         val type = Types.Osc // two inputs
         val rect = boxFor(type)
-        val a = portIn(rect, 1f, PortDirection.INPUT, 0, 2)
-        val b = portIn(rect, 1f, PortDirection.INPUT, 1, 2)
+        val band = PatchModule.portsBodyFor(type)
+        val a = portIn(rect, 1f, PortDirection.INPUT, 0, 2, band)
+        val b = portIn(rect, 1f, PortDirection.INPUT, 1, 2, band)
         assertEquals(PatchModule.PORT_PITCH, b.y - a.y, 0.001f)
     }
 
@@ -148,8 +149,9 @@ class PortGeometryTest {
         val rect = Rect(Offset.Zero, Size(PatchModule.WIDTH, PatchModule.heightFor(Types.Osc)))
         (2..5).forEach { n ->
             val tall = Rect(Offset.Zero, Size(PatchModule.WIDTH, PatchModule.HEADER + n * PatchModule.PORT_PITCH))
-            val first = portIn(tall, 1f, PortDirection.INPUT, 0, n)
-            val second = portIn(tall, 1f, PortDirection.INPUT, 1, n)
+            val band = tall.height - PatchModule.HEADER
+            val first = portIn(tall, 1f, PortDirection.INPUT, 0, n, band)
+            val second = portIn(tall, 1f, PortDirection.INPUT, 1, n, band)
             assertEquals("n=$n", PatchModule.PORT_PITCH, second.y - first.y, 0.001f)
         }
         assertTrue(rect.height > 0f)
@@ -159,7 +161,7 @@ class PortGeometryTest {
     fun `a lone port sits centred in the body`() {
         val type = Types.Env // one input, one output
         val rect = boxFor(type)
-        val at = portIn(rect, 1f, PortDirection.INPUT, 0, 1)
+        val at = portIn(rect, 1f, PortDirection.INPUT, 0, 1, PatchModule.portsBodyFor(type))
         val bodyCentre = PatchModule.HEADER + (rect.height - PatchModule.HEADER) / 2f
         assertEquals(bodyCentre, at.y, 0.001f)
     }
@@ -167,8 +169,9 @@ class PortGeometryTest {
     @Test
     fun `inputs sit on the left edge and outputs on the right`() {
         val rect = boxFor(Types.Osc)
-        assertEquals(rect.left, portIn(rect, 1f, PortDirection.INPUT, 0, 2).x, 0.001f)
-        assertEquals(rect.right, portIn(rect, 1f, PortDirection.OUTPUT, 0, 1).x, 0.001f)
+        val band = PatchModule.portsBodyFor(Types.Osc)
+        assertEquals(rect.left, portIn(rect, 1f, PortDirection.INPUT, 0, 2, band).x, 0.001f)
+        assertEquals(rect.right, portIn(rect, 1f, PortDirection.OUTPUT, 0, 1, band).x, 0.001f)
     }
 
     @Test
@@ -187,8 +190,9 @@ class PortGeometryTest {
         (1..5).forEach { n ->
             val h = PatchModule.HEADER + maxOf(PatchModule.MIN_BODY, n * PatchModule.PORT_PITCH)
             val rect = Rect(Offset.Zero, Size(PatchModule.WIDTH, h))
-            val first = portIn(rect, 1f, PortDirection.INPUT, 0, n).y
-            val last = portIn(rect, 1f, PortDirection.INPUT, n - 1, n).y
+            val band = h - PatchModule.HEADER
+            val first = portIn(rect, 1f, PortDirection.INPUT, 0, n, band).y
+            val last = portIn(rect, 1f, PortDirection.INPUT, n - 1, n, band).y
             val bodyCentre = PatchModule.HEADER + (h - PatchModule.HEADER) / 2f
             assertEquals("n=$n", bodyCentre, (first + last) / 2f, 0.001f)
         }
@@ -198,8 +202,9 @@ class PortGeometryTest {
     fun `the unit multiplier scales layout without changing pitch ratio`() {
         val d = 2.4375f // the reference device
         val rect = Rect(Offset.Zero, Size(PatchModule.RAIL_WIDTH * d, PatchModule.heightFor(Types.Out) * d))
-        val a = portIn(rect, d, PortDirection.INPUT, 0, 2)
-        val b = portIn(rect, d, PortDirection.INPUT, 1, 2)
+        val band = PatchModule.portsBodyFor(Types.Out) * d
+        val a = portIn(rect, d, PortDirection.INPUT, 0, 2, band)
+        val b = portIn(rect, d, PortDirection.INPUT, 1, 2, band)
         assertEquals(PatchModule.PORT_PITCH * d, b.y - a.y, 0.001f)
     }
 }

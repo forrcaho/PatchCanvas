@@ -10,6 +10,7 @@ private sealed interface Cmd {
     data class Remove(val id: Long) : Cmd
     data class Connect(val src: Long, val srcPort: Int, val dst: Long, val dstPort: Int) : Cmd
     data class Disconnect(val dst: Long, val dstPort: Int) : Cmd
+    data class SetParam(val id: Long, val index: Int, val value: Float) : Cmd
 }
 
 private class Recorder : GraphCommands {
@@ -22,6 +23,9 @@ private class Recorder : GraphCommands {
         log += Cmd.Connect(srcId, srcPort, dstId, dstPort)
     }
     override fun disconnect(dstId: Long, dstPort: Int) { log += Cmd.Disconnect(dstId, dstPort) }
+    override fun setParam(id: Long, index: Int, value: Float) {
+        log += Cmd.SetParam(id, index, value)
+    }
     override fun collectGarbage() { collected++ }
 
     fun clear() { log.clear() }
@@ -85,7 +89,8 @@ class GraphSyncTest {
         rec.clear()
         val added = patch.add(Types.Osc, Offset.Zero)!!
         sync.sync(patch)
-        assertEquals(listOf(Cmd.Add(added.id, NodeType.Osc)), rec.log)
+        // Its knobs follow, so assert the add rather than that nothing else happened.
+        assertEquals(listOf(Cmd.Add(added.id, NodeType.Osc)), rec.log.filterIsInstance<Cmd.Add>())
     }
 
     @Test
@@ -169,6 +174,56 @@ class GraphSyncTest {
     }
 
     @Test
+    fun `a new node has every knob sent`() {
+        val patch = demoPatch()
+        sync.sync(patch)
+        rec.clear()
+
+        val added = patch.add(Types.Env, Offset.Zero)!!
+        sync.sync(patch)
+
+        // All four, not just the ones that differ from the engine's own defaults: the
+        // C++ node's starting values are not required to agree with the declared ones.
+        val sent = rec.log.filterIsInstance<Cmd.SetParam>().filter { it.id == added.id }
+        assertEquals(Types.Env.params.size, sent.size)
+    }
+
+    @Test
+    fun `turning one knob sends one command`() {
+        val patch = demoPatch()
+        sync.sync(patch)
+        rec.clear()
+
+        val filter = patch.free.first { it.type == Types.Filter }
+        filter.setParam(1, 0.8f)
+        sync.sync(patch)
+
+        assertEquals(listOf(Cmd.SetParam(filter.id, 1, 0.8f)), rec.log)
+    }
+
+    @Test
+    fun `knobs that did not move send nothing`() {
+        val patch = demoPatch()
+        sync.sync(patch)
+        rec.clear()
+        sync.sync(patch)
+        assertTrue(rec.log.none { it is Cmd.SetParam })
+    }
+
+    @Test
+    fun `knobs are sent after the node exists`() {
+        val patch = demoPatch()
+        sync.sync(patch)
+        rec.clear()
+        val added = patch.add(Types.Osc, Offset.Zero)!!
+        sync.sync(patch)
+
+        val add = rec.log.indexOfFirst { it == Cmd.Add(added.id, NodeType.Osc) }
+        val firstParam = rec.log.indexOfFirst { it is Cmd.SetParam && it.id == added.id }
+        assertTrue("a knob cannot be set on a node that is not there", add < firstParam)
+    }
+
+    @Test
     fun `garbage is collected on every sync`() {
         val patch = demoPatch()
         sync.sync(patch)
@@ -243,5 +298,82 @@ class ModuleContractTest {
                 restored.kindOf(cable.from),
             )
         }
+    }
+}
+
+/** The knob abstraction itself: ranges, curves, and the round trip through a UI. */
+class ParamTest {
+
+    private fun allParams() = Types.byName.values.flatMap { it.params }
+
+    @Test
+    fun `every default sits inside its own range`() {
+        Types.byName.values.forEach { type ->
+            type.params.forEach { p ->
+                assertTrue(
+                    "${type.name}.${p.name} default ${p.default} outside ${p.min}..${p.max}",
+                    p.default >= p.min && p.default <= p.max,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `no module declares more knobs than the engine can carry`() {
+        Types.byName.values.forEach { type ->
+            assertTrue(
+                "${type.name} has ${type.params.size} params",
+                type.params.size <= MAX_PARAMS,
+            )
+        }
+    }
+
+    @Test
+    fun `position and value are inverses`() {
+        allParams().forEach { p ->
+            listOf(0f, 0.25f, 0.5f, 0.75f, 1f).forEach { t ->
+                val roundTrip = p.positionOf(p.valueAt(t))
+                // Stepped params quantise, so they only round trip at their own steps.
+                if (p.curve != ParamCurve.STEPPED) {
+                    assertEquals("${p.name} at $t", t, roundTrip, 0.001f)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `the travel ends where the range does`() {
+        allParams().forEach { p ->
+            // Relative, not absolute: an exponential knob over a 900:1 range round trips
+            // through exp and ln in single precision, and lands within a couple of parts
+            // per million rather than exactly. That is float arithmetic, not a defect.
+            val tolerance = kotlin.math.max(kotlin.math.abs(p.max), 1f) * 1e-5f
+            assertEquals("${p.name} min", p.min, p.valueAt(0f), tolerance)
+            assertEquals("${p.name} max", p.max, p.valueAt(1f), tolerance)
+        }
+    }
+
+    @Test
+    fun `an exponential knob spends half its travel in the lower octaves`() {
+        // The reason the curve exists: on a linear cutoff knob, everything below 2kHz --
+        // which is most of what matters -- would live in the first tenth of the sweep.
+        val cutoff = Types.Filter.params.first { it.name == "cutoff" }
+        val middle = cutoff.valueAt(0.5f)
+        assertTrue("midpoint was $middle", middle > 500f && middle < 1000f)
+    }
+
+    @Test
+    fun `a stepped knob lands on whole values`() {
+        val wave = Types.Osc.params.first { it.name == "wave" }
+        (0..10).forEach { i ->
+            val v = wave.valueAt(i / 10f)
+            assertEquals("at $i", v, kotlin.math.round(v), 0.0001f)
+        }
+    }
+
+    @Test
+    fun `a module starts at its declared defaults`() {
+        val module = PatchModule(999L, Types.Env, Offset.Zero)
+        assertEquals(Types.Env.params.map { it.default }, module.params.toList())
     }
 }

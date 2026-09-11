@@ -33,7 +33,15 @@ fun Patch.toJson(): String {
                 .put("type", m.type.name)
                 .put("x", m.position.x.toDouble())
                 .put("y", m.position.y.toDouble())
+                .put("params", paramsOf(m))
         )
+    }
+
+    // The rails hold knobs too -- output level, microphone gain -- and those are part of
+    // the patch even though the rails' geometry is not.
+    val rails = JSONArray()
+    pinned.filter { it.type.params.isNotEmpty() }.forEach { m ->
+        rails.put(JSONObject().put("id", m.id).put("params", paramsOf(m)))
     }
 
     val cables = JSONArray()
@@ -57,8 +65,28 @@ fun Patch.toJson(): String {
     return JSONObject()
         .put("version", FORMAT_VERSION)
         .put("modules", modules)
+        .put("rails", rails)
         .put("connections", cables)
         .toString()
+}
+
+/**
+ * Knobs are keyed by name rather than position, so adding or reordering a module's
+ * parameters cannot silently reassign a saved value to a different knob.
+ */
+private fun paramsOf(module: PatchModule): JSONObject {
+    val out = JSONObject()
+    module.type.params.forEachIndexed { i, p -> out.put(p.name, module.params[i].toDouble()) }
+    return out
+}
+
+private fun restoreParams(module: PatchModule, stored: JSONObject?) {
+    if (stored == null) return
+    module.type.params.forEachIndexed { i, p ->
+        if (stored.has(p.name)) {
+            module.setParam(i, stored.optDouble(p.name, p.default.toDouble()).toFloat())
+        }
+    }
 }
 
 /** Returns null for anything unreadable, so the caller can fall back to a fresh patch. */
@@ -79,13 +107,21 @@ fun patchFromJson(text: String): Patch? {
             if (type.pinned != null) continue // rails already exist; never duplicate them
             val id = m.optLong("id", -1L)
             if (id < 0L || patch.module(id) != null) continue
-            patch.adopt(
-                PatchModule(
-                    id,
-                    type,
-                    Offset(m.optDouble("x", 0.0).toFloat(), m.optDouble("y", 0.0).toFloat()),
-                )
+            val module = PatchModule(
+                id,
+                type,
+                Offset(m.optDouble("x", 0.0).toFloat(), m.optDouble("y", 0.0).toFloat()),
             )
+            restoreParams(module, m.optJSONObject("params"))
+            patch.adopt(module)
+        }
+
+        val rails = root.optJSONArray("rails") ?: JSONArray()
+        for (i in 0 until rails.length()) {
+            val r = rails.optJSONObject(i) ?: continue
+            val module = patch.module(r.optLong("id", -1L)) ?: continue
+            if (!module.isPinned) continue
+            restoreParams(module, r.optJSONObject("params"))
         }
 
         val cables = root.optJSONArray("connections") ?: JSONArray()

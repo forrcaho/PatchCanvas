@@ -58,6 +58,10 @@ object AudioEngine {
     fun disconnect(dstId: Long, dstPort: Int): Boolean =
         available && started && nativeDisconnect(dstId, dstPort)
 
+    /** A knob moved. Real units, not normalised -- the node owns no mapping. */
+    fun setParam(id: Long, index: Int, value: Float): Boolean =
+        available && started && nativeSetParam(id, index, value)
+
     /** Frees nodes the audio thread retired. Cheap, and never on the audio thread. */
     fun collectGarbage() {
         if (available && started) nativeCollectGarbage()
@@ -120,6 +124,7 @@ object AudioEngine {
     private external fun nativeRemoveNode(id: Long): Boolean
     private external fun nativeConnect(srcId: Long, srcPort: Int, dstId: Long, dstPort: Int): Boolean
     private external fun nativeDisconnect(dstId: Long, dstPort: Int): Boolean
+    private external fun nativeSetParam(id: Long, index: Int, value: Float): Boolean
     private external fun nativeCollectGarbage()
     private external fun nativeStatus(): String
     private external fun nativeArmCapture(enabled: Boolean, path: String)

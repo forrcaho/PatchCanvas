@@ -45,6 +45,15 @@ bool Graph::postDisconnect(int64_t dstId, int32_t dstPort) {
     return commands_.push(cmd);
 }
 
+bool Graph::postSetParam(int64_t id, int32_t paramIndex, float value) {
+    Command cmd;
+    cmd.type = CommandType::SetParam;
+    cmd.id = id;
+    cmd.paramIndex = paramIndex;
+    cmd.value = value;
+    return commands_.push(cmd);
+}
+
 void Graph::collectGarbage() {
     Node *dead = nullptr;
     while (garbage_.pop(dead)) {
@@ -189,6 +198,14 @@ void Graph::applyCommands() {
                 if (cmd.dstPort < 0 || cmd.dstPort >= kMaxPorts) break;
                 repatch(nodes_[dst].inputs[cmd.dstPort], src, cmd.srcPort);
                 dirty_ = true;
+                break;
+            }
+            case CommandType::SetParam: {
+                const int32_t slot = indexOf(cmd.id);
+                if (slot < 0) break;
+                if (cmd.paramIndex < 0 || cmd.paramIndex >= kMaxParams) break;
+                // No topology change, so no re-sort: a knob does not move the graph.
+                nodes_[slot].node->setParam(cmd.paramIndex, cmd.value);
                 break;
             }
             case CommandType::Disconnect: {

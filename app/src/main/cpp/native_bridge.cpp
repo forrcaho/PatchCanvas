@@ -97,6 +97,13 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeDisconnect(JNIEnv *, jobje
     return engine().graph().postDisconnect(dstId, dstPort) ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT jboolean JNICALL
+Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetParam(JNIEnv *, jobject,
+                                                               jlong id, jint index,
+                                                               jfloat value) {
+    return engine().graph().postSetParam(id, index, value) ? JNI_TRUE : JNI_FALSE;
+}
+
 /** Frees whatever the audio thread handed back. Deliberately not on the audio thread. */
 JNIEXPORT void JNICALL
 Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeCollectGarbage(JNIEnv *, jobject) {
