@@ -338,25 +338,50 @@ redundant and harmful. That is what makes swapping a cable a real crossfade.
 
 ## Phase 4 -- Modules worth patching
 
-**Signal typing.** `PortRef` is `(moduleId, dir, index)` with no notion of what flows
-through it. Introduce audio/CV/gate: it gates connection validity, colors cables, and
-finally makes the demo patch legible.
+**Code complete; not yet run on the device.** 22 graph checks, 19 node checks, 52 JVM
+tests. One item outstanding: the `In` rail is still silent, because mic capture needs an
+input stream and a `RECORD_AUDIO` grant and could not be built blind.
+
+The demo patch is now an instrument rather than a test tone -- Clock drives Steps, Steps
+plays Osc and fires Env, Env opens a VCA, and the VCA feeds both channels.
+
+**DaisySP is vendored, not a submodule.** Six files under `app/src/main/cpp/vendor/`,
+because DaisySP's own repository carries `DaisySP-LGPL` as *its* submodule: anyone
+running `git clone --recursive` here would pull the half we deliberately excluded and
+acquire a relinking obligation without choosing to. It also keeps offline and CI builds
+free of a configure-time download. Built as its own target with headers included as
+SYSTEM, so upstream is held to upstream's warning settings rather than ours.
+
+**Signal typing is advisory, not enforced.** Audio, CV and gate colour the cable and the
+port, and any output may still patch to any input.
+
+This roadmap originally said types would gate connection validity. That was wrong. In
+hardware modular it is all just voltage, and patching audio into a CV input is a
+technique rather than a mistake -- audio-rate modulation lives there, and refusing it
+would make this less modular than the thing it models. The colour says what to expect;
+the cable decides what happens. The oscillator updates its frequency per sample rather
+than per block precisely so that stays real.
 
 Inputs stay single-source -- `connect` already replaces an occupied input. That is a
-design choice (a patch stays readable, no hidden summing) and it makes an explicit
-mixer and mult module necessary rather than optional.
+design choice (a patch stays readable, no hidden summing) and it is what makes an
+explicit mixer necessary rather than optional.
 
 | Module | DaisySP | Notes |
 | --- | --- | --- |
 | Osc | `Oscillator` | `WAVE_POLYBLEP_*` -- naive saws alias audibly |
 | Filter | `Svf`, `Ladder` | both MIT; `moogladder` is the LGPL one, skip it |
 | Env | `Adsr` | |
-| VCA | -- | currently missing, and nothing shapes amplitude without it |
+| VCA | -- | closed without CV, as hardware is |
 | Clock | -- | frame-counted; this is the stable clock |
 | Steps | -- | clocked sequencer, pitch CV + gate out |
-| Mix / Mult | -- | forced by single-source inputs |
+| Mix | -- | forced by single-source inputs; nothing else can sum |
 | Out | `Limiter` | pinned right; plus a DC blocker |
-| In | -- | pinned left; mic capture, `RECORD_AUDIO`, off by default |
+| In | -- | pinned left; **still silent** -- mic capture is the one item left |
+
+**There is no Mult**, despite this table once listing one. A mult exists in hardware
+because a physical jack takes one plug; here an output already fans out to as many
+inputs as you like, since each input stores its own source. Only summing ever needed a
+module.
 
 The limiter is not polish. A feedback patch can reach full scale instantly, and this is
 an instrument used with headphones.
@@ -365,6 +390,30 @@ It is not, however, the guard for the mic. A limiter prevents clipping, not feed
 it will happily limit a howl to a very loud steady tone. Mic into speaker is a guaranteed
 loop, mic into headphones is not, so enabling the `In` rail gates on a headphone route
 plus the `RECORD_AUDIO` grant. That is worth more than any amount of DSP.
+
+### What the node tests caught
+
+Three of the nineteen only passed after the *test* was fixed, and each was a wrong
+assumption about the DSP rather than a typo:
+
+- Counting a saw's resets by threshold is unreliable, because polyBLEP smears that edge.
+  The same signal reported 493, 411, 313 or 259 cycles depending only on where the
+  threshold sat. Zero crossings in one direction are unambiguous. Before that, looking
+  for a *downward* jump found none at all -- DaisySP's saw descends and resets upward,
+  which read as an oscillator producing silence rather than one running upside down.
+- `DcBlock`'s time constant is ~100ms, not the ~20ms assumed, so "settles to nothing"
+  needed four times the window. The envelope's exponential tail likewise outlives its
+  nominal release.
+- The clock is asserted by *interval*, not count: it starts its first beat on sample
+  zero, which is a tick but not an edge, and a count says nothing about regularity.
+  Because it counts frames rather than consulting a timer, 24000 frames a beat is exact,
+  so the test asserts it exactly.
+
+### Route changes
+
+Plugging headphones in or out closed the stream and left it closed until the app was
+backgrounded and resumed. It now reopens on the new route, and deliberately does not
+reset the graph: a route change must not cost you your patch.
 
 ## Phase 5 -- Playability
 
