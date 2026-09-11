@@ -62,6 +62,13 @@ Measured over adb on 2026-09-10, not estimated:
 | **MMAP burst** | **96 frames = 2 ms**, measured in Phase 2 -- five times finer than the legacy path |
 | **Output latency** | **4.2-5.9 ms**, exclusive MMAP, 0 xruns |
 
+**The measured latency is the stream's, not end to end.** `latencyMs` comes from AAudio
+and covers our leg only. Over Bluetooth A2DP the transport adds a hundred milliseconds
+or more that the number cannot see, so a route check belongs with any latency claim.
+Exclusive MMAP at a 96-frame burst is real; it is the local leg. Wired or speaker is the
+only honest test, and worth doing before Phase 5, where latency starts to matter to the
+hands.
+
 Two of those decide things. **Both MMAP policies are AUTO** (`NEVER`=1, `AUTO`=2,
 `ALWAYS`=3), so exclusive-mode MMAP is permitted and will be attempted rather than
 vendor-disabled -- the low-latency path is open. And the 10 ms legacy HAL buffer is what
