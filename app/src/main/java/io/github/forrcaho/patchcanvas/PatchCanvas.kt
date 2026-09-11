@@ -604,15 +604,6 @@ fun PatchCanvas(
 
         patch.pinned.forEach { rail ->
             val live = rail.id != IN_ID || patch.inputEnabled
-            if (rail.id == OUT_ID && outputActive) {
-                val r = frame.railRect(rail)
-                drawRoundRect(
-                    color = rail.type.accent.copy(alpha = 0.18f),
-                    topLeft = r.topLeft,
-                    size = r.size,
-                    cornerRadius = CornerRadius(PatchModule.CORNER * d, PatchModule.CORNER * d),
-                )
-            }
             drawModuleBox(
                 module = rail,
                 rect = frame.railRect(rail),
@@ -624,6 +615,18 @@ fun PatchCanvas(
                 showLabels = true,
                 alpha = if (live) 1f else 0.38f,
             )
+            // After the box, not before: drawModuleBox fills opaquely, so a highlight
+            // drawn underneath is painted straight over and never appears.
+            if (rail.id == OUT_ID && outputActive) {
+                val r = frame.railRect(rail)
+                drawRoundRect(
+                    color = rail.type.accent,
+                    topLeft = r.topLeft,
+                    size = r.size,
+                    cornerRadius = CornerRadius(PatchModule.CORNER * d, PatchModule.CORNER * d),
+                    style = Stroke(width = 2.5f * d),
+                )
+            }
         }
 
         // Halo on the armed port, drawn unscaled so it always reads as a real target.

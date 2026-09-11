@@ -59,6 +59,8 @@ Measured over adb on 2026-09-10, not estimated:
 | Audio | **48 kHz** native |
 | MMAP | `aaudio.mmap_policy` = 2, `aaudio.mmap_exclusive_policy` = 2 -- both AUTO |
 | Legacy path | HAL buffer 480 frames = 10 ms (`PRIMARY|FAST`) |
+| **MMAP burst** | **96 frames = 2 ms**, measured in Phase 2 -- five times finer than the legacy path |
+| **Output latency** | **4.2-5.9 ms**, exclusive MMAP, 0 xruns |
 
 Two of those decide things. **Both MMAP policies are AUTO** (`NEVER`=1, `AUTO`=2,
 `ALWAYS`=3), so exclusive-mode MMAP is permitted and will be attempted rather than
@@ -66,8 +68,10 @@ vendor-disabled -- the low-latency path is open. And the 10 ms legacy HAL buffer
 a stream gets when MMAP *doesn't* engage, which is why Phase 2 verifies the mode rather
 than assuming it.
 
-The true MMAP burst size cannot be read statically; it requires opening a stream. That
-is Phase 2's first measurement.
+The true MMAP burst size could not be read statically -- it needed a stream open. Phase
+2 measured it at 96 frames, and AudioFlinger corroborates with an `AudioMmapOut` thread
+carrying `AUDIO_OUTPUT_FLAG_MMAP_NOIRQ`. Exclusive mode is granted here, not merely
+permitted.
 
 Being a Pixel helps: it is the platform Oboe is developed against, and exclusive-mode
 MMAP is most reliably available there. Being GrapheneOS matters more than it looks:
@@ -199,6 +203,11 @@ there tomorrow.
 
 ## Phase 2 -- First sound
 
+**Done, and measured on the device.** `mmap=YES sharing=EXCLUSIVE perf=LOW_LATENCY
+rate=48000 burst=96 buffer=192 latencyMs=4.2-5.9 xruns=0`. The 2 ms burst is the number
+that could not be read statically, and it retires the Phase 3 risk: the bridge can be
+designed against a real 2 ms budget rather than a hoped-for one.
+
 Deliberately minimal, and deliberately before any architecture depends on it. The
 purpose is to retire risk, not to make music.
 
@@ -237,7 +246,26 @@ purpose is to retire risk, not to make music.
 - Log measured round-trip latency and XRun count on the actual phone, and confirm the
   stream actually came back MMAP/exclusive rather than silently falling back to shared.
 
-*Done when:* it makes a sound, and the real latency number is known rather than hoped for.
+### What the device taught us that the desk could not
+
+Two bugs survived a clean compile and were only found by using it.
+
+The `Out` rail never lit while sounding: the highlight was drawn *before* the module
+box, whose opaque fill painted straight over it. Ordering, invisible in review.
+
+Closing the stream clicked. `stop()` was closing with the gain still up, so the last
+buffer ended on an arbitrary non-zero sample and the next was silence -- a step
+discontinuity, which is broadband. Ramping the gain down first fixed most of it but not
+all, and the remainder was the more interesting half: the ramp was being *computed* but
+not *played*. The written silence still sits in the stream buffer and the hardware
+pipeline, and `requestStop` discards whatever has not been consumed, truncating the
+tail. Fading and then draining one buffer plus the hardware path fixed it.
+
+A hard kill -- force-stop, or installing over a running app -- still pops, and always
+will: the process is gone, so nothing can run a fade.
+
+*Done when:* it makes a sound, and the real latency number is known rather than hoped
+for. *(done)*
 
 ## Phase 3 -- The bridge
 

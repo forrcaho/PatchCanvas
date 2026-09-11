@@ -60,9 +60,22 @@ private:
     /** Caller already holds streamLock_. */
     std::string statusLocked() const;
 
+    /** Ramps the gain down and waits, briefly, for the audio thread to get there. */
+    void fadeOutAndWait();
+
     mutable std::mutex streamLock_;
     std::shared_ptr<oboe::AudioStream> stream_;
     std::atomic<bool> toneEnabled_{false};
+
+    /**
+     * Closing the stream with the gain still up ends the last buffer on an arbitrary
+     * non-zero sample, and the step to silence is broadband -- an audible pop. stop()
+     * therefore asks the audio thread to ramp down and waits for it to land before
+     * closing, rather than cutting mid-waveform.
+     */
+    std::atomic<bool> fadingOut_{false};
+    std::atomic<bool> faded_{false};
+    std::atomic<bool> running_{false};
 
     // Audio-thread only. Not atomic because nothing else touches them while running.
     double phase_ = 0.0;

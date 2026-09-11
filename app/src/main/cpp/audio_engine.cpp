@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <thread>
 #include <sstream>
 
 namespace {
@@ -23,6 +24,19 @@ constexpr float kToneGain = 0.18f;
  * it would be audible on any system, and would misrepresent what the stream sounds like.
  */
 constexpr float kGainSmoothing = 0.0008f;
+
+/** Roughly 20ms to inaudible -- fast enough not to delay onPause, slow enough not to click. */
+constexpr float kFadeOutSmoothing = 0.01f;
+constexpr float kSilent = 1.0e-4f;
+constexpr int kFadeWaitMs = 60;
+
+/**
+ * faded_ only says the audio thread has *written* silence. Those frames are still in
+ * the stream buffer and the hardware pipeline, and requestStop discards whatever has
+ * not been consumed -- which truncates the tail of the ramp and clicks anyway. Waiting
+ * out one buffer plus the hardware path lets the ramp actually reach the DAC.
+ */
+constexpr int kDrainMs = 25;
 
 const char *sharingModeName(oboe::SharingMode mode) {
     return mode == oboe::SharingMode::Exclusive ? "EXCLUSIVE" : "SHARED";
@@ -72,6 +86,9 @@ bool AudioEngine::start() {
     // small enough to stay in the low-latency regime.
     stream_->setBufferSizeInFrames(stream_->getFramesPerBurst() * 2);
 
+    fadingOut_.store(false, std::memory_order_relaxed);
+    faded_.store(false, std::memory_order_relaxed);
+
     const oboe::Result started = stream_->requestStart();
     if (started != oboe::Result::OK) {
         __android_log_print(ANDROID_LOG_ERROR, kTag, "requestStart failed: %s",
@@ -81,11 +98,34 @@ bool AudioEngine::start() {
         return false;
     }
 
+    running_.store(true, std::memory_order_release);
     __android_log_print(ANDROID_LOG_INFO, kTag, "%s", statusLocked().c_str());
     return true;
 }
 
+void AudioEngine::fadeOutAndWait() {
+    if (!running_.load(std::memory_order_acquire)) return;
+
+    fadingOut_.store(true, std::memory_order_relaxed);
+
+    bool landed = false;
+    for (int waited = 0; waited < kFadeWaitMs && !landed; ++waited) {
+        landed = faded_.load(std::memory_order_acquire);
+        if (!landed) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    // If it never landed the stream is probably already dead, and there is nothing to
+    // drain. Otherwise let the silence we just wrote travel to the DAC before stopping.
+    if (landed) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(kDrainMs));
+    }
+}
+
 void AudioEngine::stop() {
+    // Before the lock, because it only touches atomics and must not block status().
+    fadeOutAndWait();
+    running_.store(false, std::memory_order_release);
+
     std::lock_guard<std::mutex> lock(streamLock_);
     if (!stream_) return;
     __android_log_print(ANDROID_LOG_INFO, kTag, "closing: %s", statusLocked().c_str());
@@ -113,10 +153,13 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(oboe::AudioStream * /*stream*
     const auto began = std::chrono::steady_clock::now();
 
     auto *out = static_cast<float *>(audioData);
-    const float target = toneEnabled_.load(std::memory_order_relaxed) ? kToneGain : 0.0f;
+    const bool fading = fadingOut_.load(std::memory_order_relaxed);
+    const float target =
+            (!fading && toneEnabled_.load(std::memory_order_relaxed)) ? kToneGain : 0.0f;
+    const float smoothing = fading ? kFadeOutSmoothing : kGainSmoothing;
 
     for (int32_t frame = 0; frame < numFrames; ++frame) {
-        gain_ += (target - gain_) * kGainSmoothing;
+        gain_ += (target - gain_) * smoothing;
 
         const auto sample = static_cast<float>(std::sin(phase_)) * gain_;
         phase_ += phaseIncrement_;
@@ -125,6 +168,10 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(oboe::AudioStream * /*stream*
         for (int32_t channel = 0; channel < channelCount_; ++channel) {
             *out++ = sample;
         }
+    }
+
+    if (fading && gain_ < kSilent) {
+        faded_.store(true, std::memory_order_release);
     }
 
     // The half of ADPF that makes it work: without a measured duration the governor is
