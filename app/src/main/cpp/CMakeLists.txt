@@ -7,6 +7,8 @@ find_package(oboe REQUIRED CONFIG)
 
 add_library(patchcanvas SHARED
         audio_engine.cpp
+        graph.cpp
+        nodes.cpp
         native_bridge.cpp)
 
 target_compile_features(patchcanvas PRIVATE cxx_std_17)

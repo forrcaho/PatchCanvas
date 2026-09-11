@@ -147,3 +147,52 @@ dependencies {
     // real implementation goes on the test classpath ahead of it.
     testImplementation("org.json:json:20250107")
 }
+
+// ---- Host-side audio graph tests ---------------------------------------------
+// graph.cpp and nodes.cpp depend on nothing from Android or Oboe, so they compile and
+// run on the build machine. Audio bugs are miserable to diagnose on a device, and the
+// evaluation order is the part most worth pinning down before it ever gets there. Run
+// under ASan and UBSan, which is how the missing Graph destructor was found.
+
+val hostCxx: String? = System.getenv("PATH")
+    ?.split(File.pathSeparator)
+    ?.map { File(it, "g++") }
+    ?.firstOrNull { it.canExecute() }
+    ?.absolutePath
+
+val nativeGraphTest = tasks.register<Exec>("nativeGraphTest") {
+    group = "verification"
+    description = "Compiles and runs the audio graph tests on the host toolchain."
+
+    // Skipped rather than failed where there is no host compiler, so a machine that
+    // only builds the app is never blocked by a test it cannot run.
+    onlyIf { hostCxx != null }
+
+    val outDir = layout.buildDirectory.dir("native-test").get().asFile
+    val binary = File(outDir, "graph_test").absolutePath
+
+    workingDir = projectDir
+    inputs.files(
+        fileTree("src/main/cpp") { include("**/*.cpp", "**/*.h") },
+        fileTree("src/test/cpp") { include("**/*.cpp") },
+    )
+    outputs.dir(outDir)
+
+    val script = buildString {
+        append("mkdir -p ").append(outDir.absolutePath).append(" && ")
+        append(hostCxx ?: "g++")
+        append(" -std=c++17 -O1 -Wall -Wextra -Werror")
+        append(" -fsanitize=address,undefined")
+        append(" -I src/main/cpp")
+        append(" src/test/cpp/graph_test.cpp")
+        append(" src/main/cpp/graph.cpp")
+        append(" src/main/cpp/nodes.cpp")
+        append(" -o ").append(binary)
+        append(" && ").append(binary)
+    }
+    commandLine("bash", "-c", script)
+}
+
+tasks.withType<Test>().configureEach {
+    dependsOn(nativeGraphTest)
+}

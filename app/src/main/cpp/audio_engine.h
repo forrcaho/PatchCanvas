@@ -3,6 +3,8 @@
 #include <android/performance_hint.h>
 #include <oboe/Oboe.h>
 
+#include "graph.h"
+
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -25,8 +27,11 @@ public:
     bool start();
     void stop();
 
-    void setToneEnabled(bool on) { toneEnabled_.store(on, std::memory_order_relaxed); }
-    bool toneEnabled() const { return toneEnabled_.load(std::memory_order_relaxed); }
+    /** Master output gate, ramped rather than switched. The Out rail drives it. */
+    void setOutputEnabled(bool on) { outputEnabled_.store(on, std::memory_order_relaxed); }
+    bool outputEnabled() const { return outputEnabled_.load(std::memory_order_relaxed); }
+
+    Graph &graph() { return graph_; }
 
     /** Key=value line describing what the stream actually negotiated. */
     std::string status() const;
@@ -65,7 +70,8 @@ private:
 
     mutable std::mutex streamLock_;
     std::shared_ptr<oboe::AudioStream> stream_;
-    std::atomic<bool> toneEnabled_{false};
+    Graph graph_;
+    std::atomic<bool> outputEnabled_{false};
 
     /**
      * Closing the stream with the gain still up ends the last buffer on an arbitrary
@@ -77,9 +83,7 @@ private:
     std::atomic<bool> faded_{false};
     std::atomic<bool> running_{false};
 
-    // Audio-thread only. Not atomic because nothing else touches them while running.
-    double phase_ = 0.0;
-    double phaseIncrement_ = 0.0;
+    // Audio-thread only. Not atomic because nothing else touches it while running.
     float gain_ = 0.0f;
 
     std::atomic<int32_t> audioThreadTid_{0};

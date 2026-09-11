@@ -5,6 +5,7 @@
 
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <thread>
@@ -14,9 +15,7 @@ namespace {
 
 constexpr const char *kTag = "PatchAudio";
 
-constexpr double kTwoPi = 6.283185307179586;
-constexpr double kToneHz = 220.0;
-constexpr float kToneGain = 0.18f;
+constexpr float kMasterGain = 0.6f;
 
 /**
  * One-pole ramp towards the target gain, so toggling the tone fades over a few
@@ -80,7 +79,7 @@ bool AudioEngine::start() {
     sampleRate_ = stream_->getSampleRate();
     channelCount_ = stream_->getChannelCount();
     framesPerBurst_ = stream_->getFramesPerBurst();
-    phaseIncrement_ = kToneHz * kTwoPi / static_cast<double>(sampleRate_);
+    graph_.setSampleRate(sampleRate_);
 
     // Two bursts is the documented starting point: enough to absorb scheduling jitter,
     // small enough to stay in the low-latency regime.
@@ -139,6 +138,11 @@ void AudioEngine::stop() {
         APerformanceHint_closeSession(session);
     }
     audioThreadTid_.store(0, std::memory_order_relaxed);
+
+    // Safe only here: the stream is closed, so no callback can be inside the graph.
+    // Rebuilding from scratch on the next start beats trying to reconcile a graph that
+    // outlived its stream.
+    graph_.reset();
 }
 
 oboe::DataCallbackResult AudioEngine::onAudioReady(oboe::AudioStream * /*stream*/,
@@ -152,22 +156,35 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(oboe::AudioStream * /*stream*
 
     const auto began = std::chrono::steady_clock::now();
 
+    // Drained once per callback rather than per block: applying a command is cheap,
+    // but rebuilding the evaluation order is not, and doing it three times for one
+    // callback would buy nothing a burst of latency does not already cost.
+    graph_.applyCommands();
+
     auto *out = static_cast<float *>(audioData);
     const bool fading = fadingOut_.load(std::memory_order_relaxed);
     const float target =
-            (!fading && toneEnabled_.load(std::memory_order_relaxed)) ? kToneGain : 0.0f;
+            (!fading && outputEnabled_.load(std::memory_order_relaxed)) ? kMasterGain : 0.0f;
     const float smoothing = fading ? kFadeOutSmoothing : kGainSmoothing;
 
-    for (int32_t frame = 0; frame < numFrames; ++frame) {
-        gain_ += (target - gain_) * smoothing;
+    int32_t done = 0;
+    while (done < numFrames) {
+        const int32_t block = std::min(numFrames - done, kBlockSize);
+        graph_.process(block);
 
-        const auto sample = static_cast<float>(std::sin(phase_)) * gain_;
-        phase_ += phaseIncrement_;
-        if (phase_ >= kTwoPi) phase_ -= kTwoPi;
+        const float *left = graph_.outputL();
+        const float *right = graph_.outputR();
 
-        for (int32_t channel = 0; channel < channelCount_; ++channel) {
-            *out++ = sample;
+        for (int32_t i = 0; i < block; ++i) {
+            gain_ += (target - gain_) * smoothing;
+            if (channelCount_ >= 2) {
+                *out++ = left[i] * gain_;
+                *out++ = right[i] * gain_;
+            } else {
+                *out++ = (left[i] + right[i]) * 0.5f * gain_;
+            }
         }
+        done += block;
     }
 
     if (fading && gain_ < kSilent) {

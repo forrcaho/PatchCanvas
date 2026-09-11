@@ -43,8 +43,10 @@ class MainActivity : ComponentActivity() {
     // without reaching into Compose state from a lifecycle callback.
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
-    /** Phase 2 scaffold: whether the test tone is sounding. Not part of the patch. */
+    /** Whether the master output is open. A performance state, not part of the patch. */
     private val outputActive = mutableStateOf(false)
+
+    private val graphSync = GraphSync()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -74,6 +76,17 @@ class MainActivity : ComponentActivity() {
                 }
         }
 
+        // Topology only. Reading ids, types and cables means dragging a module around
+        // does not re-emit -- position is not something the audio graph has an opinion
+        // about.
+        scope.launch {
+            snapshotFlow {
+                patch.modules.map { it.id to it.type.name } to patch.connections.toList()
+            }
+                .distinctUntilChanged()
+                .collect { graphSync.sync(patch) }
+        }
+
         setContent {
             PatchCanvasApp(
                 patch = patch,
@@ -81,7 +94,7 @@ class MainActivity : ComponentActivity() {
                 onToggleOutput = {
                     val on = !outputActive.value
                     outputActive.value = on
-                    AudioEngine.setToneEnabled(on)
+                    AudioEngine.setOutputEnabled(on)
                 },
             )
         }
@@ -93,7 +106,11 @@ class MainActivity : ComponentActivity() {
         // Phase 7; until then an instrument that keeps sounding after you leave it
         // would be a bug, not a feature.
         if (AudioEngine.start()) {
-            AudioEngine.setToneEnabled(outputActive.value)
+            AudioEngine.setOutputEnabled(outputActive.value)
+            // The engine rebuilds its graph from empty on every start, so the shadow has
+            // to forget too or the first sync would send nothing.
+            graphSync.invalidate()
+            graphSync.sync(patch)
             scope.launch {
                 // The audio thread's tid exists only once the first callback has run,
                 // which is a burst or two after requestStart returns.

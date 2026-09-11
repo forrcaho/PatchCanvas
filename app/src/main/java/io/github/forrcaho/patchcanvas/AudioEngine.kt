@@ -39,8 +39,28 @@ object AudioEngine {
         started = false
     }
 
-    fun setToneEnabled(enabled: Boolean) {
-        if (available && started) nativeSetToneEnabled(enabled)
+    /** Master output gate. Ramped in the engine, so this never clicks. */
+    fun setOutputEnabled(enabled: Boolean) {
+        if (available && started) nativeSetOutputEnabled(enabled)
+    }
+
+    // ---- graph commands. All from the UI thread; node construction happens natively
+    // inside addNode, so only a pointer ever crosses to the audio thread.
+
+    fun addNode(id: Long, type: NodeType): Boolean =
+        available && started && nativeAddNode(id, type.id)
+
+    fun removeNode(id: Long): Boolean = available && started && nativeRemoveNode(id)
+
+    fun connect(srcId: Long, srcPort: Int, dstId: Long, dstPort: Int): Boolean =
+        available && started && nativeConnect(srcId, srcPort, dstId, dstPort)
+
+    fun disconnect(dstId: Long, dstPort: Int): Boolean =
+        available && started && nativeDisconnect(dstId, dstPort)
+
+    /** Frees nodes the audio thread retired. Cheap, and never on the audio thread. */
+    fun collectGarbage() {
+        if (available && started) nativeCollectGarbage()
     }
 
     /**
@@ -66,7 +86,12 @@ object AudioEngine {
 
     private external fun nativeStart(): Boolean
     private external fun nativeStop()
-    private external fun nativeSetToneEnabled(enabled: Boolean)
+    private external fun nativeSetOutputEnabled(enabled: Boolean)
+    private external fun nativeAddNode(id: Long, type: Int): Boolean
+    private external fun nativeRemoveNode(id: Long): Boolean
+    private external fun nativeConnect(srcId: Long, srcPort: Int, dstId: Long, dstPort: Int): Boolean
+    private external fun nativeDisconnect(dstId: Long, dstPort: Int): Boolean
+    private external fun nativeCollectGarbage()
     private external fun nativeStatus(): String
     private external fun nativeAttachPerformanceHint(): Boolean
 }
