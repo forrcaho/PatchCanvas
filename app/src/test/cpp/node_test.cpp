@@ -119,6 +119,43 @@ void oscStaysBandLimited() {
     check(true, "all samples finite");
 }
 
+void filterTracksCutoffAtAudioRate() {
+    std::printf("filter tracks cutoff at audio rate\n");
+
+    // A cutoff that alternates every sample. Its value at index 0 is the same in every
+    // block, so a filter reading cutoff[0] once per block cannot tell this apart from a
+    // constant -- which is exactly the bug this guards.
+    std::array<float, kBlockSize> alternating{};
+    for (int32_t i = 0; i < kBlockSize; ++i) alternating[i] = (i % 2 == 0) ? 1.0f : -1.0f;
+    const auto constant = constantBuffer(1.0f);
+
+    // Something with content to filter.
+    std::array<float, kBlockSize> noise{};
+    unsigned seed = 22222;
+    for (int32_t i = 0; i < kBlockSize; ++i) {
+        seed = seed * 1664525u + 1013904223u;
+        noise[i] = static_cast<float>(seed >> 8 & 0xFFFF) / 32768.0f - 1.0f;
+    }
+
+    FilterNode modulated;
+    modulated.prepare(kRate);
+    modulated.setInput(0, noise.data());
+    modulated.setInput(1, alternating.data());
+    const auto varying = run(modulated, 32);
+
+    FilterNode steady;
+    steady.prepare(kRate);
+    steady.setInput(0, noise.data());
+    steady.setInput(1, constant.data());
+    const auto fixed = run(steady, 32);
+
+    double difference = 0.0;
+    for (std::size_t i = 0; i < varying.size(); ++i) {
+        difference += std::fabs(varying[i] - fixed[i]);
+    }
+    check(difference > 1.0, "audio-rate cutoff modulation actually reaches the filter");
+}
+
 void envFollowsItsGate() {
     std::printf("env follows its gate\n");
     const auto open = constantBuffer(1.0f);
@@ -252,6 +289,7 @@ void outProtectsTheListener() {
 int main() {
     oscPlaysTheRequestedPitch();
     oscStaysBandLimited();
+    filterTracksCutoffAtAudioRate();
     envFollowsItsGate();
     vcaIsShutWithoutControl();
     clockRunsAtTheRequestedTempo();

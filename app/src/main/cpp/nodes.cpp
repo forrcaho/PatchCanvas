@@ -70,12 +70,15 @@ void FilterNode::process(int32_t frames) {
     const float *in = input(0);
     const float *cutoff = input(1);
 
-    // Once per block, not per sample: Svf::SetFreq does real work, and a 32-frame block
-    // is still a 1.5kHz control rate. The oscillator can afford per-sample; this cannot.
-    const float octaves = clampf(cutoff[0], -6.0f, 6.0f);
-    svf_.SetFreq(clampf(1000.0f * std::exp2(octaves), 20.0f, 18000.0f));
-
     for (int32_t i = 0; i < frames; ++i) {
+        // Per sample, like the oscillator. This was once per block, on the grounds that
+        // Svf::SetFreq calls sinf and powf where Oscillator::SetFreq is a multiply --
+        // true, but measured at 0.098% of a core against 0.047%, which is twice almost
+        // nothing. The block-rate read was the engine's only control-rate behaviour, and
+        // it quietly meant audio-rate filter modulation did not work while audio-rate FM
+        // did. There is no control rate here; this was the one place pretending there was.
+        const float octaves = clampf(cutoff[i], -6.0f, 6.0f);
+        svf_.SetFreq(clampf(1000.0f * std::exp2(octaves), 20.0f, 18000.0f));
         svf_.Process(in[i]);
         o[i] = svf_.Low();
     }
