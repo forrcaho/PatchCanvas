@@ -16,6 +16,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
@@ -34,8 +35,11 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.withTimeout
+import kotlin.math.PI
 import kotlin.math.ceil
+import kotlin.math.cos
 import kotlin.math.min
+import kotlin.math.sin
 
 /*
  * A touch-first patch canvas.
@@ -618,10 +622,49 @@ internal class Frame(
         return Rect(Offset(left, top), Size(w, h))
     }
 
+    /**
+     * The undo and redo buttons, bottom-left.
+     *
+     * Screen space, like the rails: the canvas principle forbids chrome stacked above
+     * the surface, not controls drawn inside it that stay put while the world moves.
+     * Bottom-left is the one corner nothing else claims -- the In rail is centred on the
+     * left edge, and the gesture bar is already excluded by the inset.
+     */
+    fun historyRect(redo: Boolean): Rect {
+        val d = density
+        val side = HISTORY_SIDE * d
+        val step = side + HISTORY_GAP * d
+        return Rect(
+            Offset(
+                insetLeft + RAIL_MARGIN * d + if (redo) step else 0f,
+                canvas.height - insetBottom - RAIL_MARGIN * d - side,
+            ),
+            Size(side, side),
+        )
+    }
+
     companion object {
         const val RAIL_MARGIN = 8f
+        const val HISTORY_SIDE = 44f
+        const val HISTORY_GAP = 8f
     }
 }
+
+/**
+ * The canvas's own switches and buttons.
+ *
+ * Bundled because the gesture code hands them straight through to the tap logic, and
+ * four more positional parameters on a function that already takes eight is where a
+ * caller starts passing them in the wrong order.
+ */
+internal class CanvasControls(
+    val canUndo: Boolean = false,
+    val canRedo: Boolean = false,
+    val onToggleOutput: () -> Unit = {},
+    val onToggleInput: () -> Unit = {},
+    val onUndo: () -> Unit = {},
+    val onRedo: () -> Unit = {},
+)
 
 /** Screen position of any port, whether its module is pinned or free. */
 private fun portScreen(
@@ -653,6 +696,10 @@ fun PatchCanvas(
     outputActive: Boolean = false,
     onToggleOutput: () -> Unit = {},
     onToggleInput: () -> Unit = {},
+    canUndo: Boolean = false,
+    canRedo: Boolean = false,
+    onUndo: () -> Unit = {},
+    onRedo: () -> Unit = {},
 ) {
     val density = LocalDensity.current
     val layoutDirection = LocalLayoutDirection.current
@@ -676,6 +723,10 @@ fun PatchCanvas(
 
     fun frameFor(canvas: Size) =
         Frame(canvas, density.density, insetLeft, insetTop, insetRight, insetBottom)
+
+    val controls = CanvasControls(
+        canUndo, canRedo, onToggleOutput, onToggleInput, onUndo, onRedo,
+    )
 
     // Start the view clear of the cutout, the gesture bar and the left rail. Re-applies
     // while the user has not moved the camera, so a rotation still lands well.
@@ -804,15 +855,23 @@ fun PatchCanvas(
                         GestureKind.Tap -> {
                             interaction = handleTap(
                                 patch, camera, frame, interaction, down.position, touchPx,
-                                onToggleOutput, onToggleInput,
+                                controls,
                             )
                             return@awaitEachGesture
                         }
                         GestureKind.LongPress -> {
+                            // Holding a history button is not a request for the add menu;
+                            // it is a finger resting on a button. Nothing happens.
+                            val onButton = (controls.canUndo && frame.historyRect(false)
+                                .contains(down.position)) ||
+                                (controls.canRedo && frame.historyRect(true)
+                                    .contains(down.position))
                             // A rail offers nothing to delete, so it opens no menu -- but
                             // it does have knobs, and tapping it is already its switch, so
                             // holding is the way in to its panel.
-                            interaction = if (hitModule != null && hitModule.isPinned) {
+                            interaction = if (onButton) {
+                                Interaction.Idle
+                            } else if (hitModule != null && hitModule.isPinned) {
                                 if (hitModule.type.params.isNotEmpty()) {
                                     patch.modules.forEach { it.expanded = false }
                                     hitModule.expanded = true
@@ -970,6 +1029,12 @@ fun PatchCanvas(
             }
         }
 
+        // Hidden rather than greyed when there is nothing to undo. A disabled control
+        // is a promise that something could happen here; at the start of a session
+        // nothing could, and an empty corner says so without needing to be read.
+        if (canUndo) drawHistoryButton(frame.historyRect(false), d, redo = false)
+        if (canRedo) drawHistoryButton(frame.historyRect(true), d, redo = true)
+
         patch.modules.firstOrNull { it.expanded }?.let { open ->
             drawPanel(open, patch, panelRect(frame), d, screenMeasurer)
         }
@@ -1048,6 +1113,77 @@ private fun Patch.hitModule(camera: Camera, frame: Frame, screen: Offset): Patch
     return free.lastOrNull { it.bounds.contains(world) }
 }
 
+// ---------------------------------------------------------------- history buttons
+
+private val HistoryFill = Color(0xFF1E232B)
+private val HistoryEdge = Color(0xFF3A424E)
+private val HistoryGlyph = Color(0xFFB7C0CE)
+
+/**
+ * One curved arrow, mirrored.
+ *
+ * Both buttons draw the same arc over the top and differ only in which end carries the
+ * head -- which is what the gesture means, and reads at a glance without a label. The
+ * head is oriented from the tangent rather than a fixed rotation, so it stays attached
+ * to the arc if the sweep is ever adjusted.
+ */
+private fun DrawScope.drawHistoryButton(rect: Rect, d: Float, redo: Boolean) {
+    drawRoundRect(
+        color = HistoryFill,
+        topLeft = rect.topLeft,
+        size = rect.size,
+        cornerRadius = CornerRadius(PatchModule.CORNER * d, PatchModule.CORNER * d),
+    )
+    drawRoundRect(
+        color = HistoryEdge,
+        topLeft = rect.topLeft,
+        size = rect.size,
+        cornerRadius = CornerRadius(PatchModule.CORNER * d, PatchModule.CORNER * d),
+        style = Stroke(width = 1.5f * d),
+    )
+
+    val centre = rect.center
+    val radius = rect.width * 0.24f
+    val stroke = 2.2f * d
+
+    // Drawn a touch high: the arrowheads hang below the arc, so centring the arc itself
+    // would leave the glyph sitting low in the box.
+    val arc = Offset(centre.x, centre.y - radius * 0.35f)
+    drawArc(
+        color = HistoryGlyph,
+        startAngle = START_ANGLE,
+        sweepAngle = SWEEP_ANGLE,
+        useCenter = false,
+        topLeft = Offset(arc.x - radius, arc.y - radius),
+        size = Size(radius * 2f, radius * 2f),
+        style = Stroke(width = stroke, cap = StrokeCap.Round),
+    )
+
+    // The head sits at the end the gesture travels towards, pointing along the arc:
+    // undo runs back to the left, redo on to the right.
+    val theta = ((if (redo) START_ANGLE + SWEEP_ANGLE else START_ANGLE) * PI / 180f).toFloat()
+    val tip = Offset(arc.x + radius * cos(theta), arc.y + radius * sin(theta))
+    // d/dtheta of the arc, negated for undo because it runs the other way round.
+    val along = Offset(-sin(theta), cos(theta)) * (if (redo) 1f else -1f)
+    val across = Offset(-along.y, along.x)
+    val head = rect.width * 0.115f
+
+    drawPath(
+        Path().apply {
+            moveTo(tip.x + along.x * head, tip.y + along.y * head)
+            val back = tip - along * (head * 0.35f)
+            lineTo(back.x + across.x * head * 0.8f, back.y + across.y * head * 0.8f)
+            lineTo(back.x - across.x * head * 0.8f, back.y - across.y * head * 0.8f)
+            close()
+        },
+        color = HistoryGlyph,
+    )
+}
+
+/** The arc spans the top, leaving both ends clear of the box's sides. */
+private const val START_ANGLE = 200f
+private const val SWEEP_ANGLE = 140f
+
 // ---------------------------------------------------------------- tap logic
 
 private fun handleTap(
@@ -1057,8 +1193,7 @@ private fun handleTap(
     current: Interaction,
     screen: Offset,
     touchPx: Float,
-    onToggleOutput: () -> Unit,
-    onToggleInput: () -> Unit,
+    controls: CanvasControls,
 ): Interaction {
     if (current is Interaction.Menu) {
         val layout = menuLayout(menuItems(current.targetId), current.anchor, frame.density, frame.canvas)
@@ -1082,6 +1217,18 @@ private fun handleTap(
         return Interaction.Idle
     }
 
+    // Undo before anything else on the canvas, and regardless of what is armed. It is
+    // the control you reach for when the last thing you did was wrong, and making it
+    // wait its turn behind an armed connection would be exactly backwards.
+    if (controls.canUndo && frame.historyRect(false).contains(screen)) {
+        controls.onUndo()
+        return Interaction.Idle
+    }
+    if (controls.canRedo && frame.historyRect(true).contains(screen)) {
+        controls.onRedo()
+        return Interaction.Idle
+    }
+
     val port = patch.hitPort(camera, frame, screen, touchPx)
 
     // A rail's body is its switch. Only while idle, so it never eats the tap that
@@ -1089,13 +1236,13 @@ private fun handleTap(
     if (port == null && current is Interaction.Idle) {
         patch.module(OUT_ID)?.let { out ->
             if (frame.railRect(out).contains(screen)) {
-                onToggleOutput()
+                controls.onToggleOutput()
                 return Interaction.Idle
             }
         }
         patch.module(IN_ID)?.let { input ->
             if (frame.railRect(input).contains(screen)) {
-                onToggleInput()
+                controls.onToggleInput()
                 return Interaction.Idle
             }
         }

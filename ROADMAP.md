@@ -540,6 +540,53 @@ loop that was built to avoid exactly that kind of contention.
 
 Also here: per-input attenuverters, without which CV routing is unusable in practice.
 
+## Undo
+
+Done, and untried on hardware at the time of writing.
+
+**One stack of whole patches, not a log of inverted commands.** A patch serialises to a
+couple of kilobytes of the JSON the autosave already produces, so fifty states cost
+nothing and there are no inverses to get wrong -- the inverse you forget is a silent
+corruption rather than a crash, and every new module type would be another chance to
+forget one.
+
+**Fed from the autosave debounce**, which is the part that makes it usable rather than
+merely correct. That 500ms already answers the hard question -- when is an edit finished
+-- so a continuous knob drag arrives as one undo step instead of three hundred, with no
+coalescing logic of its own.
+
+**Scope is whatever is in the file**, which turns out to be exactly right: modules,
+positions, cables, knobs. The camera, the open panel, the master output switch and the
+microphone are absent from the file and from undo alike. None of them is an edit to the
+patch, and an undo that moved the camera or silenced the output would feel like a fault.
+
+**A restored state becomes the current state before it is applied**, so when it comes
+back around through the autosave flow it compares equal and records nothing. That is
+what stops an undo being pushed onto its own stack, without a re-entrancy flag and the
+race that comes with one.
+
+**The replacement is applied inside one mutable snapshot.** Not tidiness: `GraphSync`
+watches the patch through a snapshot observer, and applied a mutation at a time it would
+see the instant after the cables are cleared. An empty patch is a state the engine
+renders faithfully, fading every voice out and back in -- undo would click. The test for
+this asserts no observer ever sees the patch with its cables gone, and it is the one
+test here that catches something you would otherwise only hear.
+
+**Restoring goes through the model, never around it.** The snapshot lands in `Patch` and
+the same `snapshotFlow` that carries an ordinary edit carries this one to `GraphSync`,
+which diffs it and sends only what actually changed. Undo is not a special case to the
+engine.
+
+Two buttons in the bottom-left, drawn in the canvas in screen space like the rails,
+hidden when there is nothing to undo or redo. The corner is the one nothing else claims:
+the In rail is centred on the left edge and the gesture bar is already excluded by the
+inset. Rejected: a two-finger tap (fights the pinch), a three-finger swipe
+(undiscoverable), and a long-press menu entry (two gestures deep for the control you
+reach for when the last thing you did was wrong).
+
+Hidden rather than greyed, because a disabled control promises that something could
+happen there; at the start of a session nothing could.
+
 ## Phase 6 -- Subpatches
 
 A phone screen holds about 17 modules at zoom 1.0. A patch worth playing will exceed

@@ -64,6 +64,7 @@ short loop rather than another outcome bolted into the canvas one.
 | `PatchCanvas.kt` | model, camera, gestures, drawing, panel — the bulk of the UI |
 | `GraphSync.kt` | the diff, `NodeType` mirror, `GraphCommands` seam for tests |
 | `PatchStore.kt` | JSON persistence, hand-rolled on `org.json` |
+| `History.kt` | undo as a stack of serialised patches, plus `Patch.replaceWith` |
 | `graph.{h,cpp}` | command queue, topological sort, crossfades, node lifetime |
 | `nodes.{h,cpp}` | the module set, DaisySP-backed |
 | `audio_engine.{h,cpp}` | Oboe streams, ADPF, debug capture |
@@ -91,6 +92,16 @@ between blocks. That persistence is the mechanism, not an optimisation.
 from a captured value instead stops the waveform dead and glides DC to zero, which is a
 thump rather than a click. A removed node therefore lingers until the fades reading it
 finish.
+
+**Undo restores through the model, in one snapshot.** A snapshot is the autosave JSON;
+restoring it parses back to a `Patch` and `replaceWith` copies it into the live one, so
+the ordinary `snapshotFlow` -> `GraphSync` path carries it to the engine and undo is not a
+special case there. `replaceWith` wraps the whole replacement in
+`Snapshot.withMutableSnapshot` because the observer would otherwise see the moment after
+the cables are cleared, and the engine renders an empty patch faithfully -- fading every
+voice out and back in. **Anything that changes what `toJson` emits changes what is
+undoable**, which is the intent; the byte-identical round trip is what stops `History`
+from recording an undo as a new edit, and `ReplaceWithTest` asserts it.
 
 **Signal types are advisory.** Audio, CV and gate colour the cable and the port; any
 output may patch to any input. In hardware it is all voltage, and audio-rate modulation

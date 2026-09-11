@@ -60,6 +60,17 @@ class MainActivity : ComponentActivity() {
     private val graphSync = GraphSync()
 
     /**
+     * Undo, fed from the autosave debounce below rather than from the edits themselves.
+     *
+     * That debounce already answers the hard question -- when is an edit finished -- and
+     * a continuous knob drag arrives here as one entry instead of three hundred. It also
+     * means what is undoable is exactly what is saved, which is the right scope and one
+     * that cannot drift: modules, positions, cables and knobs. The camera, the open
+     * panel, the master output and the microphone are absent from both, deliberately.
+     */
+    private val history = History()
+
+    /**
      * Set when a permission grant arrives while the engine is down, and acted on in
      * onResume.
      *
@@ -134,6 +145,9 @@ class MainActivity : ComponentActivity() {
                 .distinctUntilChanged()
                 .collectLatest { json ->
                     delay(SAVE_DEBOUNCE_MS)
+                    // Before the write, not after: the buttons should appear the moment
+                    // the edit settles, not once the disk has caught up.
+                    history.record(json)
                     withContext(Dispatchers.IO) { store.write(json) }
                 }
         }
@@ -164,8 +178,29 @@ class MainActivity : ComponentActivity() {
                     AudioEngine.setOutputEnabled(on)
                 },
                 onToggleInput = { toggleInput() },
+                canUndo = history.canUndo,
+                canRedo = history.canRedo,
+                onUndo = { restore(history.undo()) },
+                onRedo = { restore(history.redo()) },
             )
         }
+    }
+
+    /**
+     * Puts a snapshot back.
+     *
+     * Through the model, never around it: the edit lands in `Patch`, and the same
+     * snapshotFlow that carries an ordinary edit carries this one to `GraphSync`, which
+     * diffs it and sends only what actually changed. Undo is not a special case to the
+     * engine, and there is no second path that could disagree with the first.
+     *
+     * A restored state is also the one `History` now considers current, so when it
+     * arrives back through the autosave flow it compares equal and records nothing --
+     * which is what stops an undo being pushed onto its own stack.
+     */
+    private fun restore(json: String?) {
+        val snapshot = json?.let { patchFromJson(it) } ?: return
+        patch.replaceWith(snapshot)
     }
 
     /**
@@ -291,6 +326,10 @@ fun PatchCanvasApp(
     outputActive: Boolean = false,
     onToggleOutput: () -> Unit = {},
     onToggleInput: () -> Unit = {},
+    canUndo: Boolean = false,
+    canRedo: Boolean = false,
+    onUndo: () -> Unit = {},
+    onRedo: () -> Unit = {},
 ) {
     // The canvas paints edge to edge, but the initial framing keeps the patch clear of
     // the cutout, the gesture bar and the corner radius. Measured on the reference
@@ -302,6 +341,10 @@ fun PatchCanvasApp(
         outputActive = outputActive,
         onToggleOutput = onToggleOutput,
         onToggleInput = onToggleInput,
+        canUndo = canUndo,
+        canRedo = canRedo,
+        onUndo = onUndo,
+        onRedo = onRedo,
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF14171C)),
