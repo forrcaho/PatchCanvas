@@ -80,6 +80,26 @@ object AudioEngine {
         if (available && started) nativeAttachPerformanceHint() else false
 
     /**
+     * Opens the microphone. Requires RECORD_AUDIO to have been granted already; without
+     * it the stream simply fails to open, which is reported rather than thrown.
+     */
+    fun startInput(): Boolean {
+        if (!available || !started) {
+            Log.w(TAG, "input refused: engine not running (available=$available started=$started)")
+            return false
+        }
+        return nativeStartInput()
+    }
+
+    fun stopInput() {
+        if (available && started) nativeStopInput()
+    }
+
+    fun inputStatus(): String = if (available) nativeInputStatus() else "state=UNAVAILABLE"
+
+    fun logInputStatus() = Log.i(TAG, "input " + inputStatus())
+
+    /**
      * Arms a rolling capture of exactly what reaches the stream, written out when the
      * stream stops. Debug builds only -- it holds a few megabytes for the ring, and a
      * release build has no business recording the user without being asked.
@@ -103,5 +123,8 @@ object AudioEngine {
     private external fun nativeCollectGarbage()
     private external fun nativeStatus(): String
     private external fun nativeArmCapture(enabled: Boolean, path: String)
+    private external fun nativeStartInput(): Boolean
+    private external fun nativeStopInput()
+    private external fun nativeInputStatus(): String
     private external fun nativeAttachPerformanceHint(): Boolean
 }

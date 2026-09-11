@@ -49,9 +49,13 @@ fun Patch.toJson(): String {
         )
     }
 
+    // inputEnabled is deliberately absent. Whether the microphone is listening is
+    // runtime state, like the master output, not part of the document -- and persisting
+    // it meant a force-stop or a crash with the mic on came back showing a live In rail
+    // with no stream behind it, which toggling off and on was the only way to notice.
+    // Older files carrying the field are simply ignored.
     return JSONObject()
         .put("version", FORMAT_VERSION)
-        .put("inputEnabled", inputEnabled)
         .put("modules", modules)
         .put("connections", cables)
         .toString()
@@ -96,7 +100,6 @@ fun patchFromJson(text: String): Patch? {
             patch.connect(from, to)
         }
 
-        patch.inputEnabled = root.optBoolean("inputEnabled", false)
         patch
     } catch (e: Exception) {
         Log.w(TAG, "could not read patch", e)

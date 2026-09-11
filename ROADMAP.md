@@ -345,9 +345,7 @@ redundant and harmful. That is what makes swapping a cable a real crossfade.
 
 ## Phase 4 -- Modules worth patching
 
-**Code complete; not yet run on the device.** 22 graph checks, 19 node checks, 52 JVM
-tests. One item outstanding: the `In` rail is still silent, because mic capture needs an
-input stream and a `RECORD_AUDIO` grant and could not be built blind.
+**Done, verified on the device.** 22 graph checks, 22 node checks, 53 JVM tests.
 
 The demo patch is now an instrument rather than a test tone -- Clock drives Steps, Steps
 plays Osc and fires Env, Env opens a VCA, and the VCA feeds both channels.
@@ -383,7 +381,7 @@ explicit mixer necessary rather than optional.
 | Steps | -- | clocked sequencer, pitch CV + gate out |
 | Mix | -- | forced by single-source inputs; nothing else can sum |
 | Out | `Limiter` | pinned right; plus a DC blocker |
-| In | -- | pinned left; **still silent** -- mic capture is the one item left |
+| In | -- | pinned left; live microphone, +18dB, off by default |
 
 **There is no Mult**, despite this table once listing one. A mult exists in hardware
 because a physical jack takes one plug; here an output already fans out to as many
@@ -397,6 +395,35 @@ It is not, however, the guard for the mic. A limiter prevents clipping, not feed
 it will happily limit a howl to a very loud steady tone. Mic into speaker is a guaranteed
 loop, mic into headphones is not, so enabling the `In` rail gates on a headphone route
 plus the `RECORD_AUDIO` grant. That is worth more than any amount of DSP.
+
+### The microphone
+
+It opens on the same low-latency path as the output -- MMAP exclusive, 48kHz, 96-frame
+burst -- with `InputPreset::Unprocessed`, so no automatic gain or noise suppression is
+applied to something being used as a synth source. That rawness is why it needs +18dB of
+its own; Phase 5 should make that a knob.
+
+**It asks for the device's microphone, never the headset's.** Requesting the headset mic
+on a Bluetooth Classic link forces the connection from A2DP over to SCO, which drops
+everything being monitored to 8 or 16kHz. Measured on the reference device: with the
+built-in mic open, `Bluetooth SCO on` stayed false and `A2DP suspended` stayed false --
+the link is untouched and the earbuds keep music quality.
+
+Two bugs found by using it, both of a kind no test would have suggested:
+
+- Asking for a permission **pauses the activity**, and `onPause` stops the engine -- so
+  the grant callback ran with no output stream for the microphone to be read alongside,
+  and enabling always failed the first time. It now defers to `onResume`.
+- The speaker guard was checked once, when the mic was switched on. That left the
+  dangerous state one gesture away: take the headphones out and the device is listening
+  to its own loudspeaker with nothing noticing. A guard that only holds at the moment you
+  pass it is not a guard, so an `AudioDeviceCallback` now watches the route and switches
+  the mic off when the output moves to the speaker.
+
+`inputEnabled` was also being persisted with the patch, so a crash or a force-stop with
+the mic on came back showing a live In rail with no stream behind it. Whether the
+microphone is listening is runtime state, like the master output, and is no longer
+written to the file.
 
 ### What the node tests caught
 

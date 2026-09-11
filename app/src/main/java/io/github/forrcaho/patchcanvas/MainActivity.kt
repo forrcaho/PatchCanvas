@@ -1,6 +1,16 @@
 package io.github.forrcaho.patchcanvas
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import java.io.File
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -48,6 +58,50 @@ class MainActivity : ComponentActivity() {
     private val outputActive = mutableStateOf(false)
 
     private val graphSync = GraphSync()
+
+    /**
+     * Set when a permission grant arrives while the engine is down, and acted on in
+     * onResume.
+     *
+     * Asking for a permission pauses the activity, and onPause stops the audio -- so the
+     * grant callback runs when there is no output stream for the microphone to be read
+     * alongside. Enabling directly from the callback simply fails.
+     */
+    private var enableInputOnResume = false
+
+    /**
+     * Watches for the output route moving.
+     *
+     * The speaker guard used to be checked once, when the microphone was switched on --
+     * which left the dangerous state one gesture away: take the headphones out while the
+     * mic is live and the device is suddenly listening to its own loudspeaker with
+     * nothing noticing. A guard that only holds at the moment you pass it is not a guard.
+     */
+    private val routeWatcher = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>?) = recheckRoute()
+        override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>?) = recheckRoute()
+    }
+
+    private fun recheckRoute() {
+        if (patch.inputEnabled && outputIsOnSpeaker()) {
+            patch.inputEnabled = false
+            AudioEngine.stopInput()
+            Toast.makeText(
+                this,
+                "Mic switched off - output moved to the speaker",
+                Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
+
+    private val requestMicrophone =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) {
+                enableInputOnResume = true
+            } else {
+                Toast.makeText(this, "Microphone permission denied", Toast.LENGTH_SHORT).show()
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -104,8 +158,68 @@ class MainActivity : ComponentActivity() {
                     outputActive.value = on
                     AudioEngine.setOutputEnabled(on)
                 },
+                onToggleInput = { toggleInput() },
             )
         }
+    }
+
+    /**
+     * The In rail's switch.
+     *
+     * Refuses while the output is on the speaker, because that is the one combination
+     * that howls: the device's microphone hears the device's own loudspeaker. Into
+     * headphones of any kind, wired or Bluetooth, there is no loop to close. The old
+     * framing of this guard was "require headphones", which is the same test said less
+     * accurately -- what matters is where the sound comes out, not what is plugged in.
+     */
+    private fun toggleInput() {
+        if (patch.inputEnabled) {
+            patch.inputEnabled = false
+            AudioEngine.stopInput()
+            return
+        }
+
+        if (outputIsOnSpeaker()) {
+            Toast.makeText(
+                this,
+                "Use headphones before enabling the mic - the speaker would feed back",
+                Toast.LENGTH_LONG,
+            ).show()
+            return
+        }
+
+        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        if (granted) enableInput() else requestMicrophone.launch(Manifest.permission.RECORD_AUDIO)
+    }
+
+    private fun enableInput() {
+        if (AudioEngine.startInput()) {
+            patch.inputEnabled = true
+            AudioEngine.logInputStatus()
+        } else {
+            Toast.makeText(this, "Could not open the microphone", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun outputIsOnSpeaker(): Boolean {
+        val manager = getSystemService(AudioManager::class.java) ?: return true
+        val routed = manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+        // Anything that is not the built-in speaker puts the sound somewhere the
+        // microphone cannot hear it well enough to run away.
+        val elsewhere = routed.any {
+            it.type in setOf(
+                AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+                AudioDeviceInfo.TYPE_WIRED_HEADSET,
+                AudioDeviceInfo.TYPE_USB_HEADSET,
+                AudioDeviceInfo.TYPE_USB_DEVICE,
+                AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+                AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+                AudioDeviceInfo.TYPE_BLE_HEADSET,
+                AudioDeviceInfo.TYPE_HEARING_AID,
+            )
+        }
+        return !elsewhere
     }
 
     override fun onResume() {
@@ -126,11 +240,25 @@ class MainActivity : ComponentActivity() {
                 AudioEngine.attachPerformanceHint()
                 AudioEngine.logStatus()
             }
+
+            // A grant that arrived while we were paused: the engine exists again now.
+            if (enableInputOnResume) {
+                enableInputOnResume = false
+                enableInput()
+            }
         }
+
+        getSystemService(AudioManager::class.java)?.registerAudioDeviceCallback(
+            routeWatcher,
+            Handler(Looper.getMainLooper()),
+        )
     }
 
     override fun onPause() {
         super.onPause()
+        getSystemService(AudioManager::class.java)?.unregisterAudioDeviceCallback(routeWatcher)
+        AudioEngine.stopInput()
+        patch.inputEnabled = false
         AudioEngine.stop()
         // The stream is gone, so the lit Out rail would be lying.
         outputActive.value = false
@@ -157,6 +285,7 @@ fun PatchCanvasApp(
     patch: Patch,
     outputActive: Boolean = false,
     onToggleOutput: () -> Unit = {},
+    onToggleInput: () -> Unit = {},
 ) {
     // The canvas paints edge to edge, but the initial framing keeps the patch clear of
     // the cutout, the gesture bar and the corner radius. Measured on the reference
@@ -167,6 +296,7 @@ fun PatchCanvasApp(
         safeArea = WindowInsets.safeDrawing.asPaddingValues(),
         outputActive = outputActive,
         onToggleOutput = onToggleOutput,
+        onToggleInput = onToggleInput,
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF14171C)),

@@ -51,6 +51,24 @@ public:
     void armCapture(bool enabled, const std::string &path);
 
     /**
+     * Opens the microphone as a second stream, read from inside the output callback.
+     *
+     * Deliberately not Oboe's FullDuplexStream, which installs itself as the output's
+     * data callback -- that would restructure the engine around a feature that is off by
+     * default. Reading the input here keeps the microphone strictly additive: with it
+     * off, nothing about the output path differs.
+     *
+     * Uses the built-in microphone, and never the headset's. Asking for the headset mic
+     * on a Bluetooth Classic link forces the connection from A2DP to SCO, which drops
+     * everything the user is monitoring to 8 or 16kHz. The device's own mic is a separate
+     * path that leaves the link alone.
+     */
+    bool startInput();
+    void stopInput();
+    bool inputRunning() const { return inputStream_ != nullptr; }
+    std::string inputStatus() const;
+
+    /**
      * Creates the ADPF session aimed at the audio thread. Called from the main thread a
      * moment after start, once the first callback has published its tid -- deliberately
      * not from the audio thread, since creating a session is not a realtime operation.
@@ -99,6 +117,20 @@ private:
 
     mutable std::mutex streamLock_;
     std::shared_ptr<oboe::AudioStream> stream_;
+    std::shared_ptr<oboe::AudioStream> inputStream_;
+    std::unique_ptr<float[]> inputScratch_;
+    std::size_t inputScratchFrames_ = 0;
+    int32_t inputChannels_ = 0;
+
+    /**
+     * Published only while the input stream and its scratch are fully built, and cleared
+     * before either is torn down. The audio thread reads the raw pointer solely under
+     * this flag, which is what lets it avoid touching the shared_ptr the UI thread owns.
+     * stopInput waits well past a callback period after clearing it, so nothing can
+     * still be inside read() when the stream closes.
+     */
+    std::atomic<bool> inputActive_{false};
+    oboe::AudioStream *inputForCallback_ = nullptr;
     Graph graph_;
     std::atomic<bool> outputEnabled_{false};
 

@@ -65,6 +65,7 @@ void Graph::reset() {
     collectGarbage();
     orderCount_ = 0;
     outIndex_ = -1;
+    inIndex_ = -1;
     dirty_ = true;
 }
 
@@ -116,6 +117,7 @@ void Graph::retire(int32_t slot) {
         }
     }
     if (outIndex_ == slot) outIndex_ = -1;
+    if (inIndex_ == slot) inIndex_ = -1;
 
     nodes_[slot].dying = rampOutSamples_ + kBlockSize;
     dirty_ = true;
@@ -171,6 +173,7 @@ void Graph::applyCommands() {
                 nodes_[slot].node = cmd.node;
                 nodes_[slot].inputs.fill(InputRef{});
                 if (cmd.nodeType == NodeType::Out) outIndex_ = slot;
+                if (cmd.nodeType == NodeType::In) inIndex_ = slot;
                 dirty_ = true;
                 break;
             }
@@ -241,6 +244,11 @@ void Graph::rebuildOrder() {
             order_[orderCount_++] = i;
         }
     }
+}
+
+void Graph::setLiveInput(const float *mono) {
+    if (inIndex_ < 0 || !nodes_[inIndex_].used) return;
+    static_cast<InNode *>(nodes_[inIndex_].node)->setSource(mono);
 }
 
 void Graph::process(int32_t frames) {

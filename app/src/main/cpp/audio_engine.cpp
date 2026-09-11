@@ -42,6 +42,9 @@ constexpr int kFadeWaitMs = 60;
  */
 constexpr int kDrainMs = 25;
 
+/** Comfortably longer than any callback, so the input can be closed from under one. */
+constexpr int kInputDrainMs = 40;
+
 const char *sharingModeName(oboe::SharingMode mode) {
     return mode == oboe::SharingMode::Exclusive ? "EXCLUSIVE" : "SHARED";
 }
@@ -152,6 +155,19 @@ void AudioEngine::stop() {
     }
     audioThreadTid_.store(0, std::memory_order_relaxed);
 
+    // The microphone goes with it: it is only ever read from inside the output callback,
+    // and that callback can no longer be running.
+    inputActive_.store(false, std::memory_order_release);
+    inputForCallback_ = nullptr;
+    if (inputStream_) {
+        inputStream_->requestStop();
+        inputStream_->close();
+        inputStream_.reset();
+        inputScratch_.reset();
+        inputScratchFrames_ = 0;
+        inputChannels_ = 0;
+    }
+
     // Safe only here: the stream is closed, so no callback can be inside the graph.
     // Rebuilding from scratch on the next start beats trying to reconcile a graph that
     // outlived its stream.
@@ -179,6 +195,24 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(oboe::AudioStream * /*stream*
     // callback would buy nothing a burst of latency does not already cost.
     graph_.applyCommands();
 
+    // The microphone, read once per callback with a zero timeout so it can never block
+    // the deadline. A short read is padded rather than retried: silence for a fraction
+    // of a block is inaudible, and waiting is not an option available here.
+    const float *liveInput = nullptr;
+    if (inputActive_.load(std::memory_order_acquire) && inputForCallback_ != nullptr) {
+        const auto wanted = std::min<int32_t>(numFrames,
+                                              static_cast<int32_t>(inputScratchFrames_));
+        const auto read = inputForCallback_->read(inputScratch_.get(), wanted, 0);
+        if (read) {
+            const int32_t got = read.value();
+            if (got < numFrames) {
+                std::memset(inputScratch_.get() + got, 0,
+                            static_cast<std::size_t>(numFrames - got) * sizeof(float));
+            }
+            liveInput = inputScratch_.get();
+        }
+    }
+
     auto *out = static_cast<float *>(audioData);
     const bool fading = fadingOut_.load(std::memory_order_relaxed);
     const float target =
@@ -188,6 +222,7 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(oboe::AudioStream * /*stream*
     int32_t done = 0;
     while (done < numFrames) {
         const int32_t block = std::min(numFrames - done, kBlockSize);
+        graph_.setLiveInput(liveInput != nullptr ? liveInput + done : nullptr);
         graph_.process(block);
 
         const float *left = graph_.outputL();
@@ -258,6 +293,106 @@ bool AudioEngine::attachPerformanceHint() {
     __android_log_print(ANDROID_LOG_INFO, kTag, "ADPF attached tid=%d targetNs=%lld",
                         tid, static_cast<long long>(targetNanos));
     return true;
+}
+
+bool AudioEngine::startInput() {
+    std::lock_guard<std::mutex> lock(streamLock_);
+    if (inputStream_) return true;
+    if (!stream_) {
+        // Silent once, and it cost an hour: the permission dialog pauses the activity,
+        // which stops the engine, so a grant callback arriving before onResume finds no
+        // output stream to read alongside.
+        __android_log_print(ANDROID_LOG_WARN, kTag,
+                            "input refused: no output stream open yet");
+        return false;
+    }
+
+    oboe::AudioStreamBuilder builder;
+    builder.setDirection(oboe::Direction::Input)
+            ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
+            ->setSharingMode(oboe::SharingMode::Exclusive)
+            ->setFormat(oboe::AudioFormat::Float)
+            ->setSampleRate(sampleRate_)
+            ->setChannelCount(oboe::ChannelCount::Mono)
+            // Unprocessed asks for the rawest path the device offers: no AGC, no noise
+            // suppression, no echo cancellation. Those exist to make speech intelligible
+            // and would fight anything used as a synth source.
+            ->setInputPreset(oboe::InputPreset::Unprocessed);
+    // Deliberately NOT VoiceCommunication: that signals a call, which is what pulls a
+    // Bluetooth link over to SCO.
+
+    oboe::Result result = builder.openStream(inputStream_);
+    if (result != oboe::Result::OK) {
+        // Unprocessed is optional; plenty of devices only offer the generic path.
+        builder.setInputPreset(oboe::InputPreset::Generic);
+        result = builder.openStream(inputStream_);
+    }
+    if (result != oboe::Result::OK) {
+        __android_log_print(ANDROID_LOG_ERROR, kTag, "input open failed: %s",
+                            oboe::convertToText(result));
+        inputStream_.reset();
+        return false;
+    }
+
+    inputChannels_ = inputStream_->getChannelCount();
+    // Sized for a generous callback; the read is clamped to it either way.
+    inputScratchFrames_ = static_cast<std::size_t>(stream_->getBufferCapacityInFrames());
+    inputScratch_ = std::make_unique<float[]>(
+            inputScratchFrames_ * static_cast<std::size_t>(inputChannels_));
+
+    const oboe::Result started = inputStream_->requestStart();
+    if (started != oboe::Result::OK) {
+        __android_log_print(ANDROID_LOG_ERROR, kTag, "input start failed: %s",
+                            oboe::convertToText(started));
+        inputStream_->close();
+        inputStream_.reset();
+        return false;
+    }
+
+    inputForCallback_ = inputStream_.get();
+    inputActive_.store(true, std::memory_order_release);
+
+    __android_log_print(ANDROID_LOG_INFO, kTag, "input %s", inputStatus().c_str());
+    return true;
+}
+
+void AudioEngine::stopInput() {
+    // Withdrawn before the lock, and given time to land: a callback that read the flag
+    // an instant earlier may still be inside read().
+    if (inputActive_.exchange(false, std::memory_order_acq_rel)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(kInputDrainMs));
+    }
+
+    std::lock_guard<std::mutex> lock(streamLock_);
+    if (!inputStream_) return;
+    inputForCallback_ = nullptr;
+    inputStream_->requestStop();
+    inputStream_->close();
+    inputStream_.reset();
+    inputScratch_.reset();
+    inputScratchFrames_ = 0;
+    inputChannels_ = 0;
+    __android_log_print(ANDROID_LOG_INFO, kTag, "input closed");
+}
+
+std::string AudioEngine::inputStatus() const {
+    std::ostringstream out;
+    if (!inputStream_) {
+        out << "state=CLOSED";
+        return out.str();
+    }
+    out << "state=OPEN"
+        << " api=" << (inputStream_->usesAAudio() ? "AAudio" : "OpenSL")
+        << " mmap=" << (oboe::OboeExtensions::isMMapUsed(inputStream_.get()) ? "YES" : "NO")
+        << " sharing="
+        << (inputStream_->getSharingMode() == oboe::SharingMode::Exclusive ? "EXCLUSIVE"
+                                                                           : "SHARED")
+        << " rate=" << inputStream_->getSampleRate()
+        << " channels=" << inputStream_->getChannelCount()
+        << " burst=" << inputStream_->getFramesPerBurst()
+        << " preset=" << static_cast<int>(inputStream_->getInputPreset())
+        << " deviceId=" << inputStream_->getDeviceId();
+    return out.str();
 }
 
 void AudioEngine::armCapture(bool enabled, const std::string &path) {

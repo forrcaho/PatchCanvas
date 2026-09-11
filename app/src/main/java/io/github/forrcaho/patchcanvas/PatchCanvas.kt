@@ -260,9 +260,11 @@ class Patch {
     val connections = mutableStateListOf<Connection>()
 
     /**
-     * The input rail is off until there is an audio engine behind it and the user has
-     * granted RECORD_AUDIO. Mic into speaker is a guaranteed howl, so this defaults off
-     * and Phase 2 gates enabling it on a headphone route rather than on a limiter.
+     * Whether the microphone is listening.
+     *
+     * Runtime state, never serialised: it always starts false and is only true while an
+     * input stream is actually open. Persisting it meant a crash or a force-stop with
+     * the mic on came back showing a live In rail with nothing behind it.
      */
     var inputEnabled by mutableStateOf(false)
 
@@ -457,9 +459,10 @@ fun PatchCanvas(
     modifier: Modifier = Modifier,
     safeArea: PaddingValues = PaddingValues(),
     portTouchRadius: Dp = 24.dp,
-    /** Phase 2 scaffold: tapping the Out rail's body toggles a test tone. */
+    /** Tapping a rail's body switches it. Out opens the master output, In the mic. */
     outputActive: Boolean = false,
     onToggleOutput: () -> Unit = {},
+    onToggleInput: () -> Unit = {},
 ) {
     val density = LocalDensity.current
     val layoutDirection = LocalLayoutDirection.current
@@ -561,7 +564,7 @@ fun PatchCanvas(
                         GestureKind.Tap -> {
                             interaction = handleTap(
                                 patch, camera, frame, interaction, down.position, touchPx,
-                                onToggleOutput,
+                                onToggleOutput, onToggleInput,
                             )
                             return@awaitEachGesture
                         }
@@ -693,10 +696,15 @@ fun PatchCanvas(
             )
             // After the box, not before: drawModuleBox fills opaquely, so a highlight
             // drawn underneath is painted straight over and never appears.
-            if (rail.id == OUT_ID && outputActive) {
+            //
+            // Both rails get the same weight of outline when switched on, because they
+            // are the same kind of control and reading as different ones was confusing.
+            // In is red: a live microphone is a record light everywhere else, and the
+            // one rail that can embarrass you should be the one that looks urgent.
+            if (live) {
                 val r = frame.railRect(rail)
                 drawRoundRect(
-                    color = rail.type.accent,
+                    color = if (rail.id == IN_ID) RecordRed else rail.type.accent,
                     topLeft = r.topLeft,
                     size = r.size,
                     cornerRadius = CornerRadius(PatchModule.CORNER * d, PatchModule.CORNER * d),
@@ -800,6 +808,7 @@ private fun handleTap(
     screen: Offset,
     touchPx: Float,
     onToggleOutput: () -> Unit,
+    onToggleInput: () -> Unit,
 ): Interaction {
     if (current is Interaction.Menu) {
         val layout = menuLayout(menuItems(current.targetId), current.anchor, frame.density, frame.canvas)
@@ -825,12 +834,18 @@ private fun handleTap(
 
     val port = patch.hitPort(camera, frame, screen, touchPx)
 
-    // Phase 2 scaffold: the Out rail's body is a test-tone switch. Only while idle, so
-    // it never eats the tap that cancels an armed connection.
+    // A rail's body is its switch. Only while idle, so it never eats the tap that
+    // cancels an armed connection.
     if (port == null && current is Interaction.Idle) {
         patch.module(OUT_ID)?.let { out ->
             if (frame.railRect(out).contains(screen)) {
                 onToggleOutput()
+                return Interaction.Idle
+            }
+        }
+        patch.module(IN_ID)?.let { input ->
+            if (frame.railRect(input).contains(screen)) {
+                onToggleInput()
                 return Interaction.Idle
             }
         }
@@ -960,6 +975,9 @@ private fun DrawScope.drawMenu(layout: MenuLayout, d: Float, measurer: TextMeasu
 }
 
 // ---------------------------------------------------------------- drawing
+
+/** A live microphone reads as a record light, not as another accent colour. */
+private val RecordRed = Color(0xFFE03B2F)
 
 private val TitleStyle = TextStyle(
     fontSize = 11.sp,

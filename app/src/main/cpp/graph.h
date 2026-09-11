@@ -68,6 +68,8 @@ public:
 
     // ---- audio thread
     void applyCommands();
+    /** Hands the live microphone block to the In rail, if the patch has one. */
+    void setLiveInput(const float *mono);
     void process(int32_t frames);
     const float *outputL() const;
     const float *outputR() const;
@@ -140,6 +142,7 @@ private:
     std::array<bool, kMaxNodes> emitted_{};
     int32_t orderCount_ = 0;
     int32_t outIndex_ = -1;
+    int32_t inIndex_ = -1;
     bool dirty_ = true;
 
     std::atomic<int32_t> sampleRate_{48000};

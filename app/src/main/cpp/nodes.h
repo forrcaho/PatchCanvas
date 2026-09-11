@@ -151,5 +151,25 @@ private:
     daisysp::Limiter limitRight_;
 };
 
+/**
+ * The live microphone, pinned left.
+ *
+ * Its source is handed to it by the engine each block rather than read here: the input
+ * stream is drained once per callback, and a node has no business knowing about streams.
+ * With no source it is silent, which is what the rail does when the mic is switched off.
+ */
+class InNode : public Node {
+public:
+    int32_t inputCount() const override { return 0; }
+    int32_t outputCount() const override { return 2; } // L, R
+    void process(int32_t frames) override;
+
+    /** Audio thread, before process(). Null means silence. */
+    void setSource(const float *mono) { source_ = mono; }
+
+private:
+    const float *source_ = nullptr;
+};
+
 /** Allocates a node for a type. Never called on the audio thread. */
 Node *makeNode(NodeType type);

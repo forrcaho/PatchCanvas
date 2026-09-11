@@ -19,6 +19,16 @@ inline bool gateHigh(float value) { return value > 0.5f; }
  * gives modules parameters, so this is what Steps plays until then -- chosen to be
  * obviously musical, so a wrong clock or a dead gate is audible rather than ambiguous.
  */
+/**
+ * A preamp for the microphone.
+ *
+ * Unprocessed input is raw by request -- no automatic gain, which is the whole point of
+ * asking for it -- so a phone mic at talking distance arrives far below the level an
+ * oscillator produces. Eighteen decibels puts it in the same world. Provisional until
+ * Phase 5 gives it a knob, which is where it belongs.
+ */
+constexpr float kInputGain = 8.0f;
+
 constexpr float kPattern[8] = {
         0.0f, 3.0f / 12.0f, 7.0f / 12.0f, 10.0f / 12.0f,
         12.0f / 12.0f, 10.0f / 12.0f, 7.0f / 12.0f, 3.0f / 12.0f,
@@ -200,6 +210,27 @@ void OutNode::process(int32_t frames) {
     limitRight_.ProcessBlock(right, static_cast<size_t>(frames), kMakeUp);
 }
 
+// ---------------------------------------------------------------- In
+
+void InNode::process(int32_t frames) {
+    float *left = out(0);
+    float *right = out(1);
+
+    if (source_ == nullptr) {
+        std::memset(left, 0, static_cast<size_t>(frames) * sizeof(float));
+        std::memset(right, 0, static_cast<size_t>(frames) * sizeof(float));
+        return;
+    }
+
+    // The device microphone is mono, so both rails carry the same signal. Spreading it
+    // would be inventing a stereo image that is not there.
+    for (int32_t i = 0; i < frames; ++i) {
+        const float sample = source_[i] * kInputGain;
+        left[i] = sample;
+        right[i] = sample;
+    }
+}
+
 // ---------------------------------------------------------------- factory
 
 Node *makeNode(NodeType type) {
@@ -212,9 +243,7 @@ Node *makeNode(NodeType type) {
         case NodeType::Steps: return new StepsNode();
         case NodeType::Mix: return new MixNode();
         case NodeType::Out: return new OutNode();
-        // Mic capture needs RECORD_AUDIO and an input stream, which is its own piece of
-        // work; the rail exists and is silent until then.
-        case NodeType::In: return new NullNode(0, 2);
+        case NodeType::In: return new InNode();
         default: return new NullNode(1, 1);
     }
 }

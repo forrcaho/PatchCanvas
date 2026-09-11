@@ -55,10 +55,20 @@ class PatchJsonTest {
     }
 
     @Test
-    fun `enabled input round trips`() {
+    fun `a live microphone is never persisted`() {
+        // It is runtime state, not part of the patch. Saving it meant a force-stop with
+        // the mic on reloaded showing a live In rail with no stream behind it.
         val p = sample().apply { inputEnabled = true }
-        assertTrue(patchFromJson(p.toJson())!!.inputEnabled)
-        assertTrue(!patchFromJson(sample().toJson())!!.inputEnabled)
+        assertTrue("the mic must not come back on by itself", !patchFromJson(p.toJson())!!.inputEnabled)
+        assertTrue(!p.toJson().contains("inputEnabled"))
+    }
+
+    @Test
+    fun `an older file carrying inputEnabled still loads`() {
+        val legacy = JSONObject(sample().toJson()).put("inputEnabled", true).toString()
+        val restored = patchFromJson(legacy)
+        assertNotNull(restored)
+        assertTrue("and the stale flag is ignored", !restored!!.inputEnabled)
     }
 
     @Test
