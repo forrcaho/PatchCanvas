@@ -7,6 +7,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstring>
+#include <fstream>
 #include <cmath>
 #include <thread>
 #include <sstream>
@@ -16,6 +18,9 @@ namespace {
 constexpr const char *kTag = "PatchAudio";
 
 constexpr float kMasterGain = 0.6f;
+
+/** Seconds of rolling debug capture. Ten is plenty to find a click and cheap to hold. */
+constexpr int kCaptureSeconds = 10;
 
 /**
  * One-pole ramp towards the target gain, so toggling the tone fades over a few
@@ -85,6 +90,14 @@ bool AudioEngine::start() {
     // small enough to stay in the low-latency regime.
     stream_->setBufferSizeInFrames(stream_->getFramesPerBurst() * 2);
 
+    if (captureArmed_.load(std::memory_order_acquire)) {
+        captureCapacity_ =
+                static_cast<std::size_t>(sampleRate_) * kCaptureSeconds * channelCount_;
+        capture_ = std::make_unique<float[]>(captureCapacity_);
+        captureWrite_ = 0;
+        captureWrapped_ = false;
+    }
+
     fadingOut_.store(false, std::memory_order_relaxed);
     faded_.store(false, std::memory_order_relaxed);
 
@@ -143,6 +156,11 @@ void AudioEngine::stop() {
     // Rebuilding from scratch on the next start beats trying to reconcile a graph that
     // outlived its stream.
     graph_.reset();
+
+    // Also safe only here, and for the same reason: nothing can be writing into it.
+    writeCaptureWav();
+    capture_.reset();
+    captureCapacity_ = 0;
 }
 
 oboe::DataCallbackResult AudioEngine::onAudioReady(oboe::AudioStream * /*stream*/,
@@ -178,10 +196,15 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(oboe::AudioStream * /*stream*
         for (int32_t i = 0; i < block; ++i) {
             gain_ += (target - gain_) * smoothing;
             if (channelCount_ >= 2) {
-                *out++ = left[i] * gain_;
-                *out++ = right[i] * gain_;
+                const float l = left[i] * gain_;
+                const float r = right[i] * gain_;
+                *out++ = l;
+                *out++ = r;
+                captureFrame(l, r);
             } else {
-                *out++ = (left[i] + right[i]) * 0.5f * gain_;
+                const float m = (left[i] + right[i]) * 0.5f * gain_;
+                *out++ = m;
+                captureFrame(m, m);
             }
         }
         done += block;
@@ -235,6 +258,63 @@ bool AudioEngine::attachPerformanceHint() {
     __android_log_print(ANDROID_LOG_INFO, kTag, "ADPF attached tid=%d targetNs=%lld",
                         tid, static_cast<long long>(targetNanos));
     return true;
+}
+
+void AudioEngine::armCapture(bool enabled, const std::string &path) {
+    capturePath_ = path;
+    captureArmed_.store(enabled, std::memory_order_release);
+}
+
+void AudioEngine::writeCaptureWav() {
+    if (!capture_ || captureCapacity_ == 0) return;
+    const std::size_t total = captureWrapped_ ? captureCapacity_ : captureWrite_;
+    if (total == 0) return;
+
+    std::ofstream file(capturePath_, std::ios::binary | std::ios::trunc);
+    if (!file) {
+        __android_log_print(ANDROID_LOG_WARN, kTag, "could not open %s", capturePath_.c_str());
+        return;
+    }
+
+    // 32-bit float WAV: the samples exactly as the stream saw them, with no
+    // quantisation of our own to confuse an analysis looking for small discontinuities.
+    const uint32_t dataBytes = static_cast<uint32_t>(total * sizeof(float));
+    const uint32_t rate = static_cast<uint32_t>(sampleRate_);
+    const uint16_t channels = static_cast<uint16_t>(channelCount_);
+    const uint16_t bits = 32;
+    const uint16_t blockAlign = static_cast<uint16_t>(channels * bits / 8);
+    const uint32_t byteRate = rate * blockAlign;
+
+    auto u32 = [&](uint32_t v) { file.write(reinterpret_cast<const char *>(&v), 4); };
+    auto u16 = [&](uint16_t v) { file.write(reinterpret_cast<const char *>(&v), 2); };
+
+    file.write("RIFF", 4);
+    u32(36 + dataBytes);
+    file.write("WAVE", 4);
+    file.write("fmt ", 4);
+    u32(16);
+    u16(3); // IEEE float
+    u16(channels);
+    u32(rate);
+    u32(byteRate);
+    u16(blockAlign);
+    u16(bits);
+    file.write("data", 4);
+    u32(dataBytes);
+
+    // Oldest first: the ring starts wherever the write head left off.
+    if (captureWrapped_) {
+        const std::size_t tail = captureCapacity_ - captureWrite_;
+        file.write(reinterpret_cast<const char *>(capture_.get() + captureWrite_),
+                   static_cast<std::streamsize>(tail * sizeof(float)));
+        file.write(reinterpret_cast<const char *>(capture_.get()),
+                   static_cast<std::streamsize>(captureWrite_ * sizeof(float)));
+    } else {
+        file.write(reinterpret_cast<const char *>(capture_.get()),
+                   static_cast<std::streamsize>(total * sizeof(float)));
+    }
+    __android_log_print(ANDROID_LOG_INFO, kTag, "capture written: %s (%u bytes)",
+                        capturePath_.c_str(), dataBytes);
 }
 
 void AudioEngine::onErrorAfterClose(oboe::AudioStream * /*stream*/, oboe::Result result) {

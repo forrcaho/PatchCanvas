@@ -38,6 +38,16 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeAttachPerformanceHint(JNIE
     return engine().attachPerformanceHint() ? JNI_TRUE : JNI_FALSE;
 }
 
+/** Debug only: arm the rolling capture written when the stream stops. */
+JNIEXPORT void JNICALL
+Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeArmCapture(JNIEnv *env, jobject,
+                                                                 jboolean enabled,
+                                                                 jstring path) {
+    const char *chars = env->GetStringUTFChars(path, nullptr);
+    engine().armCapture(enabled == JNI_TRUE, chars != nullptr ? chars : "");
+    if (chars != nullptr) env->ReleaseStringUTFChars(path, chars);
+}
+
 JNIEXPORT jstring JNICALL
 Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeStatus(JNIEnv *env, jobject) {
     return env->NewStringUTF(engine().status().c_str());

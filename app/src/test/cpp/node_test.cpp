@@ -264,6 +264,37 @@ void mixSumsRatherThanAverages() {
     check(std::fabs(peak(run(mix, 2)) - 0.5f) < 0.001f, "unused inputs cost nothing");
 }
 
+void outPassesAudioAtLevel() {
+    std::printf("out passes audio at level\n");
+
+    // The limiter test below only ever fed DC, which the DC blocker removes -- so it
+    // proved the stage was safe without proving anything came through it. A quiet signal
+    // should arrive essentially unchanged.
+    OutNode out;
+    out.prepare(kRate);
+    std::array<float, kBlockSize> buffer{};
+    double phase = 0.0;
+    float loudest = 0.0f;
+
+    for (int b = 0; b < 400; ++b) {
+        for (int32_t i = 0; i < kBlockSize; ++i) {
+            buffer[i] = 0.3f * static_cast<float>(std::sin(phase));
+            phase += 2.0 * M_PI * 261.0 / kRate;
+        }
+        out.setInput(0, buffer.data());
+        out.setInput(1, buffer.data());
+        out.process(kBlockSize);
+        if (b > 200) {
+            const float *o = out.output(0);
+            for (int32_t i = 0; i < kBlockSize; ++i) loudest = std::max(loudest, std::fabs(o[i]));
+        }
+    }
+
+    const float ratio = loudest / 0.3f;
+    check(ratio > 0.85f, "a quiet signal is not attenuated, ratio " + std::to_string(ratio));
+    check(ratio < 1.05f, "nor amplified, ratio " + std::to_string(ratio));
+}
+
 void outProtectsTheListener() {
     std::printf("out protects the listener\n");
     const auto loud = constantBuffer(4.0f);
@@ -295,6 +326,7 @@ int main() {
     clockRunsAtTheRequestedTempo();
     stepsAdvanceOnEdgesNotLevels();
     mixSumsRatherThanAverages();
+    outPassesAudioAtLevel();
     outProtectsTheListener();
     return testing::report("nodes");
 }

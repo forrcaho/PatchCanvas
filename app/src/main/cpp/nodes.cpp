@@ -190,8 +190,14 @@ void OutNode::process(int32_t frames) {
         left[i] = dcLeft_.Process(inLeft[i]);
         right[i] = dcRight_.Process(inRight[i]);
     }
-    limitLeft_.ProcessBlock(left, static_cast<size_t>(frames), 1.0f);
-    limitRight_.ProcessBlock(right, static_cast<size_t>(frames), 1.0f);
+    // DaisySP's Limiter multiplies everything by a fixed 0.7 whether it is loud or not,
+    // which is seven decibels given away before any limiting has happened -- a fader,
+    // not a limiter. Compensating that in pre_gain makes the stage transparent below
+    // threshold and leaves it to act only where it is meant to. It also brings the knee
+    // in at about 0.7 rather than 1.0, so the saturation stays gentle.
+    constexpr float kMakeUp = 1.0f / 0.7f;
+    limitLeft_.ProcessBlock(left, static_cast<size_t>(frames), kMakeUp);
+    limitRight_.ProcessBlock(right, static_cast<size_t>(frames), kMakeUp);
 }
 
 // ---------------------------------------------------------------- factory

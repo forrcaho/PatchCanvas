@@ -671,7 +671,15 @@ fun PatchCanvas(
         }
 
         patch.pinned.forEach { rail ->
-            val live = rail.id != IN_ID || patch.inputEnabled
+            // Both rails dim when they are not passing anything, so "this is a switch and
+            // it is off" reads the same way on each. A correctly patched canvas that made
+            // no sound, with nothing on screen saying why, was the single most confusing
+            // thing about using this.
+            val live = when (rail.id) {
+                IN_ID -> patch.inputEnabled
+                OUT_ID -> outputActive
+                else -> true
+            }
             drawModuleBox(
                 module = rail,
                 rect = frame.railRect(rail),

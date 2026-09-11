@@ -79,6 +79,15 @@ object AudioEngine {
     fun attachPerformanceHint(): Boolean =
         if (available && started) nativeAttachPerformanceHint() else false
 
+    /**
+     * Arms a rolling capture of exactly what reaches the stream, written out when the
+     * stream stops. Debug builds only -- it holds a few megabytes for the ring, and a
+     * release build has no business recording the user without being asked.
+     */
+    fun armCapture(enabled: Boolean, path: String) {
+        if (available) nativeArmCapture(enabled, path)
+    }
+
     /** What the stream actually negotiated, as key=value pairs. */
     fun status(): String = if (available) nativeStatus() else "state=UNAVAILABLE"
 
@@ -93,5 +102,6 @@ object AudioEngine {
     private external fun nativeDisconnect(dstId: Long, dstPort: Int): Boolean
     private external fun nativeCollectGarbage()
     private external fun nativeStatus(): String
+    private external fun nativeArmCapture(enabled: Boolean, path: String)
     private external fun nativeAttachPerformanceHint(): Boolean
 }

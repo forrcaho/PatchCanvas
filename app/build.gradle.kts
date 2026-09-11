@@ -97,6 +97,8 @@ android {
 
     buildFeatures {
         compose = true
+        // For BuildConfig.DEBUG, which gates the debug audio capture.
+        buildConfig = true
         // Oboe ships its headers and .so as a prefab package inside its AAR, so there
         // is no source checkout to vendor and no submodule to keep in step.
         prefab = true

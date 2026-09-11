@@ -1,6 +1,7 @@
 package io.github.forrcaho.patchcanvas
 
 import android.os.Bundle
+import java.io.File
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -54,6 +55,13 @@ class MainActivity : ComponentActivity() {
 
         store = PatchStore(this)
         patch = store.load() ?: demoPatch()
+
+        // Debug only. Armed before the engine starts, because the ring is allocated in
+        // start() and freed in stop() -- which is what lets the audio thread write into
+        // it without a lock.
+        if (BuildConfig.DEBUG) {
+            AudioEngine.armCapture(true, File(filesDir, "capture.wav").absolutePath)
+        }
 
         // Ask for the panel's fastest mode. The reference device is 120Hz-capable but
         // idles its render rate at 60, and half the perceived latency of a tap is the
