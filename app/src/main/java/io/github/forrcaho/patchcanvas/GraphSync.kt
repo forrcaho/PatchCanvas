@@ -11,7 +11,10 @@ enum class NodeType(val id: Int) {
     Env(3),
     Steps(4),
     Out(5),
-    In(6);
+    In(6),
+    Vca(7),
+    Clock(8),
+    Mix(9);
 
     companion object {
         fun of(type: ModuleType): NodeType = when (type.name) {
@@ -21,6 +24,9 @@ enum class NodeType(val id: Int) {
             "Steps" -> Steps
             "Out" -> Out
             "In" -> In
+            "VCA" -> Vca
+            "Clock" -> Clock
+            "Mix" -> Mix
             else -> Unknown
         }
     }

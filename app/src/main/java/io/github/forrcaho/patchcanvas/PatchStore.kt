@@ -107,7 +107,7 @@ fun patchFromJson(text: String): Patch? {
 /** Null unless the module exists and actually has a port at that index and direction. */
 private fun Patch.portRefOrNull(moduleId: Long, dir: PortDirection, index: Int): PortRef? {
     val module = module(moduleId) ?: return null
-    if (index < 0 || index >= module.portNames(dir).size) return null
+    if (index < 0 || index >= module.ports(dir).size) return null
     return PortRef(moduleId, dir, index)
 }
 

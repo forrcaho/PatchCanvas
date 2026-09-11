@@ -162,14 +162,15 @@ val hostCxx: String? = System.getenv("PATH")
 
 val nativeGraphTest = tasks.register<Exec>("nativeGraphTest") {
     group = "verification"
-    description = "Compiles and runs the audio graph tests on the host toolchain."
+    description = "Compiles and runs the audio graph and node tests on the host toolchain."
 
     // Skipped rather than failed where there is no host compiler, so a machine that
     // only builds the app is never blocked by a test it cannot run.
     onlyIf { hostCxx != null }
 
     val outDir = layout.buildDirectory.dir("native-test").get().asFile
-    val binary = File(outDir, "graph_test").absolutePath
+    val graphBinary = File(outDir, "graph_test").absolutePath
+    val nodeBinary = File(outDir, "node_test").absolutePath
 
     workingDir = projectDir
     inputs.files(
@@ -178,17 +179,37 @@ val nativeGraphTest = tasks.register<Exec>("nativeGraphTest") {
     )
     outputs.dir(outDir)
 
+    val cxx = hostCxx ?: "g++"
+    val vendorDir = File(outDir, "vendor").absolutePath
+    val sanitize = "-fsanitize=address,undefined"
+
     val script = buildString {
-        append("mkdir -p ").append(outDir.absolutePath).append(" && ")
-        append(hostCxx ?: "g++")
-        append(" -std=c++17 -O1 -Wall -Wextra -Werror")
-        append(" -fsanitize=address,undefined")
-        append(" -I src/main/cpp")
+        append("mkdir -p ").append(vendorDir).append(" && ")
+        // Vendored upstream is compiled to its own standards, not ours. -w rather than
+        // patching DaisySP to satisfy -Wextra, which would mean carrying a diff forever.
+        append("for f in src/main/cpp/vendor/daisysp/*.cpp; do ")
+        append(cxx).append(" -std=c++17 -O1 -w ").append(sanitize)
+        append(" -I src/main/cpp/vendor/daisysp -c \"${'$'}f\"")
+        append(" -o ").append(vendorDir).append("/\"${'$'}(basename \"${'$'}f\" .cpp)\".o")
+        append(" || exit 1; done && ")
+        append(cxx)
+        append(" -std=c++17 -O1 -Wall -Wextra -Werror ").append(sanitize)
+        append(" -I src/main/cpp -isystem src/main/cpp/vendor/daisysp")
         append(" src/test/cpp/graph_test.cpp")
         append(" src/main/cpp/graph.cpp")
         append(" src/main/cpp/nodes.cpp")
-        append(" -o ").append(binary)
-        append(" && ").append(binary)
+        append(" ").append(vendorDir).append("/*.o")
+        append(" -o ").append(graphBinary)
+        append(" && ")
+        append(cxx)
+        append(" -std=c++17 -O1 -Wall -Wextra -Werror ").append(sanitize)
+        append(" -I src/main/cpp -isystem src/main/cpp/vendor/daisysp")
+        append(" src/test/cpp/node_test.cpp")
+        append(" src/main/cpp/nodes.cpp")
+        append(" ").append(vendorDir).append("/*.o")
+        append(" -o ").append(nodeBinary)
+        append(" && ").append(graphBinary)
+        append(" && ").append(nodeBinary)
     }
     commandLine("bash", "-c", script)
 }

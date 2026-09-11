@@ -238,7 +238,7 @@ bool AudioEngine::attachPerformanceHint() {
 }
 
 void AudioEngine::onErrorAfterClose(oboe::AudioStream * /*stream*/, oboe::Result result) {
-    // Routing changes (headphones in or out) close the stream from underneath us.
+    // Plugging headphones in or out closes the stream from underneath us.
     __android_log_print(ANDROID_LOG_WARN, kTag, "stream closed by system: %s",
                         oboe::convertToText(result));
     {
@@ -246,6 +246,25 @@ void AudioEngine::onErrorAfterClose(oboe::AudioStream * /*stream*/, oboe::Result
         stream_.reset();
     }
     audioThreadTid_.store(0, std::memory_order_relaxed);
+    if (auto *session = hintSession_.exchange(nullptr, std::memory_order_acq_rel)) {
+        APerformanceHint_closeSession(session);
+    }
+
+    // The graph is deliberately NOT reset: a route change must not cost you your patch.
+
+    if (result == oboe::Result::ErrorDisconnected && running_.load(std::memory_order_acquire)) {
+        // Oboe delivers this on its own error thread, not the audio thread, so opening a
+        // stream and even sleeping here is allowed. Without this the instrument goes
+        // silent the moment you plug in headphones and stays silent until the app is
+        // backgrounded and resumed, which is not a thing an instrument may do.
+        if (start()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            attachPerformanceHint();
+            __android_log_print(ANDROID_LOG_INFO, kTag, "reopened after route change");
+        } else {
+            __android_log_print(ANDROID_LOG_ERROR, kTag, "could not reopen after route change");
+        }
+    }
 }
 
 std::string AudioEngine::status() const {

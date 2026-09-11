@@ -81,10 +81,27 @@ enum class PortDirection { INPUT, OUTPUT }
 /** Which viewport edge a pinned module is welded to. */
 enum class Edge { LEFT, RIGHT }
 
+/**
+ * What a port carries.
+ *
+ * Advisory, not enforced: any output may patch to any input. In hardware modular it is
+ * all just voltage, and patching audio into a CV input is a technique rather than a
+ * mistake -- audio-rate modulation lives there. Blocking it would make this less modular
+ * than the thing it is modelled on. The colour says what to expect; the cable decides
+ * what happens.
+ */
+enum class SignalKind(val cable: Color, val idle: Color) {
+    AUDIO(Color(0xFF8A93A3), Color(0xFF6E7684)),
+    CV(Color(0xFFB98FE0), Color(0xFF8A6FA8)),
+    GATE(Color(0xFFE0A24B), Color(0xFFA8793A)),
+}
+
+data class Port(val name: String, val kind: SignalKind)
+
 data class ModuleType(
     val name: String,
-    val inputs: List<String>,
-    val outputs: List<String>,
+    val inputs: List<Port>,
+    val outputs: List<Port>,
     val accent: Color,
     /**
      * Non-null for the I/O rails. A pinned type is unique, cannot be added or deleted,
@@ -94,20 +111,63 @@ data class ModuleType(
 )
 
 object Types {
-    val Osc = ModuleType("Osc", listOf("pitch", "fm"), listOf("out"), Color(0xFF7FD1C1))
-    val Filter = ModuleType("Filter", listOf("in", "cutoff"), listOf("out"), Color(0xFFE0A24B))
-    val Env = ModuleType("Env", listOf("gate"), listOf("out"), Color(0xFFB98FE0))
-    val Steps = ModuleType("Steps", listOf("clock"), listOf("pitch", "gate"), Color(0xFF6FA8E5))
+    private val A = SignalKind.AUDIO
+    private val C = SignalKind.CV
+    private val G = SignalKind.GATE
+
+    val Osc = ModuleType(
+        "Osc", listOf(Port("pitch", C), Port("fm", C)), listOf(Port("out", A)),
+        Color(0xFF7FD1C1),
+    )
+    val Filter = ModuleType(
+        "Filter", listOf(Port("in", A), Port("cutoff", C)), listOf(Port("out", A)),
+        Color(0xFFE0A24B),
+    )
+    val Env = ModuleType(
+        "Env", listOf(Port("gate", G)), listOf(Port("out", C)),
+        Color(0xFFB98FE0),
+    )
+    val Vca = ModuleType(
+        "VCA", listOf(Port("in", A), Port("cv", C)), listOf(Port("out", A)),
+        Color(0xFFE07A9B),
+    )
+    val Clock = ModuleType(
+        "Clock", emptyList(), listOf(Port("gate", G)),
+        Color(0xFFD9C46A),
+    )
+    val Steps = ModuleType(
+        "Steps", listOf(Port("clock", G)), listOf(Port("pitch", C), Port("gate", G)),
+        Color(0xFF6FA8E5),
+    )
+    val Mix = ModuleType(
+        "Mix",
+        listOf(Port("a", A), Port("b", A), Port("c", A), Port("d", A)),
+        listOf(Port("out", A)),
+        Color(0xFF9AA6B5),
+    )
 
     /** Signal flows left to right, so the sink is welded right and the source left. */
-    val Out = ModuleType("Out", listOf("L", "R"), emptyList(), Color(0xFFE0E0E0), Edge.RIGHT)
-    val In = ModuleType("In", emptyList(), listOf("L", "R"), Color(0xFF7FB0E5), Edge.LEFT)
+    val Out = ModuleType(
+        "Out", listOf(Port("L", A), Port("R", A)), emptyList(),
+        Color(0xFFE0E0E0), Edge.RIGHT,
+    )
+    val In = ModuleType(
+        "In", emptyList(), listOf(Port("L", A), Port("R", A)),
+        Color(0xFF7FB0E5), Edge.LEFT,
+    )
 
-    /** Offered by the add menu. Pinned types are deliberately absent. */
-    val palette = listOf(Osc, Filter, Env, Steps)
+    /**
+     * Offered by the add menu. Pinned types are deliberately absent.
+     *
+     * There is no Mult, despite the roadmap listing one. A mult exists in hardware
+     * because a physical jack takes one plug; here an output already fans out to as many
+     * inputs as you like, since each input stores its own source. Only summing ever
+     * needed a module, and that is Mix.
+     */
+    val palette = listOf(Osc, Filter, Env, Vca, Clock, Steps, Mix)
 
     val byName: Map<String, ModuleType> =
-        listOf(Osc, Filter, Env, Steps, Out, In).associateBy { it.name }
+        (palette + listOf(Out, In)).associateBy { it.name }
 }
 
 /**
@@ -140,7 +200,7 @@ class PatchModule(
     /** World-space bounds. Meaningless for pinned modules; use Frame.railRect instead. */
     val bounds: Rect get() = Rect(position, Size(width, height))
 
-    fun portNames(dir: PortDirection): List<String> =
+    fun ports(dir: PortDirection): List<Port> =
         if (dir == PortDirection.INPUT) type.inputs else type.outputs
 
     companion object {
@@ -217,6 +277,11 @@ class Patch {
     val pinned: List<PatchModule> get() = modules.filter { it.isPinned }
 
     fun module(id: Long): PatchModule? = modules.firstOrNull { it.id == id }
+
+    fun port(ref: PortRef): Port? = module(ref.moduleId)?.ports(ref.dir)?.getOrNull(ref.index)
+
+    /** What a cable leaving a port carries. Advisory: it colours, it does not gate. */
+    fun kindOf(ref: PortRef): SignalKind = port(ref)?.kind ?: SignalKind.AUDIO
 
     /** Pinned types are never added; the rails exist for the life of the patch. */
     fun add(type: ModuleType, at: Offset): PatchModule? {
@@ -375,7 +440,7 @@ private fun portScreen(
     frame: Frame,
 ): Offset? {
     val module = patch.module(ref.moduleId) ?: return null
-    val count = module.portNames(ref.dir).size
+    val count = module.ports(ref.dir).size
     if (ref.index >= count) return null
     return if (module.isPinned) {
         portIn(frame.railRect(module), frame.density, ref.dir, ref.index, count)
@@ -574,9 +639,12 @@ fun PatchCanvas(
             val a = portScreen(patch, conn.from, camera, frame) ?: return@forEach
             val b = portScreen(patch, conn.to, camera, frame) ?: return@forEach
             val dim = !patch.portUsable(conn.from) || !patch.portUsable(conn.to)
+            // Coloured by what the source emits, not what the destination expects --
+            // the two may legitimately differ, and the cable should say what is actually
+            // travelling down it.
             drawCable(
                 a, b,
-                Color(0xFF8A93A3).copy(alpha = if (dim) 0.3f else 1f),
+                patch.kindOf(conn.from).cable.copy(alpha = if (dim) 0.3f else 1f),
                 2.5f * d,
             )
         }
@@ -693,7 +761,7 @@ private fun Patch.hitPort(
     modules.forEach { module ->
         val limit = if (module.isPinned) railRadius else worldRadius
         PortDirection.entries.forEach { dir ->
-            module.portNames(dir).indices.forEach { i ->
+            module.ports(dir).indices.forEach { i ->
                 val ref = PortRef(module.id, dir, i)
                 if (!portUsable(ref)) return@forEach
                 val at = portScreen(this, ref, camera, frame) ?: return@forEach
@@ -781,12 +849,21 @@ private fun handleTap(
 
 // ---------------------------------------------------------------- context menu
 
+/**
+ * Mirrors kMaxPorts in node.h. A module with more ports than this would have its extra
+ * cables silently dropped by the engine, so it is asserted in a test rather than trusted.
+ */
+internal const val MAX_PORTS = 4
+
+/** Column cap for the context menu, visible to tests. */
+internal const val MENU_COLS = 4
+
 private object MenuMetrics {
     const val TILE_W = 74f
     const val TILE_H = 40f
     const val GAP = 5f
     const val PAD = 7f
-    const val COLS = 3
+    const val COLS = MENU_COLS
     /** Lifted clear of the fingertip that opened it. */
     const val LIFT = 20f
     const val SCREEN_MARGIN = 10f
@@ -946,18 +1023,20 @@ private fun DrawScope.drawModuleBox(
     }
 
     PortDirection.entries.forEach { dir ->
-        val names = module.portNames(dir)
-        names.forEachIndexed { i, name ->
+        val ports = module.ports(dir)
+        ports.forEachIndexed { i, port ->
             val ref = PortRef(module.id, dir, i)
-            val at = portIn(rect, unit, dir, i, names.size)
+            val at = portIn(rect, unit, dir, i, ports.size)
             val lit = ref == armed
+            // Idle colour comes from what the port carries, so audio, CV and gate are
+            // distinguishable at a glance without reading a label.
             drawCircle(
-                color = (if (lit) module.type.accent else Color(0xFF6E7684)).copy(alpha = alpha),
+                color = (if (lit) module.type.accent else port.kind.idle).copy(alpha = alpha),
                 radius = (if (lit) PatchModule.PORT_RADIUS_ARMED else PatchModule.PORT_RADIUS) * unit,
                 center = at,
             )
             if (showLabels) {
-                val label = measurer.measure(name, PortLabelStyle)
+                val label = measurer.measure(port.name, PortLabelStyle)
                 val x = if (dir == PortDirection.INPUT) {
                     rect.left + PatchModule.LABEL_INSET * unit
                 } else {
@@ -978,17 +1057,29 @@ private fun DrawScope.drawModuleBox(
 @Composable
 fun rememberDemoPatch(): Patch = remember { demoPatch() }
 
-/** The patch a fresh install opens with, before anything has been saved. */
+/**
+ * The patch a fresh install opens with: a complete voice, so the first thing you hear is
+ * an instrument rather than a test tone. Clock drives Steps, Steps plays Osc and fires
+ * Env, Env opens the VCA, and the VCA feeds both output channels.
+ */
 fun demoPatch(): Patch =
     Patch().apply {
-        val steps = add(Types.Steps, Offset(40f, 40f))!!
-        val osc = add(Types.Osc, Offset(220f, 40f))!!
-        val filter = add(Types.Filter, Offset(400f, 40f))!!
-        val env = add(Types.Env, Offset(220f, 190f))!!
+        val clock = add(Types.Clock, Offset(20f, 40f))!!
+        val steps = add(Types.Steps, Offset(165f, 40f))!!
+        val osc = add(Types.Osc, Offset(310f, 40f))!!
+        val filter = add(Types.Filter, Offset(455f, 40f))!!
+        val vca = add(Types.Vca, Offset(600f, 40f))!!
+        val env = add(Types.Env, Offset(455f, 220f))!!
 
-        connect(PortRef(steps.id, PortDirection.OUTPUT, 0), PortRef(osc.id, PortDirection.INPUT, 0))
-        connect(PortRef(steps.id, PortDirection.OUTPUT, 1), PortRef(env.id, PortDirection.INPUT, 0))
-        connect(PortRef(osc.id, PortDirection.OUTPUT, 0), PortRef(filter.id, PortDirection.INPUT, 0))
-        connect(PortRef(env.id, PortDirection.OUTPUT, 0), PortRef(filter.id, PortDirection.INPUT, 1))
-        connect(PortRef(filter.id, PortDirection.OUTPUT, 0), PortRef(OUT_ID, PortDirection.INPUT, 0))
+        fun out(m: PatchModule, i: Int) = PortRef(m.id, PortDirection.OUTPUT, i)
+        fun into(m: PatchModule, i: Int) = PortRef(m.id, PortDirection.INPUT, i)
+
+        connect(out(clock, 0), into(steps, 0))
+        connect(out(steps, 0), into(osc, 0))   // pitch
+        connect(out(steps, 1), into(env, 0))   // gate
+        connect(out(osc, 0), into(filter, 0))
+        connect(out(filter, 0), into(vca, 0))
+        connect(out(env, 0), into(vca, 1))     // envelope opens the VCA
+        connect(out(vca, 0), PortRef(OUT_ID, PortDirection.INPUT, 0))
+        connect(out(vca, 0), PortRef(OUT_ID, PortDirection.INPUT, 1))
     }

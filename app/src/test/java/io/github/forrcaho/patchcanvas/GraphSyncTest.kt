@@ -176,3 +176,72 @@ class GraphSyncTest {
         assertEquals(2, rec.collected)
     }
 }
+
+/**
+ * Invariants that span the JNI boundary. Each of these fails silently in production --
+ * a module with no node type simply makes no sound, and a fifth port simply never
+ * connects -- which is exactly why they are asserted here.
+ */
+class ModuleContractTest {
+
+    @Test
+    fun `every module type has an engine node`() {
+        Types.byName.values.forEach { type ->
+            assertTrue(
+                "${type.name} maps to NodeType.Unknown, so it would be silent",
+                NodeType.of(type) != NodeType.Unknown,
+            )
+        }
+    }
+
+    @Test
+    fun `node type ids are distinct`() {
+        val ids = NodeType.entries.map { it.id }
+        assertEquals(ids.size, ids.distinct().size)
+    }
+
+    @Test
+    fun `no module exceeds the engine's port limit`() {
+        Types.byName.values.forEach { type ->
+            assertTrue("${type.name} has ${type.inputs.size} inputs", type.inputs.size <= MAX_PORTS)
+            assertTrue("${type.name} has ${type.outputs.size} outputs", type.outputs.size <= MAX_PORTS)
+        }
+    }
+
+    @Test
+    fun `every port is named and typed`() {
+        Types.byName.values.forEach { type ->
+            (type.inputs + type.outputs).forEach { port ->
+                assertTrue("${type.name} has an unnamed port", port.name.isNotBlank())
+            }
+        }
+    }
+
+    @Test
+    fun `the palette offers no pinned type`() {
+        // Adding a second Out from the menu would be meaningless, and Patch.add refuses
+        // it anyway -- so offering it would be a tile that silently does nothing.
+        assertTrue(Types.palette.none { it.pinned != null })
+    }
+
+    @Test
+    fun `the rails are the only pinned types`() {
+        assertEquals(
+            setOf(Types.Out, Types.In),
+            Types.byName.values.filter { it.pinned != null }.toSet(),
+        )
+    }
+
+    @Test
+    fun `signal kinds survive a patch round trip`() {
+        val patch = demoPatch()
+        val restored = patchFromJson(patch.toJson())!!
+        patch.connections.forEach { cable ->
+            assertEquals(
+                "cable from ${cable.from} changed kind",
+                patch.kindOf(cable.from),
+                restored.kindOf(cable.from),
+            )
+        }
+    }
+}

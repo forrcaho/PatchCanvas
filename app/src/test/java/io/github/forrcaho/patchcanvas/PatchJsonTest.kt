@@ -36,10 +36,14 @@ class PatchJsonTest {
 
     @Test
     fun `cables into the rails survive a reload`() {
-        val restored = patchFromJson(sample().toJson())!!
-        val toOut = restored.connections.filter { it.to.moduleId == OUT_ID }
-        assertEquals(1, toOut.size)
-        assertNotNull(restored.module(toOut.single().from.moduleId))
+        val original = sample()
+        val restored = patchFromJson(original.toJson())!!
+
+        val before = original.connections.filter { it.to.moduleId == OUT_ID }
+        val after = restored.connections.filter { it.to.moduleId == OUT_ID }
+        assertTrue("the demo patch should reach the output", before.isNotEmpty())
+        assertEquals(before.toSet(), after.toSet())
+        after.forEach { assertNotNull(restored.module(it.from.moduleId)) }
     }
 
     @Test

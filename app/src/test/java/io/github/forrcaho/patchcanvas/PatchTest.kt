@@ -217,12 +217,33 @@ class MenuLayoutTest {
 
     @Test
     fun `rows are minimised and then balanced`() {
-        // four items should be 2x2, not a row of three and an orphan
-        val four = menuLayout(add(4), Offset(1200f, 540f), d, screen)
-        val ys = four.tiles.map { it.first.top }.distinct()
-        val xs = four.tiles.map { it.first.left }.distinct()
-        assertEquals(2, ys.size)
-        assertEquals(2, xs.size)
+        // Asserted as the invariant rather than a specific shape, so widening the column
+        // cap does not falsify the test it was meant to satisfy.
+        (1..12).forEach { n ->
+            val layout = menuLayout(
+                List(n) { MenuItem.Add(Types.palette[it % Types.palette.size]) },
+                Offset(1200f, 540f), d, screen,
+            )
+            val rows = layout.tiles.map { it.first.top }.distinct().size
+            val cols = layout.tiles.map { it.first.left }.distinct().size
+
+            val expectedRows = (n + MENU_COLS - 1) / MENU_COLS
+            assertEquals("rows for n=$n", expectedRows, rows)
+            assertTrue("no empty row for n=$n", (rows - 1) * cols < n)
+            assertTrue("every item placed for n=$n", layout.tiles.size == n)
+        }
+    }
+
+    @Test
+    fun `the real palette leaves no lonely orphan`() {
+        val layout = menuLayout(
+            Types.palette.map { MenuItem.Add(it) }, Offset(1200f, 540f), d, screen,
+        )
+        val rows = layout.tiles.groupBy { it.first.top }
+        if (rows.size > 1) {
+            val last = rows.entries.maxByOrNull { it.key }!!.value.size
+            assertTrue("last row holds $last of ${Types.palette.size}", last > 1)
+        }
     }
 
     @Test
