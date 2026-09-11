@@ -396,6 +396,38 @@ it will happily limit a howl to a very loud steady tone. Mic into speaker is a g
 loop, mic into headphones is not, so enabling the `In` rail gates on a headphone route
 plus the `RECORD_AUDIO` grant. That is worth more than any amount of DSP.
 
+### Growing the library
+
+The vendored DaisySP tree already holds far more than the eight modules above, all MIT:
+`KarplusString` (Emilie Gillet's, not the LGPL `pluck`), `stringvoice`, `modalvoice`,
+`resonator`; `wavefolder`, `overdrive`, `decimator`, `chorus`, `flanger`, `phaser`,
+`pitchshifter`; `fm2`, `formantosc`, `harmonic_osc`, `oscillatorbank`, `vosim`; the
+drum voices; the noise sources; and `delayline`. Availability is not the constraint.
+
+**What to add is decided by what cannot be built from something else.** Once subpatches
+land, a voice you assemble is a node, so the library grows itself -- and a fixed module
+is only worth shipping when it is a primitive, or when the implementation quality is the
+point. By that test a **delay line** is the highest-leverage thing missing: it yields
+Karplus-Strong, comb filtering, flanging, chorus and echo from one primitive. Against
+that, a prebuilt `KarplusString` is one sound -- but a good one, and fiddly to get right
+from parts, which is exactly when a curated module earns its place.
+
+Some variety is already paid for: `Svf` has low, high, band, notch and peak taps, so a
+mode parameter turns one module into five filters.
+
+**Fix the cost of adding one before adding the fifth.** A module currently touches five
+places across two languages -- a C++ node class, the C++ enum, the Kotlin enum, a
+`ModuleType`, and the palette -- and the two enums must agree. There is already a test
+asserting they do, which is a smell rather than a solution. The engine should own the
+catalogue (name, ports, signal kinds) and hand it to Kotlin at startup, with the UI
+supplying only colour and category. Then a module is one declaration, and a whole class
+of silent mismatch stops being possible.
+
+Two limits will bite as it grows: `kMaxPorts` is 4, and a mixer wants eight inputs;
+names must fit a 74dp tile at 12sp, which is about eight characters. That second one is
+not a problem but a discipline, and it is the Eurorack one -- panels say Pluck, Fold,
+Rings, Warps, for exactly the same reason.
+
 ### The microphone
 
 It opens on the same low-latency path as the output -- MMAP exclusive, 48kHz, 96-frame
@@ -495,6 +527,30 @@ natural first half of abstraction, so neither choice wastes the other.
 **Why after parameters.** A Voice macro whose filter cutoff cannot be reached from
 outside is half a feature. Exposing a knob through the boundary matters as much as
 exposing a port, and that needs parameters to exist.
+
+### Choosing from a library
+
+A flat grid of 5 columns by 6 rows is about 404x279dp on the reference device -- a
+quarter of the screen, holding **thirty modules with no navigation at all**. Eight rows
+covers 93% of the height and stops being a menu.
+
+So submenus are a cost paid before it is needed, and they are the wrong cost. Depth
+doubles every selection, and worse, it makes the user answer a question they should not
+have to: is a wavefolder an Effect or a Synthesis module? Is a resonator a Filter? The
+person who filed it knows; the person hunting does not, and every miss is a
+back-navigation from a transient menu that has no obvious back.
+
+**Macros decide this.** Once a saved subpatch is a node, user-made modules will
+outnumber built-ins, and nobody is going to file their own patches into a taxonomy
+chosen here. Whatever the picker is, it has to treat a built-in `Osc` and a saved
+`BassVoice` identically -- which a flat browsable surface does naturally and a fixed
+two-level menu does not.
+
+The order, then: keep the flat grid while it fits; when it outgrows thirty, **filter in
+place** -- category chips along the top of the same menu, narrowing the tiles below, no
+second layer and no back, with macros getting a chip of their own. Type-to-filter only
+if it gets genuinely large, and reluctantly: a keyboard covers the canvas, and it is
+useless when you do not already know the name.
 
 **Nothing to build early.** A composite is a `ModuleType` carrying an inner patch
 definition; `PatchModule`, `PortRef` and the connection model are unchanged, because
