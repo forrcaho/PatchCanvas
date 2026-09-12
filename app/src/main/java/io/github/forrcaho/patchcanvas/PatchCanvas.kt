@@ -40,6 +40,8 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.withTimeout
 import kotlin.math.PI
 import kotlin.math.ceil
+import kotlin.math.floor
+import kotlin.math.roundToInt
 import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
@@ -123,6 +125,15 @@ enum class ParamCurve { LINEAR, EXPONENTIAL, STEPPED }
  * instead of "0.63". The range and the curve belong here, with the thing being
  * described.
  */
+/**
+ * What a stepped parameter's options look like on the panel.
+ *
+ * NUMBER covers anything counted -- a length, a division. WAVE draws the waveform
+ * itself, which is how every hardware oscillator labels this control and why: the shape
+ * is the name, and reading it needs no translation from the word "saw".
+ */
+enum class Choice { NUMBER, WAVE }
+
 data class Param(
     val name: String,
     val min: Float,
@@ -130,13 +141,31 @@ data class Param(
     val default: Float,
     val unit: String = "",
     val curve: ParamCurve = ParamCurve.LINEAR,
+    /** Only meaningful for STEPPED; ignored otherwise. */
+    val choice: Choice = Choice.NUMBER,
 ) {
+    /**
+     * How many options a stepped parameter offers.
+     *
+     * Stepped ranges are integers one apart -- 0..3 waveforms, 1..8 lengths -- so the
+     * count is the span plus one. Nothing else would make sense as a row of buttons.
+     */
+    val steps: Int get() = (max - min).toInt() + 1
+
+    /** Which option a value is, 0-based. */
+    fun indexOf(value: Float): Int =
+        (value - min).roundToInt().coerceIn(0, steps - 1)
+
     /** Knob travel, 0..1, to a value. */
     fun valueAt(position: Float): Float {
         val t = position.coerceIn(0f, 1f)
         return when (curve) {
             ParamCurve.LINEAR -> min + t * (max - min)
-            ParamCurve.STEPPED -> kotlin.math.round(min + t * (max - min))
+            // Equal-width segments, deliberately not round(): rounding makes the first
+            // and last options half as wide as the rest, so on a row of buttons the two
+            // ends are half as easy to hit as their neighbours.
+            ParamCurve.STEPPED ->
+                min + floor(t * steps).coerceAtMost(steps - 1f)
             ParamCurve.EXPONENTIAL -> min * kotlin.math.exp(t * kotlin.math.ln(max / min))
         }
     }
@@ -145,7 +174,10 @@ data class Param(
     fun positionOf(value: Float): Float {
         val v = value.coerceIn(minOf(min, max), maxOf(min, max))
         return when (curve) {
-            ParamCurve.LINEAR, ParamCurve.STEPPED ->
+            // The middle of its own segment, so the travel that produced a value maps
+            // back into the same button rather than onto its edge.
+            ParamCurve.STEPPED -> (indexOf(v) + 0.5f) / steps
+            ParamCurve.LINEAR ->
                 if (max == min) 0f else (v - min) / (max - min)
             ParamCurve.EXPONENTIAL ->
                 if (max == min) 0f else (kotlin.math.ln(v / min) / kotlin.math.ln(max / min))
@@ -191,7 +223,8 @@ object Types {
         Color(0xFF7FD1C1),
         params = listOf(
             Param("tune", -24f, 24f, 0f, "st", LIN),
-            Param("wave", 0f, 3f, 0f, "", STEP),
+            // Order mirrors kWaves in nodes.cpp: saw, square, triangle, sine.
+            Param("wave", 0f, 3f, 0f, "", STEP, Choice.WAVE),
         ),
     )
     val Filter = ModuleType(
@@ -345,6 +378,7 @@ class PatchModule(
         const val PANEL_SIDE = 108f
         const val PANEL_ROW_MAX = 76f
         const val PANEL_BAR = 16f
+        const val PANEL_CHOICE = 34f
         const val PANEL_STUB = 26f
 
         /**
@@ -1215,6 +1249,107 @@ private fun DrawScope.drawFlash(rect: Rect, unit: Float, alpha: Float, strokeWid
     )
 }
 
+// ------------------------------------------------------------ stepped parameters
+
+/**
+ * A stepped parameter as a row of buttons rather than a bar.
+ *
+ * A bar cannot show what the options are, which is fine for a length and useless for a
+ * waveform: dragging to pick "square" out of four unlabelled positions asks you to know
+ * the order by heart. The buttons are equal width so no option is harder to hit than
+ * another, which is also why valueAt floors rather than rounds.
+ */
+private fun DrawScope.drawChoices(
+    row: Rect,
+    d: Float,
+    param: Param,
+    value: Float,
+    accent: Color,
+    measurer: TextMeasurer,
+) {
+    val n = param.steps
+    val selected = param.indexOf(value)
+    val gap = 5f * d
+    val height = PatchModule.PANEL_CHOICE * d
+    val width = (row.width - gap * (n - 1)) / n
+    val top = row.bottom - height - 6f * d
+    val radius = CornerRadius(8f * d, 8f * d)
+
+    repeat(n) { i ->
+        val box = Rect(Offset(row.left + i * (width + gap), top), Size(width, height))
+        val on = i == selected
+        drawRoundRect(
+            color = if (on) accent else Color(0xFF12151A),
+            topLeft = box.topLeft,
+            size = box.size,
+            cornerRadius = radius,
+        )
+        if (!on) {
+            drawRoundRect(
+                color = Color(0xFF2A313B),
+                topLeft = box.topLeft,
+                size = box.size,
+                cornerRadius = radius,
+                style = Stroke(width = 1.5f * d),
+            )
+        }
+
+        // Dark ink on the lit button, light on the rest: the accent colours are bright
+        // enough that a white glyph on top of one disappears.
+        val ink = if (on) Color(0xFF14171C) else Color(0xFFB7C0CE)
+        when (param.choice) {
+            Choice.WAVE -> drawWave(box, d, i, ink)
+            Choice.NUMBER -> {
+                val text = measurer.measure((param.min + i).toInt().toString(), PanelValueStyle)
+                drawText(
+                    text,
+                    color = ink,
+                    topLeft = Offset(
+                        box.center.x - text.size.width / 2f,
+                        box.center.y - text.size.height / 2f,
+                    ),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * One cycle of waveform [index], sampled rather than hand-drawn as four paths.
+ *
+ * Sampling means all four glyphs are one code path and stay consistent with each other;
+ * at this size the near-vertical segments of the saw and square read as vertical. Each
+ * function is phased to start and end at zero so the glyphs line up across the row.
+ */
+private fun DrawScope.drawWave(box: Rect, d: Float, index: Int, color: Color) {
+    val w = minOf(box.width * 0.62f, 46f * d)
+    val h = minOf(box.height * 0.46f, 15f * d)
+    val left = box.center.x - w / 2f
+    val mid = box.center.y
+
+    fun sample(t: Float): Float = when (index) {
+        // Descending, because that is what comes out. DaisySP's polyblep saw computes
+        // the rising ramp and then multiplies by -1, so it falls from +1 to -1 and
+        // resets upward -- confirmed in oscillator.cpp and in a capture of the real
+        // output. A glyph that showed the conventional rising saw would be prettier and
+        // wrong.
+        0 -> 1f - 2f * ((t + 0.5f) % 1f)                      // saw
+        1 -> if (kotlin.math.sin(2f * PI.toFloat() * (t + 0.25f)) >= 0f) 1f else -1f  // square
+        2 -> 1f - 4f * kotlin.math.abs(((t + 0.25f) % 1f) - 0.5f)                     // triangle
+        else -> kotlin.math.sin(2f * PI.toFloat() * t)                                // sine
+    }
+
+    val steps = 64
+    val path = Path()
+    repeat(steps + 1) { i ->
+        val t = i / steps.toFloat()
+        val x = left + w * t
+        val y = mid - sample(t) * h
+        if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+    }
+    drawPath(path, color = color, style = Stroke(width = 2f * d, cap = StrokeCap.Round))
+}
+
 // ---------------------------------------------------------------- history buttons
 
 private val HistoryFill = Color(0xFF1E232B)
@@ -1674,11 +1809,20 @@ private fun DrawScope.drawPanel(
         val name = measurer.measure(param.name, PanelParamStyle)
         drawText(name, topLeft = Offset(row.left, row.top + 4f * d))
 
-        val reading = measurer.measure(param.format(value), PanelValueStyle)
-        drawText(
-            reading,
-            topLeft = Offset(row.right - reading.size.width, row.top + 2f * d),
-        )
+        // A stepped parameter shows no numeric readout: the lit button is the reading,
+        // and "0" next to a picture of a sawtooth is noise.
+        if (param.curve != ParamCurve.STEPPED) {
+            val reading = measurer.measure(param.format(value), PanelValueStyle)
+            drawText(
+                reading,
+                topLeft = Offset(row.right - reading.size.width, row.top + 2f * d),
+            )
+        }
+
+        if (param.curve == ParamCurve.STEPPED) {
+            drawChoices(row, d, param, value, module.type.accent, measurer)
+            return@forEachIndexed
+        }
 
         val barHeight = PatchModule.PANEL_BAR * d
         val barTop = row.bottom - barHeight - 10f * d

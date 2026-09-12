@@ -510,8 +510,25 @@ bolted into the canvas one.
 
 A horizontal bar is the right default and the wrong universal:
 
-- **Stepped parameters want radio buttons**, not a bar. Dragging to pick "square" from
-  four named waveforms is the wrong gesture, and a bar cannot show the names.
+- **Stepped parameters are radio buttons.** Done. A bar cannot show what the options
+  are, which is tolerable for a length and useless for a waveform: dragging to pick
+  "square" out of four unlabelled positions asks you to know the order by heart.
+
+  The waveforms are drawn rather than named -- the shape is the name, and reading it
+  needs no translation from the word "saw". All four glyphs are sampled from a function
+  rather than hand-drawn as paths, so they stay consistent with each other and the
+  near-vertical edges of the saw and square read as vertical at this size.
+
+  **The saw glyph descends**, because that is what comes out: DaisySP's polyblep saw
+  computes the rising ramp and multiplies by -1, confirmed both in `oscillator.cpp` and
+  in a capture of the real output. The conventional rising glyph would be prettier and
+  wrong.
+
+  The maths behind the buttons matters more than it looks. `valueAt` floors rather than
+  rounds, because rounding gives the first and last options half the width of the rest --
+  so the two ends of every selector would be twice as hard to hit as the middle. And the
+  option count is asserted against the engine's waveform table: an extra waveform in
+  `nodes.cpp` without a wider range here is a button the interface can never offer.
 - **`Steps` needs a grid.** Verified working end to end on the device at last: given a
   `Clock` into its gate input, it steps the pattern at exactly the clock's tempo
   (measured +10, +12, +10, +7, +3, 0, +3, +7 semitones from middle C, one step every

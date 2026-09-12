@@ -377,3 +377,78 @@ class ParamTest {
         assertEquals(Types.Env.params.map { it.default }, module.params.toList())
     }
 }
+
+/**
+ * A stepped parameter is a row of buttons, and the arithmetic behind it decides whether
+ * every button is equally easy to press. round() -- which this used before -- gives the
+ * first and last options half the width of the rest, so the two ends of every waveform
+ * selector would be twice as hard to hit as the middle.
+ */
+class SteppedParamTest {
+
+    private val wave = Types.Osc.params.first { it.name == "wave" }
+    private val len = Types.Steps.params.first { it.name == "len" }
+
+    private fun stepped() =
+        Types.byName.values.flatMap { it.params }.filter { it.curve == ParamCurve.STEPPED }
+
+    @Test
+    fun `the option count is the span plus one`() {
+        assertEquals(4, wave.steps)
+        assertEquals(8, len.steps)
+    }
+
+    /**
+     * Mirrors kWaves in nodes.cpp. An extra waveform added to the engine without a wider
+     * range here is a button the interface can never offer; a wider range without the
+     * engine is a button that silently selects the last waveform.
+     */
+    @Test
+    fun `the waveform selector offers exactly the waveforms the engine has`() {
+        assertEquals(ENGINE_WAVEFORMS, wave.steps)
+        assertEquals(Choice.WAVE, wave.choice)
+    }
+
+    @Test
+    fun `every option occupies the same width of travel`() {
+        stepped().forEach { p ->
+            val widths = (0 until p.steps).map { i ->
+                // Walk the travel finely and count where each option wins.
+                (0..1000).count { t -> p.indexOf(p.valueAt(t / 1000f)) == i }
+            }
+            val spread = widths.max() - widths.min()
+            assertTrue("${p.name} option widths $widths", spread <= 2)
+        }
+    }
+
+    @Test
+    fun `the travel reaches every option, and only real ones`() {
+        stepped().forEach { p ->
+            val seen = (0..1000).map { p.valueAt(it / 1000f) }.toSortedSet()
+            assertEquals("${p.name}", (0 until p.steps).map { p.min + it }.toSortedSet(), seen)
+        }
+    }
+
+    @Test
+    fun `the ends of the travel are the ends of the range`() {
+        stepped().forEach { p ->
+            assertEquals("${p.name} min", p.min, p.valueAt(0f), 0.0001f)
+            assertEquals("${p.name} max", p.max, p.valueAt(1f), 0.0001f)
+        }
+    }
+
+    @Test
+    fun `a value maps back into its own option, not onto the edge`() {
+        stepped().forEach { p ->
+            (0 until p.steps).forEach { i ->
+                val value = p.min + i
+                assertEquals("${p.name} option $i", i, p.indexOf(p.valueAt(p.positionOf(value))))
+            }
+        }
+    }
+
+    private companion object {
+        /** saw, square, triangle, sine -- kWaves in nodes.cpp */
+        const val ENGINE_WAVEFORMS = 4
+    }
+}
