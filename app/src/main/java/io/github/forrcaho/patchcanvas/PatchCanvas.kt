@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.input.pointer.AwaitPointerEventScope
 import androidx.compose.ui.input.pointer.PointerEventTimeoutCancellationException
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
@@ -543,6 +544,121 @@ internal fun panelKnobAt(panel: Rect, d: Float, module: PatchModule, at: Offset)
     return null
 }
 
+private val ChipFill = Color(0xFF1E232B)
+private val ChipEdge = Color(0xFF3A424E)
+private val PanelScrim = Color(0xE6161A20)
+private val TileFill = Color(0xFF1A1F27)
+
+private fun DrawScope.drawScaleChip(
+    rect: Rect,
+    d: Float,
+    scale: Scale,
+    open: Boolean,
+    measurer: TextMeasurer,
+) {
+    drawRoundRect(
+        color = if (open) scaleAccent else ChipFill,
+        topLeft = rect.topLeft,
+        size = rect.size,
+        cornerRadius = CornerRadius(7f * d, 7f * d),
+    )
+    drawRoundRect(
+        color = ChipEdge,
+        topLeft = rect.topLeft,
+        size = rect.size,
+        cornerRadius = CornerRadius(7f * d, 7f * d),
+        style = Stroke(width = 1.5f * d),
+    )
+    // The degree count, because it is what changes about the grid when you pick one --
+    // seven rows to the octave rather than twelve is the whole difference.
+    val text = measurer.measure(
+        "${scale.name}  ·  ${scale.size}",
+        if (open) PanelChipOnStyle else PanelChipStyle,
+    )
+    drawText(
+        text,
+        topLeft = Offset(
+            rect.center.x - text.size.width / 2f,
+            rect.center.y - text.size.height / 2f,
+        ),
+    )
+}
+
+private fun DrawScope.drawScaleTile(
+    rect: Rect,
+    d: Float,
+    scale: Scale,
+    current: Scale,
+    measurer: TextMeasurer,
+) {
+    val chosen = scale.name == current.name
+    drawRoundRect(
+        color = if (chosen) scaleAccent else TileFill,
+        topLeft = rect.topLeft,
+        size = rect.size,
+        cornerRadius = CornerRadius(7f * d, 7f * d),
+    )
+    if (!chosen) {
+        drawRoundRect(
+            color = ChipEdge,
+            topLeft = rect.topLeft,
+            size = rect.size,
+            cornerRadius = CornerRadius(7f * d, 7f * d),
+            style = Stroke(width = 1.5f * d),
+        )
+    }
+    val name = measurer.measure(scale.name, if (chosen) PanelChipOnStyle else PanelChipStyle)
+    val nameTop = rect.top + 7f * d
+    drawText(name, topLeft = Offset(rect.left + 10f * d, nameTop))
+
+    // Degrees per period, and the period itself when it is not the octave. A tuning that
+    // does not repeat at the octave is the thing most worth knowing before you pick it.
+    val period = if (kotlin.math.abs(scale.period - 1f) < 1e-4f) ""
+    else "  ·  ${"%.3f".format(Math.pow(2.0, scale.period.toDouble()))}:1"
+    val detail = measurer.measure("${scale.size} degrees$period", GridLabelStyle)
+    // Stacked under the name by its measured height rather than pinned to the tile's
+    // bottom: a measured height includes line spacing, so the two ran into each other.
+    drawText(detail, topLeft = Offset(rect.left + 10f * d, nameTop + name.size.height))
+}
+
+private val scaleAccent = Color(0xFF6FA8E5)
+
+/**
+ * The tuning chip, in the panel header.
+ *
+ * The scale belongs to the patch rather than to this module, but the header of a
+ * sequencer is where you are standing when you want it -- the grid's rows are the scale,
+ * so the label for them belongs beside the grid. Two sequencers share one tuning, which
+ * is the intent: a patch has a key the way it has a tempo.
+ */
+internal fun panelScaleChip(panel: Rect, d: Float): Rect {
+    val height = 28f * d
+    val width = 150f * d
+    return Rect(
+        Offset(panel.right - width - 14f * d, panel.top + (PatchModule.PANEL_HEADER * d - height) / 2f),
+        Size(width, height),
+    )
+}
+
+/** Where each scale's tile lands when the chip is open. */
+internal fun scaleTiles(panel: Rect, d: Float, count: Int): List<Rect> {
+    val area = panelBody(panel, d).deflate(10f * d)
+    val tileW = SCALE_TILE_W * d
+    val tileH = SCALE_TILE_H * d
+    val columns = maxOf(1, (area.width / tileW).toInt())
+    val rows = maxOf(1, (area.height / tileH).toInt())
+    val perPage = columns * rows
+    return (0 until minOf(count, perPage)).map { i ->
+        Rect(
+            Offset(area.left + (i % columns) * tileW, area.top + (i / columns) * tileH),
+            Size(tileW - 6f * d, tileH - 6f * d),
+        )
+    }
+}
+
+internal const val SCALE_TILE_W = 196f
+internal const val SCALE_TILE_H = 56f
+
 // ------------------------------------------------------------------- the step grid
 
 /**
@@ -889,6 +1005,8 @@ fun PatchCanvas(
     canRedo: Boolean = false,
     onUndo: () -> Unit = {},
     onRedo: () -> Unit = {},
+    /** Whatever `.scl` files were found. Never empty; at worst just the fallback. */
+    scales: List<Scale> = listOf(Scale.Chromatic),
 ) {
     val density = LocalDensity.current
     val layoutDirection = LocalLayoutDirection.current
@@ -928,6 +1046,14 @@ fun PatchCanvas(
     // a step nobody could have seen.
     val openModule = patch.modules.firstOrNull { it.expanded }
     var playingStep by remember { mutableIntStateOf(-1) }
+
+    // Unkeyed, then reset by an effect. A keyed remember hands back a *different*
+    // MutableState when the key changes, and the gesture loop is keyed on Unit -- so it
+    // would go on writing to the state object from the first composition while the draw
+    // read the newest one, and the chooser would never open. Same trap as the controls
+    // above, wearing a different hat.
+    var scaleMenu by remember { mutableStateOf(false) }
+    LaunchedEffect(openModule?.id) { scaleMenu = false }
     LaunchedEffect(openModule?.id, openModule?.type?.stepCount) {
         val id = openModule?.takeIf { it.type.stepCount > 0 }?.id
         if (id == null) {
@@ -983,6 +1109,26 @@ fun PatchCanvas(
                         // panel and overhang its bottom edge -- where a tap would
                         // otherwise be read as tapping away to close.
                         val onHistory = controls.overHistory(frame, down.position)
+
+                        // The chooser owns the panel while it is open: nothing behind it
+                        // is reachable, so a stray tap picks no scale and changes no knob.
+                        if (open.type.stepCount > 0 && scaleMenu) {
+                            val tiles = scaleTiles(panel, frame.density, scales.size)
+                            waitForUpRelease()
+                            val hit = tiles.indexOfFirst { it.contains(down.position) }
+                            if (hit >= 0) patch.scale = scales[hit]
+                            // Anywhere else dismisses, including the chip itself.
+                            scaleMenu = false
+                            return@awaitEachGesture
+                        }
+
+                        if (open.type.stepCount > 0 &&
+                            panelScaleChip(panel, frame.density).contains(down.position)
+                        ) {
+                            waitForUpRelease()
+                            scaleMenu = true
+                            return@awaitEachGesture
+                        }
                         val knob =
                             if (onHistory) null
                             else panelKnobAt(panel, frame.density, open, down.position)
@@ -1295,7 +1441,10 @@ fun PatchCanvas(
         }
 
         patch.modules.firstOrNull { it.expanded }?.let { open ->
-            drawPanel(open, patch, panelRect(frame), d, screenMeasurer, patch.scale, playingStep)
+            drawPanel(
+                open, patch, panelRect(frame), d, screenMeasurer, patch.scale, playingStep,
+                scales, scaleMenu,
+            )
         }
 
         // After the panel, so they float over it rather than being buried by it. Undo is
@@ -1328,6 +1477,15 @@ fun PatchCanvas(
  * of waiting is small; the cost of a menu you did not ask for is losing your place.
  */
 private const val LONG_PRESS_SCALE = 1.25f
+
+/** Consumes the rest of a gesture, so a decision taken on the down is not taken twice. */
+private suspend fun AwaitPointerEventScope.waitForUpRelease() {
+    while (true) {
+        val event = awaitPointerEvent()
+        event.changes.forEach { it.consume() }
+        if (event.changes.none { it.pressed }) return
+    }
+}
 
 private enum class GestureKind { Undecided, Tap, LongPress, MoveModule, Pan, Transform }
 
@@ -2009,6 +2167,18 @@ private val GridTonicLabelStyle = TextStyle(
     color = Color(0xFFD3DAE4),
 )
 
+private val PanelChipStyle = TextStyle(
+    fontSize = 12.sp,
+    fontWeight = FontWeight.Medium,
+    color = Color(0xFFC3CBD6),
+)
+
+private val PanelChipOnStyle = TextStyle(
+    fontSize = 12.sp,
+    fontWeight = FontWeight.Bold,
+    color = Color(0xFF14171C),
+)
+
 private val PortLabelStyle = TextStyle(
     fontSize = 9.sp,
     color = Color(0xFF98A0AD),
@@ -2117,6 +2287,8 @@ private fun DrawScope.drawPanel(
     measurer: TextMeasurer,
     scale: Scale,
     playingStep: Int,
+    scales: List<Scale>,
+    scaleMenu: Boolean,
 ) {
     val corner = CornerRadius(14f * d, 14f * d)
 
@@ -2167,6 +2339,23 @@ private fun DrawScope.drawPanel(
                     else at.x - 16f * d - label.size.width
             drawText(label, topLeft = Offset(x, at.y - label.size.height / 2f))
         }
+    }
+
+    if (module.type.stepCount > 0) {
+        drawScaleChip(panelScaleChip(panel, d), d, scale, scaleMenu, measurer)
+    }
+
+    if (module.type.stepCount > 0 && scaleMenu) {
+        // The tiles take the body, so the grid beneath them is not a distraction while
+        // you are choosing what its rows will mean.
+        drawRect(
+            color = PanelScrim,
+            topLeft = panelBody(panel, d).topLeft,
+            size = panelBody(panel, d).size,
+        )
+        val tiles = scaleTiles(panel, d, scales.size)
+        tiles.forEachIndexed { i, tile -> drawScaleTile(tile, d, scales[i], scale, measurer) }
+        return
     }
 
     if (module.type.stepCount > 0) {

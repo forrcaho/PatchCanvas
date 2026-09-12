@@ -3,6 +3,7 @@ package io.github.forrcaho.patchcanvas
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -370,5 +371,66 @@ class RestoreChangeSetTest {
         val first = patch.flash.serial
         patch.flash(setOf(1L))
         assertTrue(patch.flash.serial > first)
+    }
+}
+
+/**
+ * The scale chooser's geometry. It covers the panel body, so a tile that fell outside it
+ * or overlapped its neighbour would be a scale you could not pick or could pick by
+ * accident -- and neither is visible in a screenshot of the one you were aiming at.
+ */
+class ScaleChooserGeometryTest {
+
+    private val frame = Frame(
+        canvas = Size(2404f, 1080f),
+        density = 2.4375f,
+        insetLeft = 160f,
+        insetTop = 54f,
+        insetRight = 0f,
+        insetBottom = 58f,
+    )
+    private val panel = panelRect(frame)
+
+    @Test
+    fun `the chip sits inside the panel header`() {
+        val chip = panelScaleChip(panel, frame.density)
+        assertTrue("left of the panel", chip.left > panel.left)
+        assertTrue("inside the right edge", chip.right <= panel.right)
+        assertTrue("below the panel top", chip.top >= panel.top)
+        assertTrue(
+            "spills past the header",
+            chip.bottom <= panel.top + PatchModule.PANEL_HEADER * frame.density,
+        )
+    }
+
+    @Test
+    fun `tiles stay inside the panel and never overlap`() {
+        val tiles = scaleTiles(panel, frame.density, 24)
+        assertTrue("no tiles laid out", tiles.isNotEmpty())
+        tiles.forEach { tile ->
+            assertTrue("$tile escapes the panel", panel.contains(tile.topLeft))
+            assertTrue("$tile escapes the panel", tile.right <= panel.right)
+            assertTrue("$tile escapes the panel", tile.bottom <= panel.bottom)
+        }
+        tiles.forEachIndexed { i, a ->
+            tiles.drop(i + 1).forEach { b ->
+                assertTrue("$a overlaps $b", !a.overlaps(b))
+            }
+        }
+    }
+
+    /** The shipped library plus a few of the user's own must fit without paging. */
+    @Test
+    fun `the whole shipped library fits on one page`() {
+        val shipped = File("src/main/assets/scales").listFiles()?.size ?: 0
+        assertTrue("no scale assets found", shipped >= 10)
+        assertEquals(shipped + 6, scaleTiles(panel, frame.density, shipped + 6).size)
+    }
+
+    @Test
+    fun `a tile is big enough to hit`() {
+        val tile = scaleTiles(panel, frame.density, 4).first()
+        assertTrue("too narrow: ${tile.width / frame.density}dp", tile.width / frame.density >= 120f)
+        assertTrue("too short: ${tile.height / frame.density}dp", tile.height / frame.density >= 40f)
     }
 }

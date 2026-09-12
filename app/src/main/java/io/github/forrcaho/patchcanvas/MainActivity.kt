@@ -194,6 +194,7 @@ class MainActivity : ComponentActivity() {
                 canRedo = history.canRedo,
                 onUndo = { restore(history.undo()) },
                 onRedo = { restore(history.redo()) },
+                scales = scales.scales,
             )
         }
     }
@@ -345,6 +346,7 @@ fun PatchCanvasApp(
     canRedo: Boolean = false,
     onUndo: () -> Unit = {},
     onRedo: () -> Unit = {},
+    scales: List<Scale> = listOf(Scale.Chromatic),
 ) {
     // The canvas paints edge to edge, but the initial framing keeps the patch clear of
     // the cutout, the gesture bar and the corner radius. Measured on the reference
@@ -360,6 +362,7 @@ fun PatchCanvasApp(
         canRedo = canRedo,
         onUndo = onUndo,
         onRedo = onRedo,
+        scales = scales,
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF14171C)),

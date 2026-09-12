@@ -597,9 +597,22 @@ A horizontal bar is the right default and the wrong universal:
   a frame nobody saw -- so it is an atomic the audio thread publishes and the interface
   polls per frame, only while a sequencer's panel is open.
 
-  Still outstanding here: a scale picker (the patch holds a scale and persists it, but
-  nothing in the UI changes it), and `transp` is still declared in semitones, which
-  quietly assumes 12-TET.
+  **The tuning is chosen from a chip in the sequencer's header**, which opens a page of
+  tiles over the panel body. The scale belongs to the patch rather than to the module,
+  but the header of a sequencer is where you are standing when you want it -- the grid's
+  rows *are* the scale. Two sequencers share one tuning, which is the intent: a patch has
+  a key the way it has a tempo. Each tile carries the degree count, because that is what
+  visibly changes about the grid, and the period when it is not the octave, because a
+  tuning that does not repeat at the octave is the thing most worth knowing before you
+  pick it.
+
+  Tiles rather than a scrolling list: four columns by four rows holds twenty-odd scales
+  without paging, which covers the shipped set and a generous number of the user's own.
+  A test asserts the whole shipped library plus six more fits, and that no tile overlaps
+  its neighbour.
+
+  Still outstanding here: `transp` is still declared in semitones, which quietly assumes
+  12-TET -- the last thing that does.
 
 - **Superseded, kept for the reasoning:** Verified working end to end on the device at last: given a
   `Clock` into its gate input, it steps the pattern at exactly the clock's tempo
