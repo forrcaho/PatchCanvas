@@ -255,9 +255,8 @@ class HistoryButtonGeometryTest {
         val buttons = listOf(frame.historyRect(false), frame.historyRect(true))
 
         Types.byName.values.forEach { type ->
-            val count = type.params.size
-            repeat(count) { i ->
-                val row = panelRow(panel, frame.density, i, count)
+            repeat(type.params.size) { i ->
+                val row = panelRow(panel, frame.density, type, i)
                 buttons.forEach { button ->
                     assertTrue(
                         "${type.name} row $i overlaps a history button",

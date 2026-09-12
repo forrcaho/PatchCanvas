@@ -512,7 +512,7 @@ class SequenceTest {
     fun `degrees are converted to octaves on the way out`() {
         val recorder = Recorder()
         val (patch, steps) = withSteps()
-        val sync = GraphSync(recorder, Scale.Chromatic)
+        val sync = GraphSync(recorder)
         sync.sync(patch)
         recorder.clear()
 
@@ -528,8 +528,10 @@ class SequenceTest {
         val (patch, steps) = withSteps()
         steps.setStep(0, Step(1))
 
-        GraphSync(chromatic, Scale.Chromatic).sync(patch)
-        GraphSync(nineteen, Scale.byName("19-TET")!!).sync(patch)
+        patch.scale = Scale.Chromatic
+        GraphSync(chromatic).sync(patch)
+        patch.scale = Scale.byName("19-TET")!!
+        GraphSync(nineteen).sync(patch)
 
         fun firstPitch(r: Recorder) =
             r.log.filterIsInstance<Cmd.SetStep>().first { it.index == 0 }.pitch
@@ -580,5 +582,40 @@ class SequenceTest {
 
         assertEquals(saved, sequencer(patch).steps[3])
         assertTrue("the sequencer is flagged for the pulse", steps.id in changed)
+    }
+
+    /**
+     * Retuning changes no step and every pitch. The diff is over steps, so without
+     * noticing the scale it would send nothing at all and the patch would go on sounding
+     * in the tuning it was last synced in.
+     */
+    @Test
+    fun `changing the scale resends every step`() {
+        val recorder = Recorder()
+        val (patch, steps) = withSteps()
+        val sync = GraphSync(recorder)
+        sync.sync(patch)
+        recorder.clear()
+
+        patch.scale = Scale.byName("Major")!!
+        sync.sync(patch)
+
+        val sent = recorder.log.filterIsInstance<Cmd.SetStep>().filter { it.id == steps.id }
+        assertEquals(STEP_COUNT, sent.size)
+    }
+
+    @Test
+    fun `the patch remembers its scale across a save`() {
+        val (patch, _) = withSteps()
+        patch.scale = Scale.byName("Harmonic minor")!!
+        assertEquals(patch.scale, patchFromJson(patch.toJson())!!.scale)
+    }
+
+    @Test
+    fun `a file naming a scale that no longer exists still loads`() {
+        val (patch, _) = withSteps()
+        val text = patch.toJson().replace("\"scale\":\"12-TET\"", "\"scale\":\"Gamelan\"")
+        val back = patchFromJson(text)
+        assertEquals(Scale.Chromatic, back!!.scale)
     }
 }

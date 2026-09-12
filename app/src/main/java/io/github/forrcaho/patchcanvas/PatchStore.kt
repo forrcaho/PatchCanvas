@@ -68,6 +68,7 @@ fun Patch.toJson(): String {
         .put("modules", modules)
         .put("rails", rails)
         .put("connections", cables)
+        .put("scale", scale.name)
         .toString()
 }
 
@@ -122,6 +123,9 @@ fun patchFromJson(text: String): Patch? {
         }
 
         val patch = Patch()
+        // An unknown or absent name leaves the default, so a file naming a scale that
+        // has since been removed loads as a patch in 12-TET rather than not at all.
+        Scale.byName(root.optString("scale"))?.let { patch.scale = it }
 
         val modules = root.optJSONArray("modules") ?: JSONArray()
         for (i in 0 until modules.length()) {

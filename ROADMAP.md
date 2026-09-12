@@ -537,7 +537,30 @@ A horizontal bar is the right default and the wrong universal:
   so the two ends of every selector would be twice as hard to hit as the middle. And the
   option count is asserted against the engine's waveform table: an extra waveform in
   `nodes.cpp` without a wider range here is a button the interface can never offer.
-- **`Steps` needs a grid.** Verified working end to end on the device at last: given a
+- **`Steps` has a grid.** Done: sixteen columns of step, rows of scale degree, tap to
+  place a note and tap it again to make it a rest. Verified end to end on the device --
+  a figure drawn on the grid comes back out of the capture as the pitches it was drawn
+  as, looping at the clock's tempo.
+
+  **Rows are degrees, not semitones**, which is what makes it work for a diatonic scale
+  at all: seven rows to the octave, every one a note you meant, and no way to land
+  between them. In an equal division it degenerates to a piano roll.
+
+  Every row carries its degree number in the gutter, and the tonic of each period is
+  tinted and bold. The tint alone was not enough -- it stops orienting you the moment
+  you scroll past it, which on a nineteen-degree scale is most of the time.
+
+  The grid is anchored to its **bottom** row rather than its top. Anchoring to the top
+  meant guessing how many rows would fit, and being one out put the tonic exactly one
+  row below the fold, so the landmark the tint exists to provide was the one thing never
+  drawn. From the bottom, the lowest note of the figure sits on the last row and no
+  guess is needed.
+
+  Still outstanding here: a scale picker (the patch holds a scale and persists it, but
+  nothing in the UI changes it), and `transp` is still declared in semitones, which
+  quietly assumes 12-TET.
+
+- **Superseded, kept for the reasoning:** Verified working end to end on the device at last: given a
   `Clock` into its gate input, it steps the pattern at exactly the clock's tempo
   (measured +10, +12, +10, +7, +3, 0, +3, +7 semitones from middle C, one step every
   333ms at 180bpm, with the envelope shaping each note). Nothing is broken; there is

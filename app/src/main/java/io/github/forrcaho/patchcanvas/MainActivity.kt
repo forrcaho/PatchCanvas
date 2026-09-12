@@ -152,16 +152,24 @@ class MainActivity : ComponentActivity() {
                 }
         }
 
-        // Topology and knobs. Position is deliberately absent, so dragging a module
-        // around does not re-sync -- the audio graph has no opinion about where a module
-        // sits. Knobs very much are its business, and leaving them out of here meant a
-        // turned knob updated the model, saved to disk, and never reached the engine.
+        // Topology, knobs, sequences and the tuning. Position is deliberately absent, so
+        // dragging a module around does not re-sync -- the audio graph has no opinion
+        // about where a module sits.
+        //
+        // Everything else the engine cares about has to be read here or it is never
+        // sent. This has now caught two features: knobs updated the model, saved to
+        // disk, and never reached the engine; and then the step grid did exactly the
+        // same, edits landing in the file and in undo while the sound never changed.
+        // A list rather than a Triple because the arity kept being the thing that made
+        // adding one more feel like a bigger change than it is.
         scope.launch {
             snapshotFlow {
-                Triple(
+                listOf(
                     patch.modules.map { it.id to it.type.name },
                     patch.connections.toList(),
                     patch.modules.map { it.params.toList() },
+                    patch.modules.map { it.steps.toList() },
+                    patch.scale,
                 )
             }
                 .distinctUntilChanged()

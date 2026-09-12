@@ -108,19 +108,14 @@ object EngineCommands : GraphCommands {
  * Commands are ordered so the graph is never asked to reference something that is not
  * there yet: drop cables, then nodes, then add nodes, then make cables.
  */
-class GraphSync(
-    private val commands: GraphCommands = EngineCommands,
-    /**
-     * The tuning degrees are read against. Held here because this is the one place a
-     * degree becomes a pitch; everything downstream deals in octaves.
-     */
-    private val scale: Scale = Scale.Chromatic,
-) {
+class GraphSync(private val commands: GraphCommands = EngineCommands) {
 
     private var syncedNodes = emptyMap<Long, NodeType>()
     private var syncedCables = emptySet<Connection>()
     private var syncedParams = emptyMap<Long, List<Float>>()
     private var syncedSteps = emptyMap<Long, List<Step>>()
+    /** Retuning is not an edit to any step, but every step's pitch changes with it. */
+    private var syncedScale: Scale? = null
 
     /** Forget what the engine has, so the next sync re-sends everything. */
     fun invalidate() {
@@ -128,6 +123,7 @@ class GraphSync(
         syncedCables = emptySet()
         syncedParams = emptyMap()
         syncedSteps = emptyMap()
+        syncedScale = null
     }
 
     fun sync(patch: Patch) {
@@ -180,11 +176,12 @@ class GraphSync(
         val steps = patch.modules
             .filter { it.type.stepCount > 0 }
             .associate { it.id to it.steps.toList() }
+        val retuned = syncedScale != patch.scale
         steps.forEach { (id, sequence) ->
-            val previous = syncedSteps[id]
+            val previous = if (retuned) null else syncedSteps[id]
             sequence.forEachIndexed { index, step ->
                 if (previous == null || previous.getOrNull(index) != step) {
-                    commands.setStep(id, index, scale.octavesOf(step.degree), step.on)
+                    commands.setStep(id, index, patch.scale.octavesOf(step.degree), step.on)
                 }
             }
         }
@@ -193,6 +190,7 @@ class GraphSync(
         syncedCables = cables
         syncedParams = params
         syncedSteps = steps
+        syncedScale = patch.scale
 
         // Whatever the audio thread retired during the last block is ours to free.
         commands.collectGarbage()

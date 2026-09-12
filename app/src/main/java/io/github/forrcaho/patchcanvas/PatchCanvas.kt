@@ -357,6 +357,28 @@ class PatchModule(
         if (index in steps.indices) steps[index] = step
     }
 
+    /**
+     * The degree shown on the grid's top row.
+     *
+     * View state, like the camera and like which panel is open: it is where you are
+     * looking, not part of the patch, so it is neither saved nor undone. Starts at the
+     * highest note of the default figure so a new sequencer opens with its pattern in
+     * view rather than somewhere above it.
+     */
+    /**
+     * The degree on the grid's *bottom* row.
+     *
+     * Anchored to the bottom rather than the top so the opening position needs no guess
+     * about how many rows fit: the lowest note of the figure goes on the last row and
+     * everything above follows. Anchoring to the top meant guessing the row count, and
+     * being one out put the tonic exactly one row below the fold -- so the landmark the
+     * tint exists to provide was the one thing never drawn.
+     *
+     * View state, like the camera and which panel is open: where you are looking, not
+     * part of the patch, so it is neither saved nor undone.
+     */
+    var gridBottom by mutableStateOf(defaultSteps(type).minOfOrNull { it.degree } ?: 0)
+
     val isPinned: Boolean get() = type.pinned != null
 
     /**
@@ -404,6 +426,7 @@ class PatchModule(
         const val PANEL_ROW_MAX = 76f
         const val PANEL_BAR = 16f
         const val PANEL_CHOICE = 34f
+        const val GRID_ROW = 26f
         const val PANEL_STUB = 26f
 
         /**
@@ -478,25 +501,74 @@ internal fun panelPort(panel: Rect, d: Float, dir: PortDirection, index: Int, co
     return Offset(if (dir == PortDirection.INPUT) panel.left else panel.right, first + index * pitch)
 }
 
-/** A knob's row: label, value and the bar beneath them. */
-internal fun panelRow(panel: Rect, d: Float, index: Int, count: Int): Rect {
+/**
+ * A sequencer's panel is split: the grid takes the top, the knobs share what is left.
+ *
+ * Two thirds to the grid, because it is the thing being edited and the knobs are two
+ * controls that were perfectly legible at half the height. A module with no sequence
+ * gives its whole body to the knobs, which is what every panel did before.
+ */
+internal fun panelGrid(panel: Rect, d: Float): Rect {
     val body = panelBody(panel, d)
     val side = PatchModule.PANEL_SIDE * d
-    val rowHeight = minOf(PatchModule.PANEL_ROW_MAX * d, body.height / maxOf(count, 1))
+    return Rect(panel.left + side, body.top, panel.right - side, body.top + body.height * 0.66f)
+}
+
+private fun panelControls(panel: Rect, d: Float, type: ModuleType): Rect {
+    val body = panelBody(panel, d)
+    return if (type.stepCount > 0) {
+        Rect(body.left, body.top + body.height * 0.66f, body.right, body.bottom)
+    } else {
+        body
+    }
+}
+
+/** A knob's row: label, value and the bar beneath them. */
+internal fun panelRow(panel: Rect, d: Float, type: ModuleType, index: Int): Rect {
+    val area = panelControls(panel, d, type)
+    val count = type.params.size
+    val side = PatchModule.PANEL_SIDE * d
+    val rowHeight = minOf(PatchModule.PANEL_ROW_MAX * d, area.height / maxOf(count, 1))
     val block = rowHeight * count
-    val top = body.top + (body.height - block) / 2f + index * rowHeight
+    val top = area.top + (area.height - block) / 2f + index * rowHeight
     return Rect(panel.left + side, top, panel.right - side, top + rowHeight)
 }
 
 internal fun panelKnobAt(panel: Rect, d: Float, module: PatchModule, at: Offset): Int? {
-    val count = module.type.params.size
     module.type.params.indices.forEach { i ->
         // Generous vertically: the rows are the only targets on the panel, so a near
         // miss should still land rather than do nothing.
-        if (panelRow(panel, d, i, count).inflate(6f * d).contains(at)) return i
+        if (panelRow(panel, d, module.type, i).inflate(6f * d).contains(at)) return i
     }
     return null
 }
+
+// ------------------------------------------------------------------- the step grid
+
+/**
+ * Which cell of the grid is under [at], as a step and a degree, or null if none is.
+ *
+ * Degrees ascend up the screen because pitch does, which is the one thing about a piano
+ * roll nobody has to be taught.
+ */
+internal fun panelCellAt(panel: Rect, d: Float, module: PatchModule, at: Offset): Pair<Int, Int>? {
+    if (module.type.stepCount == 0) return null
+    val area = panelGrid(panel, d)
+    if (!area.contains(at)) return null
+
+    val rows = gridRows(area, d)
+    if (rows <= 0) return null
+    val rowHeight = area.height / rows
+    val cellWidth = area.width / module.type.stepCount
+
+    val column = ((at.x - area.left) / cellWidth).toInt().coerceIn(0, module.type.stepCount - 1)
+    val row = ((at.y - area.top) / rowHeight).toInt().coerceIn(0, rows - 1)
+    return column to (module.gridBottom + (rows - 1 - row))
+}
+
+/** How many degrees fit. Whole rows only -- a half-height row at the bottom is a lie. */
+internal fun gridRows(area: Rect, d: Float): Int =
+    (area.height / (PatchModule.GRID_ROW * d)).toInt().coerceAtLeast(1)
 
 /** Knob travel, 0..1, from a screen x on the panel. */
 internal fun panelKnobPosition(panel: Rect, d: Float, screenX: Float): Float {
@@ -522,6 +594,15 @@ class Patch {
      * the mic on came back showing a live In rail with nothing behind it.
      */
     var inputEnabled by mutableStateOf(false)
+
+    /**
+     * The tuning every sequencer degree is read against.
+     *
+     * One per patch rather than one per module: two sequencers in different tunings is a
+     * thing somebody will eventually want and nobody wants by accident, and a patch has
+     * a key in the same way it has a tempo.
+     */
+    var scale by mutableStateOf(Scale.Chromatic)
 
     /**
      * Modules to pulse, after an undo moved something you were not looking at.
@@ -887,6 +968,20 @@ fun PatchCanvas(
                         val knob =
                             if (onHistory) null
                             else panelKnobAt(panel, frame.density, open, down.position)
+                        val cell =
+                            if (onHistory || knob != null) null
+                            else panelCellAt(panel, frame.density, open, down.position)
+
+                        // Scrolling the grid is measured from where the drag began and
+                        // in whole rows, so a slow drag moves the same distance as a fast
+                        // one and never lands between two degrees.
+                        // The height a row actually got, not GRID_ROW: rows divide the
+                        // area evenly once their count is fixed, so the two differ by
+                        // the remainder and a drag measured against the nominal value
+                        // slides against the grid it is supposed to be moving.
+                        val gridArea = panelGrid(panel, frame.density)
+                        val rowHeight = gridArea.height / gridRows(gridArea, frame.density)
+                        val scrollFrom = open.gridBottom
                         var moved = false
 
                         while (true) {
@@ -905,6 +1000,11 @@ fun PatchCanvas(
                                         panelKnobPosition(panel, frame.density, change.position.x),
                                     ),
                                 )
+                            } else if (cell != null) {
+                                // Down the screen is down in pitch, so dragging the grid
+                                // downward brings higher degrees into view.
+                                val rows = ((change.position.y - down.position.y) / rowHeight)
+                                open.gridBottom = scrollFrom + rows.roundToInt()
                             }
                             change.consume()
                         }
@@ -921,6 +1021,18 @@ fun PatchCanvas(
                                     param.valueAt(
                                         panelKnobPosition(panel, frame.density, down.position.x),
                                     ),
+                                )
+                            } else if (cell != null) {
+                                val (column, degree) = cell
+                                val step = open.steps[column]
+                                // Tapping the note that is already there mutes it rather
+                                // than clearing the cell: a rest still holds its pitch,
+                                // and tapping again brings it back without having to
+                                // remember what it was.
+                                open.setStep(
+                                    column,
+                                    if (step.degree == degree && step.on) step.copy(on = false)
+                                    else Step(degree, on = true),
                                 )
                             } else if (!panel.contains(down.position)) {
                                 // The border is the way out. Tapping the panel itself does
@@ -1165,7 +1277,7 @@ fun PatchCanvas(
         }
 
         patch.modules.firstOrNull { it.expanded }?.let { open ->
-            drawPanel(open, patch, panelRect(frame), d, screenMeasurer)
+            drawPanel(open, patch, panelRect(frame), d, screenMeasurer, patch.scale)
         }
 
         // After the panel, so they float over it rather than being buried by it. Undo is
@@ -1272,6 +1384,112 @@ private fun DrawScope.drawFlash(rect: Rect, unit: Float, alpha: Float, strokeWid
         cornerRadius = CornerRadius(PatchModule.CORNER * unit, PatchModule.CORNER * unit),
         style = Stroke(width = strokeWidth),
     )
+}
+
+// ------------------------------------------------------------------ the step grid
+
+private val GridLine = Color(0xFF232A33)
+private val GridCell = Color(0xFF12151A)
+private val GridTonic = Color(0xFF26333F)
+private val GridOutside = Color(0xFF0D0F13)
+private val GridRest = Color(0xFF4A5460)
+
+/**
+ * Steps across, scale degrees down.
+ *
+ * Rows are degrees of the scale rather than semitones, which is what makes this work for
+ * a diatonic scale at all: seven rows to the octave, every one of them a note you meant,
+ * and no way to land between them. In an equal division it degenerates to a piano roll.
+ *
+ * The tonic of each period is tinted, because without a landmark a scale of seven or
+ * nineteen or thirteen degrees is uncountable by eye -- and unlike a piano roll there are
+ * no black keys to count against.
+ */
+private fun DrawScope.drawStepGrid(
+    area: Rect,
+    d: Float,
+    module: PatchModule,
+    scale: Scale,
+    accent: Color,
+    measurer: TextMeasurer,
+) {
+    val columns = module.type.stepCount
+    val rows = gridRows(area, d)
+    val cellW = area.width / columns
+    val cellH = area.height / rows
+    val inset = 1f * d
+    val radius = CornerRadius(3f * d, 3f * d)
+
+    // Steps past the loop length still exist and are still editable; they simply are not
+    // reached. Dimming them says so without hiding the work already in them.
+    val length = module.params.getOrNull(0)?.toInt() ?: columns
+
+    repeat(rows) { row ->
+        val degree = module.gridBottom + (rows - 1 - row)
+        val tonic = degree.mod(scale.size) == 0
+        val top = area.top + row * cellH
+
+        repeat(columns) { column ->
+            val step = module.steps.getOrNull(column) ?: return@repeat
+            val live = column < length
+            val here = step.degree == degree
+            val cell = Rect(
+                Offset(area.left + column * cellW + inset, top + inset),
+                Size(cellW - inset * 2f, cellH - inset * 2f),
+            )
+
+            val fill = when {
+                here && step.on -> accent
+                here -> GridRest
+                tonic -> GridTonic
+                !live -> GridOutside
+                else -> GridCell
+            }
+            drawRoundRect(
+                color = if (live || here) fill else fill.copy(alpha = 0.55f),
+                topLeft = cell.topLeft,
+                size = cell.size,
+                cornerRadius = radius,
+            )
+
+            // A rest reads as an outline rather than a fill: the step still holds this
+            // pitch, it just does not fire, and an empty cell would lose that.
+            if (here && !step.on) {
+                drawRoundRect(
+                    color = accent.copy(alpha = 0.8f),
+                    topLeft = cell.topLeft,
+                    size = cell.size,
+                    cornerRadius = radius,
+                    style = Stroke(width = 1.5f * d),
+                )
+            }
+        }
+
+        if (tonic) {
+            drawLine(
+                color = GridLine,
+                start = Offset(area.left, top),
+                end = Offset(area.right, top),
+                strokeWidth = 1f * d,
+            )
+        }
+
+        // Every row numbered, in the gutter the port labels already reserve. The tint
+        // alone stops orienting you the moment you scroll past it, which on a
+        // nineteen-degree scale is most of the time; the number works anywhere and the
+        // tint tells you which of them is home.
+        val label = measurer.measure(
+            degree.toString(),
+            if (tonic) GridTonicLabelStyle else GridLabelStyle,
+        )
+        drawText(
+            label,
+            topLeft = Offset(
+                area.left - label.size.width - 8f * d,
+                top + (cellH - label.size.height) / 2f,
+            ),
+        )
+    }
 }
 
 // ------------------------------------------------------------ stepped parameters
@@ -1557,6 +1775,7 @@ internal const val MAX_PARAMS = 4
  */
 internal const val STEP_COUNT = 16
 
+
 /**
  * What a new sequencer plays.
  *
@@ -1694,6 +1913,19 @@ private val PanelValueStyle = TextStyle(
     color = Color(0xFFE4E7EC),
 )
 
+/** The degree number beside a tonic row. Quiet: a landmark, not a label to read. */
+private val GridLabelStyle = TextStyle(
+    fontSize = 10.sp,
+    color = Color(0xFF7E8896),
+)
+
+/** The tonic's own number: same size, enough brighter to pick out at a glance. */
+private val GridTonicLabelStyle = TextStyle(
+    fontSize = 10.sp,
+    fontWeight = FontWeight.Bold,
+    color = Color(0xFFD3DAE4),
+)
+
 private val PortLabelStyle = TextStyle(
     fontSize = 9.sp,
     color = Color(0xFF98A0AD),
@@ -1800,6 +2032,7 @@ private fun DrawScope.drawPanel(
     panel: Rect,
     d: Float,
     measurer: TextMeasurer,
+    scale: Scale,
 ) {
     val corner = CornerRadius(14f * d, 14f * d)
 
@@ -1852,10 +2085,13 @@ private fun DrawScope.drawPanel(
         }
     }
 
+    if (module.type.stepCount > 0) {
+        drawStepGrid(panelGrid(panel, d), d, module, scale, module.type.accent, measurer)
+    }
+
     // Knobs.
-    val count = module.type.params.size
     module.type.params.forEachIndexed { index, param ->
-        val row = panelRow(panel, d, index, count)
+        val row = panelRow(panel, d, module.type, index)
         val value = module.params.getOrElse(index) { param.default }
 
         val name = measurer.measure(param.name, PanelParamStyle)
