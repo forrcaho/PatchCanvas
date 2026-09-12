@@ -75,32 +75,15 @@ data class Scale(
             period,
         )
 
-        /** The default, and the only one that makes "semitone" mean anything. */
-        val Chromatic = equal("12-TET", 12)
-
         /**
-         * Deliberately more than a token. A scale mechanism with one scale in it is a
-         * mechanism nobody can tell is working, and one containing only equal divisions
-         * would not exercise the part that matters.
+         * The fallback, and the only scale defined in code.
+         *
+         * Everything else is a `.scl` file that a user can add to or replace, but a
+         * patch has to be able to name a tuning even when the storage is unreadable or
+         * empty, so exactly one is guaranteed. Its name matches the shipped 12-TET.scl
+         * so the two are the same scale by either route.
          */
-        val all = listOf(
-            Chromatic,
-            steps("Major", 12, listOf(2, 2, 1, 2, 2, 2, 1)),
-            steps("Minor", 12, listOf(2, 1, 2, 2, 1, 2, 2)),
-            // The augmented second between the sixth and seventh is the whole character
-            // of it, and a scale model that could not hold a step of three would lose it.
-            steps("Harmonic minor", 12, listOf(2, 1, 2, 2, 1, 3, 1)),
-            steps("Minor pent", 12, listOf(3, 2, 2, 3, 2)),
-            steps("Whole tone", 12, listOf(2, 2, 2, 2, 2, 2)),
-            // Unequal without being an equal division at all: 9:8 and 10:9 are both
-            // whole tones and differ by a comma.
-            ratios("Just major", listOf(1 to 1, 9 to 8, 5 to 4, 4 to 3, 3 to 2, 5 to 3, 15 to 8)),
-            equal("19-TET", 19),
-            equal("31-TET", 31),
-            equal("Bohlen-Pierce", 13, TRITAVE),
-        )
-
-        fun byName(name: String): Scale? = all.firstOrNull { it.name == name }
+        val Chromatic = equal("12-TET", 12)
     }
 }
 

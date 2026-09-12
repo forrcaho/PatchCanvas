@@ -114,7 +114,7 @@ private fun restoreParams(module: PatchModule, stored: JSONObject?) {
 }
 
 /** Returns null for anything unreadable, so the caller can fall back to a fresh patch. */
-fun patchFromJson(text: String): Patch? {
+fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): Patch? {
     return try {
         val root = JSONObject(text)
         if (root.optInt("version", -1) != FORMAT_VERSION) {
@@ -125,7 +125,7 @@ fun patchFromJson(text: String): Patch? {
         val patch = Patch()
         // An unknown or absent name leaves the default, so a file naming a scale that
         // has since been removed loads as a patch in 12-TET rather than not at all.
-        Scale.byName(root.optString("scale"))?.let { patch.scale = it }
+        patch.scale = scales.byName(root.optString("scale")) ?: scales.default
 
         val modules = root.optJSONArray("modules") ?: JSONArray()
         for (i in 0 until modules.length()) {
@@ -180,7 +180,7 @@ private fun Patch.portRefOrNull(moduleId: Long, dir: PortDirection, index: Int):
     return PortRef(moduleId, dir, index)
 }
 
-class PatchStore(context: Context) {
+class PatchStore(context: Context, private val scales: ScaleLibrary) {
     private val file = File(context.filesDir, "patch.json")
     private val temp = File(context.filesDir, "patch.json.tmp")
 
@@ -202,7 +202,7 @@ class PatchStore(context: Context) {
 
     fun load(): Patch? =
         try {
-            if (file.exists()) patchFromJson(file.readText()) else null
+            if (file.exists()) patchFromJson(file.readText(), scales) else null
         } catch (e: Exception) {
             Log.w(TAG, "could not load patch", e)
             null

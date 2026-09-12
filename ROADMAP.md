@@ -556,6 +556,26 @@ A horizontal bar is the right default and the wrong universal:
   drawn. From the bottom, the lowest note of the figure sits on the last row and no
   guess is needed.
 
+  **Tunings are Scala `.scl` files**, seeded into a folder on external storage that any
+  file manager can reach without a permission. Chosen because the format already exists
+  and there are thousands of scales written in it -- inventing one here would mean asking
+  people to retype work that is already done. Nothing writes them: editing a tuning on a
+  phone is nobody's idea of a good time, and the format exists so that work can happen
+  elsewhere. The bundled set is seeded rather than hidden in the APK so the folder is
+  never empty, and so the shipped files double as worked examples; seeding only fills in
+  what is absent, because a file the user edited is theirs.
+
+  Two things about the format catch people out and both are asserted: the unison is
+  implicit and never listed, and the *last* entry is the period rather than a playable
+  degree -- which is exactly the period this model already had, and the reason
+  Bohlen-Pierce needs no special case. A blank description line is a line and not an
+  absence, which if skipped parses happily and is wrong by one degree.
+
+  Verified end to end: a hand-written five-note Slendro dropped into the folder loads,
+  and grid degrees 0, 2, 4, 6 reach the engine as 0.0, 0.4, 0.8 and 1.2 octaves -- the
+  last correctly wrapping past the period. A deliberately malformed file alongside it is
+  skipped with a log line.
+
   Still outstanding here: a scale picker (the patch holds a scale and persists it, but
   nothing in the UI changes it), and `transp` is still declared in semitones, which
   quietly assumes 12-TET.

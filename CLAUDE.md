@@ -35,6 +35,8 @@ adb shell am start -n io.github.forrcaho.patchcanvas/.MainActivity
 adb logcat -d -s PatchAudio:V      # engine: stream state, latency, xruns
 adb logcat -d -s PatchSync:V       # every command crossing to the graph (debug builds)
 adb shell run-as io.github.forrcaho.patchcanvas cat files/patch.json
+adb shell ls /sdcard/Android/data/io.github.forrcaho.patchcanvas/files/scales   # tunings
+adb logcat -d -s PatchScales:V     # which .scl files loaded, and which were skipped
 ```
 
 `adb shell sleep N` works; a foreground `sleep` on the host does not.
@@ -69,6 +71,9 @@ short loop rather than another outcome bolted into the canvas one.
 | `GraphSync.kt` | the diff, `NodeType` mirror, `GraphCommands` seam for tests |
 | `PatchStore.kt` | JSON persistence, hand-rolled on `org.json` |
 | `History.kt` | undo as a stack of serialised patches, plus `Patch.replaceWith` |
+| `Scale.kt` | the tuning model: degrees in octaves, with a period |
+| `ScalaFile.kt` | `.scl` parsing — untrusted input, every bad shape returns null |
+| `ScaleLibrary.kt` | seeds the bundled scales and reads the user's folder |
 | `graph.{h,cpp}` | command queue, topological sort, crossfades, node lifetime |
 | `nodes.{h,cpp}` | the module set, DaisySP-backed |
 | `audio_engine.{h,cpp}` | Oboe streams, ADPF, debug capture |
@@ -120,6 +125,15 @@ draw lambda is rebuilt every recomposition and has no such problem -- which is t
 the undo buttons drew correctly and were simply not hittable, because the hit test was
 still reading `canUndo == false` from launch. Callbacks are safe (they delegate); values
 are not.
+
+**Tuning lives on one side of the boundary.** Pitch crosses as octaves
+(`hz = root * 2^octaves`), so the engine never learns what a semitone is and an arbitrary
+scale costs nothing. Degrees become octaves in exactly one place — `GraphSync` — and
+everything downstream is tuning-agnostic by construction. Scales are `.scl` files seeded
+into `getExternalFilesDir/scales`, where a user can add their own; `Scale.Chromatic` is
+the only one defined in code, and exists so the app still works when that folder is
+unreadable. **`Steps.transp` is still declared in semitones and quietly assumes 12-TET** —
+it is the one thing left that does.
 
 **Signal types are advisory.** Audio, CV and gate colour the cable and the port; any
 output may patch to any input. In hardware it is all voltage, and audio-rate modulation

@@ -530,7 +530,7 @@ class SequenceTest {
 
         patch.scale = Scale.Chromatic
         GraphSync(chromatic).sync(patch)
-        patch.scale = Scale.byName("19-TET")!!
+        patch.scale = Scale.equal("19-TET", 19)
         GraphSync(nineteen).sync(patch)
 
         fun firstPitch(r: Recorder) =
@@ -597,7 +597,7 @@ class SequenceTest {
         sync.sync(patch)
         recorder.clear()
 
-        patch.scale = Scale.byName("Major")!!
+        patch.scale = Scale.steps("Major", 12, listOf(2, 2, 1, 2, 2, 2, 1))
         sync.sync(patch)
 
         val sent = recorder.log.filterIsInstance<Cmd.SetStep>().filter { it.id == steps.id }
@@ -607,15 +607,20 @@ class SequenceTest {
     @Test
     fun `the patch remembers its scale across a save`() {
         val (patch, _) = withSteps()
-        patch.scale = Scale.byName("Harmonic minor")!!
-        assertEquals(patch.scale, patchFromJson(patch.toJson())!!.scale)
+        val harmonic = Scale.steps("Harmonic minor", 12, listOf(2, 1, 2, 2, 1, 3, 1))
+        patch.scale = harmonic
+        // Resolved by name against the library, which is how a reload finds it again.
+        val library = ScaleLibrary.of(null)
+        assertEquals(Scale.Chromatic, patchFromJson(patch.toJson(), library)!!.scale)
+        assertEquals("Harmonic minor", org.json.JSONObject(patch.toJson()).getString("scale"))
     }
 
+    /** A patch naming a scale whose file is gone loads in the fallback, not not at all. */
     @Test
-    fun `a file naming a scale that no longer exists still loads`() {
+    fun `a file naming a scale that is not installed still loads`() {
         val (patch, _) = withSteps()
-        val text = patch.toJson().replace("\"scale\":\"12-TET\"", "\"scale\":\"Gamelan\"")
-        val back = patchFromJson(text)
+        val text = patch.toJson().replace("\"scale\":\"12-TET\"", "\"scale\":\"Slendro\"")
+        val back = patchFromJson(text, ScaleLibrary.of(null))
         assertEquals(Scale.Chromatic, back!!.scale)
     }
 }

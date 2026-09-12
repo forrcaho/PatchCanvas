@@ -48,6 +48,7 @@ import kotlinx.coroutines.withContext
 class MainActivity : ComponentActivity() {
 
     private lateinit var store: PatchStore
+    private lateinit var scales: ScaleLibrary
     private lateinit var patch: Patch
 
     // The patch is owned here rather than by the composition so that onStop can save it
@@ -118,7 +119,10 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
-        store = PatchStore(this)
+        // Seeds the bundled .scl files into a folder the user can add to, then reads
+        // whatever is there. Before the patch loads, because the patch names a tuning.
+        scales = ScaleLibrary.load(this)
+        store = PatchStore(this, scales)
         patch = store.load() ?: demoPatch()
 
         // Debug only. Armed before the engine starts, because the ring is allocated in
@@ -207,7 +211,7 @@ class MainActivity : ComponentActivity() {
      * which is what stops an undo being pushed onto its own stack.
      */
     private fun restore(json: String?) {
-        val snapshot = json?.let { patchFromJson(it) } ?: return
+        val snapshot = json?.let { patchFromJson(it, scales) } ?: return
         // Pulse whatever moved. At graph level a knob is not drawn at all, so without
         // this an undone parameter is a change in the sound with nothing on screen
         // accounting for it.
