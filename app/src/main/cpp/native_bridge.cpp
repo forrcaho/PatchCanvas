@@ -104,6 +104,14 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetParam(JNIEnv *, jobject
     return engine().graph().postSetParam(id, index, value) ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT jboolean JNICALL
+Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetStep(JNIEnv *, jobject,
+                                                              jlong id, jint index,
+                                                              jfloat pitch, jboolean gate) {
+    return engine().graph().postSetStep(id, index, pitch, gate == JNI_TRUE) ? JNI_TRUE
+                                                                           : JNI_FALSE;
+}
+
 /** Frees whatever the audio thread handed back. Deliberately not on the audio thread. */
 JNIEXPORT void JNICALL
 Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeCollectGarbage(JNIEnv *, jobject) {

@@ -99,6 +99,7 @@ fun Patch.replaceWith(source: Patch): Set<Long> {
         source.free.forEach { from ->
             val copy = PatchModule(from.id, from.type, from.position)
             from.params.forEachIndexed { index, value -> copy.setParam(index, value) }
+            from.steps.forEachIndexed { index, step -> copy.setStep(index, step) }
             adopt(copy)
         }
 
@@ -138,7 +139,10 @@ private fun Patch.changesFrom(source: Patch): Set<Long> {
         // toList() on both sides deliberately: SnapshotStateList does not implement
         // structural equality, so comparing the lists directly is an identity check
         // that is always false, and every module in the patch would pulse.
-        if (was.position != now.position || was.params.toList() != now.params.toList()) {
+        if (was.position != now.position ||
+            was.params.toList() != now.params.toList() ||
+            was.steps.toList() != now.steps.toList()
+        ) {
             changed += id
         }
     }

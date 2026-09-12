@@ -34,6 +34,7 @@ fun Patch.toJson(): String {
                 .put("x", m.position.x.toDouble())
                 .put("y", m.position.y.toDouble())
                 .put("params", paramsOf(m))
+                .put("steps", stepsOf(m))
         )
     }
 
@@ -80,6 +81,28 @@ private fun paramsOf(module: PatchModule): JSONObject {
     return out
 }
 
+/**
+ * A sequence, or nothing at all for the modules that are not sequencers.
+ *
+ * Positional rather than keyed by name, unlike parameters: a step's identity *is* its
+ * position, so there is no reordering for a key to protect against.
+ */
+private fun stepsOf(module: PatchModule): JSONArray {
+    val out = JSONArray()
+    module.steps.forEach { step ->
+        out.put(JSONObject().put("d", step.degree).put("on", step.on))
+    }
+    return out
+}
+
+private fun restoreSteps(module: PatchModule, stored: JSONArray?) {
+    if (stored == null) return
+    for (i in 0 until minOf(stored.length(), module.steps.size)) {
+        val s = stored.optJSONObject(i) ?: continue
+        module.setStep(i, Step(s.optInt("d", 0), s.optBoolean("on", true)))
+    }
+}
+
 private fun restoreParams(module: PatchModule, stored: JSONObject?) {
     if (stored == null) return
     module.type.params.forEachIndexed { i, p ->
@@ -113,6 +136,9 @@ fun patchFromJson(text: String): Patch? {
                 Offset(m.optDouble("x", 0.0).toFloat(), m.optDouble("y", 0.0).toFloat()),
             )
             restoreParams(module, m.optJSONObject("params"))
+            // Absent in files written before sequences were editable, which leaves the
+            // module on the same default figure it used to have compiled in.
+            restoreSteps(module, m.optJSONArray("steps"))
             patch.adopt(module)
         }
 

@@ -196,6 +196,14 @@ data class Param(
     }
 }
 
+/**
+ * One step of a sequence: which degree of the scale, and whether it sounds.
+ *
+ * A rest is a step with [on] false rather than a missing entry, because the clock still
+ * advances through it and the pitch still holds -- the note is withheld, the step is not.
+ */
+data class Step(val degree: Int, val on: Boolean = true)
+
 data class ModuleType(
     val name: String,
     val inputs: List<Port>,
@@ -207,6 +215,8 @@ data class ModuleType(
      * has no stored position, and draws at constant size on a viewport edge.
      */
     val pinned: Edge? = null,
+    /** Non-zero only for sequencers; mirrors StepsNode::kSteps. */
+    val stepCount: Int = 0,
 )
 
 object Types {
@@ -262,9 +272,10 @@ object Types {
         "Steps", listOf(Port("clock", G)), listOf(Port("pitch", C), Port("gate", G)),
         Color(0xFF6FA8E5),
         params = listOf(
-            Param("len", 1f, 8f, 8f, "", STEP),
+            Param("len", 1f, STEP_COUNT.toFloat(), 8f, "", STEP),
             Param("transp", -24f, 24f, 0f, "st", LIN),
         ),
+        stepCount = STEP_COUNT,
     )
     val Mix = ModuleType(
         "Mix",
@@ -330,6 +341,20 @@ class PatchModule(
 
     fun setParam(index: Int, value: Float) {
         if (index in params.indices) params[index] = value
+    }
+
+    /**
+     * The sequence, empty for everything that is not a sequencer.
+     *
+     * Owned here rather than in C++ so the pattern is part of the patch: it saves, it
+     * restores, and it undoes, all through machinery that already exists. The engine's
+     * own default only matters for a node nothing has written to yet.
+     */
+    val steps: SnapshotStateList<Step> =
+        mutableStateListOf<Step>().apply { addAll(defaultSteps(type)) }
+
+    fun setStep(index: Int, step: Step) {
+        if (index in steps.indices) steps[index] = step
     }
 
     val isPinned: Boolean get() = type.pinned != null
@@ -1525,6 +1550,25 @@ internal const val MAX_PORTS = 4
 
 /** Mirrors kMaxParams in node.h. A fifth knob would simply never reach the engine. */
 internal const val MAX_PARAMS = 4
+
+/**
+ * Mirrors StepsNode::kSteps in nodes.h. A seventeenth step would be written here, saved
+ * to the file, and silently dropped on the way to the engine.
+ */
+internal const val STEP_COUNT = 16
+
+/**
+ * What a new sequencer plays.
+ *
+ * The figure StepsNode used to have compiled in, now living on this side because the
+ * pattern belongs to the patch. Degrees of the current scale rather than semitones, so
+ * it is a shape rather than a set of intervals -- in 19-TET or Bohlen-Pierce it is the
+ * same gesture through a different tuning.
+ */
+private val DEFAULT_PATTERN = listOf(0, 3, 7, 10, 12, 10, 7, 3)
+
+internal fun defaultSteps(type: ModuleType): List<Step> =
+    (0 until type.stepCount).map { Step(DEFAULT_PATTERN[it % DEFAULT_PATTERN.size]) }
 
 /** Column cap for the context menu, visible to tests. */
 internal const val MENU_COLS = 4

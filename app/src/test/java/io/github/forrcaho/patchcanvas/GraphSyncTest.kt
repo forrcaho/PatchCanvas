@@ -11,6 +11,7 @@ private sealed interface Cmd {
     data class Connect(val src: Long, val srcPort: Int, val dst: Long, val dstPort: Int) : Cmd
     data class Disconnect(val dst: Long, val dstPort: Int) : Cmd
     data class SetParam(val id: Long, val index: Int, val value: Float) : Cmd
+    data class SetStep(val id: Long, val index: Int, val pitch: Float, val gate: Boolean) : Cmd
 }
 
 private class Recorder : GraphCommands {
@@ -25,6 +26,9 @@ private class Recorder : GraphCommands {
     override fun disconnect(dstId: Long, dstPort: Int) { log += Cmd.Disconnect(dstId, dstPort) }
     override fun setParam(id: Long, index: Int, value: Float) {
         log += Cmd.SetParam(id, index, value)
+    }
+    override fun setStep(id: Long, index: Int, pitch: Float, gate: Boolean) {
+        log += Cmd.SetStep(id, index, pitch, gate)
     }
     override fun collectGarbage() { collected++ }
 
@@ -395,7 +399,8 @@ class SteppedParamTest {
     @Test
     fun `the option count is the span plus one`() {
         assertEquals(4, wave.steps)
-        assertEquals(8, len.steps)
+        // Not a literal: the length selector must offer every step the sequencer has.
+        assertEquals(STEP_COUNT, len.steps)
     }
 
     /**
@@ -450,5 +455,130 @@ class SteppedParamTest {
     private companion object {
         /** saw, square, triangle, sine -- kWaves in nodes.cpp */
         const val ENGINE_WAVEFORMS = 4
+    }
+}
+
+/**
+ * A sequence is patch data, so it has to travel every route the rest of the patch does:
+ * to the engine, to the file, and back through an undo.
+ */
+class SequenceTest {
+
+    private fun sequencer(patch: Patch) = patch.free.first { it.type.stepCount > 0 }
+
+    private fun withSteps(): Pair<Patch, PatchModule> {
+        val patch = demoPatch()
+        return patch to sequencer(patch)
+    }
+
+    @Test
+    fun `a new sequencer carries the default figure, not an empty one`() {
+        val (_, steps) = withSteps()
+        assertEquals(STEP_COUNT, steps.steps.size)
+        assertTrue("every step starts open", steps.steps.all { it.on })
+        assertTrue("not all one note", steps.steps.map { it.degree }.toSet().size > 1)
+    }
+
+    @Test
+    fun `adding a sequencer sends every one of its steps`() {
+        val recorder = Recorder()
+        val (patch, steps) = withSteps()
+        GraphSync(recorder).sync(patch)
+
+        val sent = recorder.log.filterIsInstance<Cmd.SetStep>().filter { it.id == steps.id }
+        assertEquals(STEP_COUNT, sent.size)
+        assertEquals((0 until STEP_COUNT).toList(), sent.map { it.index })
+    }
+
+    @Test
+    fun `only the step that changed is resent`() {
+        val recorder = Recorder()
+        val (patch, steps) = withSteps()
+        val sync = GraphSync(recorder)
+        sync.sync(patch)
+        recorder.clear()
+
+        steps.setStep(5, Step(9, on = false))
+        sync.sync(patch)
+
+        val sent = recorder.log.filterIsInstance<Cmd.SetStep>()
+        assertEquals(1, sent.size)
+        assertEquals(5, sent[0].index)
+        assertEquals(false, sent[0].gate)
+    }
+
+    /** Degrees become octaves here and nowhere else; the engine never sees a degree. */
+    @Test
+    fun `degrees are converted to octaves on the way out`() {
+        val recorder = Recorder()
+        val (patch, steps) = withSteps()
+        val sync = GraphSync(recorder, Scale.Chromatic)
+        sync.sync(patch)
+        recorder.clear()
+
+        steps.setStep(0, Step(12))     // one octave up
+        sync.sync(patch)
+        assertEquals(1f, recorder.log.filterIsInstance<Cmd.SetStep>().single().pitch, 1e-6f)
+    }
+
+    @Test
+    fun `a different tuning sends different pitches for the same pattern`() {
+        val chromatic = Recorder()
+        val nineteen = Recorder()
+        val (patch, steps) = withSteps()
+        steps.setStep(0, Step(1))
+
+        GraphSync(chromatic, Scale.Chromatic).sync(patch)
+        GraphSync(nineteen, Scale.byName("19-TET")!!).sync(patch)
+
+        fun firstPitch(r: Recorder) =
+            r.log.filterIsInstance<Cmd.SetStep>().first { it.index == 0 }.pitch
+        assertEquals(1f / 12f, firstPitch(chromatic), 1e-6f)
+        assertEquals(1f / 19f, firstPitch(nineteen), 1e-6f)
+    }
+
+    @Test
+    fun `a sequence survives a save and a reload`() {
+        val (patch, steps) = withSteps()
+        steps.setStep(0, Step(7, on = false))
+        steps.setStep(15, Step(-5))
+
+        val restored = patchFromJson(patch.toJson())!!
+        val back = sequencer(restored)
+        assertEquals(steps.steps.toList(), back.steps.toList())
+    }
+
+    @Test
+    fun `a file written before sequences existed loads on the default figure`() {
+        val (patch, _) = withSteps()
+        val stripped = org.json.JSONObject(patch.toJson()).also { root ->
+            val modules = root.getJSONArray("modules")
+            for (i in 0 until modules.length()) modules.getJSONObject(i).remove("steps")
+        }.toString()
+
+        val back = sequencer(patchFromJson(stripped)!!)
+        assertEquals(defaultSteps(back.type), back.steps.toList())
+    }
+
+    /**
+     * The snapshot deliberately holds a step that is neither the default nor the current
+     * value. A rebuilt PatchModule initialises to the default figure, so asserting
+     * against the default would pass whether or not the sequence was carried across --
+     * which is exactly what it did until a mutation check caught it.
+     */
+    @Test
+    fun `undo puts a sequence back`() {
+        val (patch, steps) = withSteps()
+        val saved = Step(11, on = false)
+        steps.setStep(3, saved)
+        val snapshot = patch.toJson()
+
+        steps.setStep(3, Step(2, on = true))
+        assertTrue("the edit must differ from the default", defaultSteps(steps.type)[3] != saved)
+
+        val changed = patch.replaceWith(patchFromJson(snapshot)!!)
+
+        assertEquals(saved, sequencer(patch).steps[3])
+        assertTrue("the sequencer is flagged for the pulse", steps.id in changed)
     }
 }

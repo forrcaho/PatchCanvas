@@ -45,6 +45,8 @@ interface GraphCommands {
     fun connect(srcId: Long, srcPort: Int, dstId: Long, dstPort: Int)
     fun disconnect(dstId: Long, dstPort: Int)
     fun setParam(id: Long, index: Int, value: Float)
+    /** One step of a sequence. Pitch in octaves from the root, not degrees. */
+    fun setStep(id: Long, index: Int, pitch: Float, gate: Boolean)
     fun collectGarbage()
 }
 
@@ -87,6 +89,11 @@ object EngineCommands : GraphCommands {
         AudioEngine.setParam(id, index, value)
     }
 
+    override fun setStep(id: Long, index: Int, pitch: Float, gate: Boolean) {
+        trace { "step $id[$index] = $pitch ${if (gate) "on" else "rest"}" }
+        AudioEngine.setStep(id, index, pitch, gate)
+    }
+
     override fun collectGarbage() { AudioEngine.collectGarbage() }
 }
 
@@ -101,17 +108,26 @@ object EngineCommands : GraphCommands {
  * Commands are ordered so the graph is never asked to reference something that is not
  * there yet: drop cables, then nodes, then add nodes, then make cables.
  */
-class GraphSync(private val commands: GraphCommands = EngineCommands) {
+class GraphSync(
+    private val commands: GraphCommands = EngineCommands,
+    /**
+     * The tuning degrees are read against. Held here because this is the one place a
+     * degree becomes a pitch; everything downstream deals in octaves.
+     */
+    private val scale: Scale = Scale.Chromatic,
+) {
 
     private var syncedNodes = emptyMap<Long, NodeType>()
     private var syncedCables = emptySet<Connection>()
     private var syncedParams = emptyMap<Long, List<Float>>()
+    private var syncedSteps = emptyMap<Long, List<Step>>()
 
     /** Forget what the engine has, so the next sync re-sends everything. */
     fun invalidate() {
         syncedNodes = emptyMap()
         syncedCables = emptySet()
         syncedParams = emptyMap()
+        syncedSteps = emptyMap()
     }
 
     fun sync(patch: Patch) {
@@ -158,9 +174,25 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
             }
         }
 
+        // Sequences, on the same terms as knobs: only what changed, and everything for
+        // a node that was just added. Degrees become octaves here and nowhere else --
+        // past this point the engine has no idea a scale was involved.
+        val steps = patch.modules
+            .filter { it.type.stepCount > 0 }
+            .associate { it.id to it.steps.toList() }
+        steps.forEach { (id, sequence) ->
+            val previous = syncedSteps[id]
+            sequence.forEachIndexed { index, step ->
+                if (previous == null || previous.getOrNull(index) != step) {
+                    commands.setStep(id, index, scale.octavesOf(step.degree), step.on)
+                }
+            }
+        }
+
         syncedNodes = nodes
         syncedCables = cables
         syncedParams = params
+        syncedSteps = steps
 
         // Whatever the audio thread retired during the last block is ours to free.
         commands.collectGarbage()
