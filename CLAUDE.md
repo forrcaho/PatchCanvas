@@ -103,6 +103,14 @@ voice out and back in. **Anything that changes what `toJson` emits changes what 
 undoable**, which is the intent; the byte-identical round trip is what stops `History`
 from recording an undo as a new edit, and `ReplaceWithTest` asserts it.
 
+**State read inside the gesture loop must go through `rememberUpdatedState`.** The
+`pointerInput(Unit)` block captures its closure exactly once and never restarts, so a
+plain value captured there is frozen at whatever it was during the first composition. The
+draw lambda is rebuilt every recomposition and has no such problem -- which is the trap:
+the undo buttons drew correctly and were simply not hittable, because the hit test was
+still reading `canUndo == false` from launch. Callbacks are safe (they delegate); values
+are not.
+
 **Signal types are advisory.** Audio, CV and gate colour the cable and the port; any
 output may patch to any input. In hardware it is all voltage, and audio-rate modulation
 lives in exactly the connections enforcement would forbid. Do not "fix" this.

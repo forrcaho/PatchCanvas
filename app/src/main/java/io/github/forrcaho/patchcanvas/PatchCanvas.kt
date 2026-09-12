@@ -724,8 +724,13 @@ fun PatchCanvas(
     fun frameFor(canvas: Size) =
         Frame(canvas, density.density, insetLeft, insetTop, insetRight, insetBottom)
 
-    val controls = CanvasControls(
-        canUndo, canRedo, onToggleOutput, onToggleInput, onUndo, onRedo,
+    // Through rememberUpdatedState, because the gesture loop below is keyed on Unit and
+    // so captures its closure exactly once. A plain val would freeze canUndo at whatever
+    // it was during the first composition -- which is false -- and the buttons would
+    // draw correctly (that lambda is rebuilt every recomposition) while never being
+    // hittable. They did exactly that on the device.
+    val controls by rememberUpdatedState(
+        CanvasControls(canUndo, canRedo, onToggleOutput, onToggleInput, onUndo, onRedo),
     )
 
     // Start the view clear of the cutout, the gesture bar and the left rail. Re-applies

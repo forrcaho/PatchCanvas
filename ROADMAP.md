@@ -542,7 +542,7 @@ Also here: per-input attenuverters, without which CV routing is unusable in prac
 
 ## Undo
 
-Done, and untried on hardware at the time of writing.
+Done and verified on the device.
 
 **One stack of whole patches, not a log of inverted commands.** A patch serialises to a
 couple of kilobytes of the JSON the autosave already produces, so fifty states cost
@@ -586,6 +586,22 @@ reach for when the last thing you did was wrong).
 
 Hidden rather than greyed, because a disabled control promises that something could
 happen there; at the start of a session nothing could.
+
+The device found the bug the suite could not, again. The buttons drew correctly and did
+nothing, because `pointerInput(Unit)` captures its closure once: the hit test was reading
+`canUndo` as it stood at launch, which is false, while the draw lambda -- rebuilt every
+recomposition -- had the truth. `rememberUpdatedState` fixes it, and it is now an
+invariant in CLAUDE.md because every future on-canvas control will meet it.
+
+Verified after the fix, with the master output live: an undo that repatches Out L sent
+exactly one command, `connect 102[0] -> 1[0]`, and the redo one the other way. No
+disconnect, no teardown -- the atomic snapshot held, so `GraphSync` never saw the patch
+with its cables cleared. In the capture the transitions are a 30ms monotonic ramp, and
+the largest single-sample step across them is 0.0762, identical to the steady-state
+saw and to the channel that was never touched. Undo is silent.
+
+History is in memory only, so it starts empty each launch. A restore-across-restart would
+need the stack in the file, and that is a patch-library question rather than an undo one.
 
 ## Phase 6 -- Subpatches
 
