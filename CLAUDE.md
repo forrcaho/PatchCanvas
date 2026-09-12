@@ -132,8 +132,8 @@ scale costs nothing. Degrees become octaves in exactly one place — `GraphSync`
 everything downstream is tuning-agnostic by construction. Scales are `.scl` files seeded
 into `getExternalFilesDir/scales`, where a user can add their own; `Scale.Chromatic` is
 the only one defined in code, and exists so the app still works when that folder is
-unreadable. **`Steps.transp` is still declared in semitones and quietly assumes 12-TET** —
-it is the one thing left that does.
+unreadable. Tuning controls are in **cents**, never semitones: a semitone is a fact about 12-TET and
+means nothing in the tunings these knobs still have to work in.
 
 **Signal types are advisory.** Audio, CV and gate colour the cable and the port; any
 output may patch to any input. In hardware it is all voltage, and audio-rate modulation

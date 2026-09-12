@@ -611,8 +611,21 @@ A horizontal bar is the right default and the wrong universal:
   A test asserts the whole shipped library plus six more fits, and that no tile overlaps
   its neighbour.
 
-  Still outstanding here: `transp` is still declared in semitones, which quietly assumes
-  12-TET -- the last thing that does.
+  **Transposition is in cents**, and so is the oscillator's tune. A semitone is a fact
+  about twelve-tone equal temperament and means nothing in 19-TET or Bohlen-Pierce, where
+  those knobs still have to work; cents are a logarithmic unit of pitch belonging to no
+  tuning in particular. Range is two octaves either way, which is also enough to reach a
+  full turn of a non-octave scale -- a tritave is 1902 cents, and a transpose that ran out
+  before the scale repeated would be the wrong control.
+
+  The sliders are **ticked at the degrees of the current scale**, taller at the tonic,
+  drawn under the bar where the name and the reading are not. Nothing snaps: cents are
+  continuous on purpose, and a knob that jumped to the nearest degree would make the
+  cent-sized adjustments the unit exists for impossible. The marks say where the notes
+  are; the hand decides whether to land on one.
+
+  Verified by measurement: asking for 700 cents produces 391.966Hz against a theoretical
+  391.995Hz, an error of 0.13 cents.
 
 - **Superseded, kept for the reasoning:** Verified working end to end on the device at last: given a
   `Clock` into its gate input, it steps the pattern at exactly the clock's tempo

@@ -144,6 +144,15 @@ data class Param(
     val curve: ParamCurve = ParamCurve.LINEAR,
     /** Only meaningful for STEPPED; ignored otherwise. */
     val choice: Choice = Choice.NUMBER,
+    /**
+     * Whether the slider is ticked at the degrees of the current scale.
+     *
+     * For the controls measured in cents. Cents are continuous and belong to no tuning,
+     * which is what makes them right -- and is also what makes an unmarked slider a poor
+     * way to land on a note. The marks say where the scale is without constraining the
+     * knob to it.
+     */
+    val marks: Boolean = false,
 ) {
     /**
      * How many options a stepped parameter offers.
@@ -233,7 +242,11 @@ object Types {
         "Osc", listOf(Port("pitch", C), Port("fm", C)), listOf(Port("out", A)),
         Color(0xFF7FD1C1),
         params = listOf(
-            Param("tune", -24f, 24f, 0f, "st", LIN),
+            // Cents rather than semitones: a semitone is a fact about twelve-tone equal
+            // temperament and means nothing in 19-TET or Bohlen-Pierce, where this knob
+            // still has to work. Cents are a logarithmic unit of pitch and belong to no
+            // tuning in particular, which is the property wanted here.
+            Param("tune", -TUNE_RANGE, TUNE_RANGE, 0f, "\u00A2", LIN, marks = true),
             // Order mirrors kWaves in nodes.cpp: saw, square, triangle, sine.
             Param("wave", 0f, 3f, 0f, "", STEP, Choice.WAVE),
         ),
@@ -274,7 +287,7 @@ object Types {
         Color(0xFF6FA8E5),
         params = listOf(
             Param("len", 1f, STEP_COUNT.toFloat(), 8f, "", STEP),
-            Param("transp", -24f, 24f, 0f, "st", LIN),
+            Param("transp", -TUNE_RANGE, TUNE_RANGE, 0f, "\u00A2", LIN, marks = true),
         ),
         stepCount = STEP_COUNT,
     )
@@ -543,6 +556,51 @@ internal fun panelKnobAt(panel: Rect, d: Float, module: PatchModule, at: Offset)
     }
     return null
 }
+
+/**
+ * Ticks where the scale's degrees fall on a slider measured in cents.
+ *
+ * Drawn under the bar rather than through it, so they read as a ruler the knob is
+ * measured against rather than as part of its value -- and under rather than over,
+ * because over is where the parameter's name and its reading already are. Nothing snaps
+ * to them: cents are
+ * continuous on purpose, and a knob that jumped to the nearest degree would make the
+ * cent-sized adjustments the unit exists for impossible. The marks say where the notes
+ * are; the hand decides whether to land on one.
+ */
+private fun DrawScope.drawScaleMarks(
+    row: Rect,
+    barTop: Float,
+    barHeight: Float,
+    d: Float,
+    param: Param,
+    scale: Scale,
+) {
+    // Degrees far enough either side to cover the range whatever the period is. One
+    // extra turn of the scale past it, then filtered by value, so a scale that repeats
+    // at a tritave is not cut short.
+    val turns = (param.max / (scale.period * 1200f)).toInt() + 2
+    val from = -turns * scale.size
+    val to = turns * scale.size
+
+    for (degree in from..to) {
+        val cents = scale.octavesOf(degree) * 1200f
+        if (cents < param.min || cents > param.max) continue
+
+        val tonic = degree.mod(scale.size) == 0
+        val x = row.left + row.width * param.positionOf(cents)
+        val top = barTop + barHeight + 2f * d
+        drawLine(
+            color = if (tonic) MarkTonic else MarkDegree,
+            start = Offset(x, top),
+            end = Offset(x, top + if (tonic) 7f * d else 4f * d),
+            strokeWidth = if (tonic) 2f * d else 1.5f * d,
+        )
+    }
+}
+
+private val MarkDegree = Color(0xFF5A6675)
+private val MarkTonic = Color(0xFFAAB4C2)
 
 private val ChipFill = Color(0xFF1E232B)
 private val ChipEdge = Color(0xFF3A424E)
@@ -2016,6 +2074,9 @@ internal const val MAX_PARAMS = 4
  */
 internal const val STEP_COUNT = 16
 
+/** Mirrors kTuneRange in nodes.cpp: how far a tuning control reaches, in cents. */
+internal const val TUNE_RANGE = 2400f
+
 
 /**
  * What a new sequencer plays.
@@ -2404,6 +2465,10 @@ private fun DrawScope.drawPanel(
             size = Size(filled.coerceAtLeast(barHeight), barHeight),
             cornerRadius = radius,
         )
+
+        if (param.marks) {
+            drawScaleMarks(row, barTop, barHeight, d, param, scale)
+        }
     }
 }
 

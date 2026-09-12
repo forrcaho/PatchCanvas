@@ -19,6 +19,15 @@ inline bool gateHigh(float value) { return value > 0.5f; }
  * gives modules parameters, so this is what Steps plays until then -- chosen to be
  * obviously musical, so a wrong clock or a dead gate is audible rather than ambiguous.
  */
+/**
+ * How far tuning controls reach, in cents.
+ *
+ * Two octaves either way, which is also enough for a full turn of a non-octave scale --
+ * Bohlen-Pierce's tritave is 1902 cents, and a transpose that could not reach one period
+ * would be a control that ran out before the scale did.
+ */
+constexpr float kTuneRange = 2400.0f;
+
 constexpr float kPattern[8] = {
         0.0f, 3.0f / 12.0f, 7.0f / 12.0f, 10.0f / 12.0f,
         12.0f / 12.0f, 10.0f / 12.0f, 7.0f / 12.0f, 3.0f / 12.0f,
@@ -50,7 +59,7 @@ void OscNode::process(int32_t frames) {
         // Per sample rather than per block, deliberately: signal types are advisory, so
         // patching audio into an FM input is allowed and is a real technique. Updating
         // only at block rate would quantise that to the control rate and ruin it.
-        const float octaves = clampf(pitch[i] + fm[i] + tuneSemitones_ / 12.0f, -6.0f, 6.0f);
+        const float octaves = clampf(pitch[i] + fm[i] + tuneCents_ / 1200.0f, -6.0f, 6.0f);
         osc_.SetFreq(kMiddleC * std::exp2(octaves));
         o[i] = osc_.Process();
     }
@@ -58,7 +67,7 @@ void OscNode::process(int32_t frames) {
 
 void OscNode::setParam(int32_t index, float value) {
     switch (index) {
-        case 0: tuneSemitones_ = clampf(value, -24.0f, 24.0f); break;
+        case 0: tuneCents_ = clampf(value, -kTuneRange, kTuneRange); break;
         case 1: {
             // Discrete, so the knob lands on a waveform rather than between two.
             const auto wave = static_cast<uint8_t>(clampf(value, 0.0f, 3.0f) + 0.5f);
@@ -219,7 +228,7 @@ void StepsNode::process(int32_t frames) {
         }
         wasHigh_ = high;
 
-        pitch[i] = pitch_[step_] + transpose_ / 12.0f;
+        pitch[i] = pitch_[step_] + transposeCents_ / 1200.0f;
         // A step whose gate is off is a rest: the clock still advances through it, and
         // the pitch still holds, but nothing is triggered. Anding with the clock rather
         // than replacing it keeps the gate's shape -- the sequencer decides whether a
@@ -235,7 +244,7 @@ void StepsNode::setParam(int32_t index, float value) {
             if (step_ >= length_) step_ = 0;
             break;
         }
-        case 1: transpose_ = clampf(value, -24.0f, 24.0f); break;
+        case 1: transposeCents_ = clampf(value, -kTuneRange, kTuneRange); break;
         default: break;
     }
 }

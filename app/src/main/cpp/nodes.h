@@ -58,7 +58,8 @@ public:
 
 private:
     daisysp::Oscillator osc_;
-    float tuneSemitones_ = 0.0f;
+    /** Cents, so a tuning with no semitone in it is still expressible. */
+    float tuneCents_ = 0.0f;
 };
 
 /** State-variable filter, lowpass tap. */
@@ -139,7 +140,8 @@ public:
 private:
     int32_t step_ = 0;
     int32_t length_ = 8;
-    float transpose_ = 0.0f;
+    /** Cents. See OscNode::tuneCents_. */
+    float transposeCents_ = 0.0f;
     bool wasHigh_ = false;
     /** Octaves from the root, which is what every pitch on this boundary means. */
     float pitch_[kSteps] = {};
