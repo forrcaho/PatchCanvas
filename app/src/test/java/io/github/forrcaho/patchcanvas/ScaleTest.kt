@@ -70,6 +70,69 @@ class ScaleTest {
      * Bohlen-Pierce repeats at the twelfth, so its period is a 3:1 frequency ratio and
      * an "octave" never appears in it at all.
      */
+    /**
+     * The reason the model is a list rather than a division count. A typo in a step
+     * pattern gives a scale that is subtly out of tune rather than obviously broken, so
+     * the sums are asserted rather than eyeballed.
+     */
+    @Test
+    fun `step patterns sum to their division`() {
+        fun check(name: String, divisions: Int, steps: List<Int>) {
+            assertEquals("$name steps $steps", divisions, steps.sum())
+            val scale = Scale.steps(name, divisions, steps)
+            assertEquals("$name degree count", steps.size, scale.size)
+            assertEquals("$name closes its period", 1f, scale.octavesOf(steps.size), 1e-6f)
+        }
+        check("Major", 12, listOf(2, 2, 1, 2, 2, 2, 1))
+        check("Minor", 12, listOf(2, 1, 2, 2, 1, 2, 2))
+        check("Harmonic minor", 12, listOf(2, 1, 2, 2, 1, 3, 1))
+        check("Minor pent", 12, listOf(3, 2, 2, 3, 2))
+        check("Whole tone", 12, listOf(2, 2, 2, 2, 2, 2))
+    }
+
+    /**
+     * What the scale model is actually for. An equal division is the easy case; the
+     * scales worth having are the ones whose character is the pattern of unequal steps,
+     * so at least one must survive the round trip with its steps intact.
+     */
+    @Test
+    fun `a diatonic scale keeps its tones and semitones`() {
+        val major = Scale.byName("Major")!!
+        assertEquals(7, major.size)
+        val semitones = (0 until major.size).map { d ->
+            Math.round((major.octavesOf(d + 1) - major.octavesOf(d)) * 12f)
+        }
+        assertEquals(listOf(2, 2, 1, 2, 2, 2, 1), semitones)
+    }
+
+    @Test
+    fun `most of the shipped scales have unequal steps`() {
+        val unequal = Scale.all.count { scale ->
+            val gaps = (0 until scale.size).map { scale.octavesOf(it + 1) - scale.octavesOf(it) }
+            gaps.max() - gaps.min() > 1e-5f
+        }
+        assertTrue("only $unequal of ${Scale.all.size} are unequal", unequal >= 5)
+    }
+
+    /** 9:8 and 10:9 are both whole tones and are not the same size. */
+    @Test
+    fun `just intonation has two different whole tones`() {
+        val just = Scale.byName("Just major")!!
+        val first = just.octavesOf(1) - just.octavesOf(0)
+        val second = just.octavesOf(2) - just.octavesOf(1)
+        assertTrue("both were $first", abs(first - second) > 1e-4f)
+        // The syntonic comma, 81:80, is what separates them.
+        val comma = Math.pow(2.0, (first - second).toDouble())
+        assertTrue("ratio was $comma", abs(comma - 81.0 / 80.0) < 1e-3)
+    }
+
+    @Test
+    fun `a ratio scale places its degrees where the ratios say`() {
+        val just = Scale.byName("Just major")!!
+        // The fifth, 3:2, is the fourth degree.
+        assertEquals(Math.log(1.5) / Math.log(2.0), just.octavesOf(4).toDouble(), 1e-6)
+    }
+
     @Test
     fun `Bohlen-Pierce repeats at a tritave, not an octave`() {
         val bp = Scale.byName("Bohlen-Pierce")
