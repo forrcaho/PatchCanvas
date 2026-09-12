@@ -200,7 +200,10 @@ class MainActivity : ComponentActivity() {
      */
     private fun restore(json: String?) {
         val snapshot = json?.let { patchFromJson(it) } ?: return
-        patch.replaceWith(snapshot)
+        // Pulse whatever moved. At graph level a knob is not drawn at all, so without
+        // this an undone parameter is a change in the sound with nothing on screen
+        // accounting for it.
+        patch.flash(patch.replaceWith(snapshot))
     }
 
     /**

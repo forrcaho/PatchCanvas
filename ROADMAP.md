@@ -617,6 +617,21 @@ document, not the view -- the camera does not move and neither should the thing 
 looking at. Free modules are rebuilt as new objects, so without it every undo slammed the
 panel shut at exactly the moment you wanted to watch.
 
+**An undo pulses whatever it disturbed**, for 450ms, in warm white over the module's
+outline. The graph draws no parameters at all, so an undone knob was a change in the
+sound with nothing on screen accounting for it -- "what did that?" with no answer.
+
+Re-opening the module's panel was the other candidate and was rejected: opening a panel
+is a big view change and undo is a small, repeatable action, so walking back four steps
+would become panel-opens, panel-closes, different-panel-opens. The pulse is non-modal,
+costs nothing when you are not looking at it, and works uniformly for every kind of
+change rather than only the parameter case -- a moved module, a repatched cable (both
+ends), a module that reappears. If you want the detail, the module is right there to tap.
+
+The change set is computed before anything moves and `replaceWith` returns it rather than
+pulsing anything itself, so loading a patch from a file can stay silent while an undo does
+not.
+
 History is in memory only, so it starts empty each launch. A restore-across-restart would
 need the stack in the file, and that is a patch-library question rather than an undo one.
 

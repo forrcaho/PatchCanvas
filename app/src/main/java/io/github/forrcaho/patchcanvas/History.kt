@@ -87,7 +87,9 @@ class History(private val limit: Int = 50) {
  * would slam it shut -- which is the one moment you most want to watch, since the knob
  * you just moved is on screen and about to move back.
  */
-fun Patch.replaceWith(source: Patch) {
+fun Patch.replaceWith(source: Patch): Set<Long> {
+    val changed = changesFrom(source)
+
     Snapshot.withMutableSnapshot {
         val openId = modules.firstOrNull { it.expanded }?.id
 
@@ -112,4 +114,43 @@ fun Patch.replaceWith(source: Patch) {
         // to have open and the panel closing is the right answer.
         openId?.let { id -> module(id)?.expanded = true }
     }
+
+    return changed
+}
+
+/**
+ * Which modules [source] would disturb, computed before anything moves.
+ *
+ * The caller decides what to do with it; `replaceWith` deliberately does not pulse
+ * anything itself, so loading a patch from a file can stay silent while an undo does not.
+ * Ids of modules that vanish are included and simply never drawn, which is cheaper than
+ * filtering them and reads the same.
+ */
+private fun Patch.changesFrom(source: Patch): Set<Long> {
+    val before = modules.associateBy { it.id }
+    val after = source.modules.associateBy { it.id }
+    val changed = mutableSetOf<Long>()
+
+    changed += before.keys - after.keys
+    changed += after.keys - before.keys
+    after.forEach { (id, now) ->
+        val was = before[id] ?: return@forEach
+        // toList() on both sides deliberately: SnapshotStateList does not implement
+        // structural equality, so comparing the lists directly is an identity check
+        // that is always false, and every module in the patch would pulse.
+        if (was.position != now.position || was.params.toList() != now.params.toList()) {
+            changed += id
+        }
+    }
+
+    // A cable that appears or disappears changes both of the modules it touches; only
+    // one of them may be visible on screen, so flag each.
+    val mine = connections.toSet()
+    val theirs = source.connections.toSet()
+    ((mine - theirs) + (theirs - mine)).forEach {
+        changed += it.from.moduleId
+        changed += it.to.moduleId
+    }
+
+    return changed
 }

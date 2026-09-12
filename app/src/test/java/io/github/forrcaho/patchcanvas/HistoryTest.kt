@@ -279,3 +279,97 @@ class HistoryButtonGeometryTest {
         assertTrue("above the gesture bar", undo.bottom <= 1080f - frame.insetBottom)
     }
 }
+
+
+/**
+ * What an undo pulses. The graph draws no parameters at all, so an undone knob is a
+ * change in the sound with nothing on screen accounting for it; the pulse is the only
+ * thing that says which module it came from, and pointing at the wrong one would be
+ * worse than pointing at nothing.
+ */
+class RestoreChangeSetTest {
+
+    /** Applies [edit] to a copy of the demo patch and returns what restoring it flags. */
+    private fun changesAfter(edit: Patch.() -> Unit): Set<Long> {
+        val live = demoPatch()
+        val snapshot = live.toJson()
+        live.edit()
+        return live.replaceWith(patchFromJson(snapshot)!!)
+    }
+
+    @Test
+    fun `an unchanged patch flags nothing`() {
+        assertTrue(changesAfter { }.isEmpty())
+    }
+
+    @Test
+    fun `a knob flags only its own module`() {
+        val filter = demoPatch().free.first { it.type.name == "Filter" }.id
+        assertEquals(
+            setOf(filter),
+            changesAfter { module(filter)!!.setParam(0, 77f) },
+        )
+    }
+
+    @Test
+    fun `a move flags only the module that moved`() {
+        val osc = demoPatch().free.first { it.type.name == "Osc" }.id
+        assertEquals(
+            setOf(osc),
+            changesAfter { module(osc)!!.position = Offset(1f, 1f) },
+        )
+    }
+
+    @Test
+    fun `a cable flags both of the modules it touches`() {
+        val live = demoPatch()
+        val osc = live.free.first { it.type.name == "Osc" }.id
+        val vca = live.free.first { it.type.name == "VCA" }.id
+
+        val flagged = changesAfter {
+            connect(
+                PortRef(osc, PortDirection.OUTPUT, 0),
+                PortRef(vca, PortDirection.INPUT, 0),
+            )
+        }
+
+        // The replaced cable's old source counts too: it lost a connection.
+        assertTrue("the new source", osc in flagged)
+        assertTrue("the destination", vca in flagged)
+    }
+
+    @Test
+    fun `a module that appears on restore is flagged`() {
+        val live = demoPatch()
+        val snapshot = live.toJson()
+        val doomed = live.free.first { it.type.name == "Env" }
+        live.remove(doomed)
+
+        assertTrue(doomed.id in live.replaceWith(patchFromJson(snapshot)!!))
+    }
+
+    @Test
+    fun `a rail knob flags the rail`() {
+        assertEquals(
+            setOf(OUT_ID),
+            changesAfter { module(OUT_ID)!!.setParam(0, 0.25f) },
+        )
+    }
+
+    @Test
+    fun `flashing nothing does not fire a pulse`() {
+        val patch = demoPatch()
+        val before = patch.flash.serial
+        patch.flash(emptySet())
+        assertEquals(before, patch.flash.serial)
+    }
+
+    @Test
+    fun `the same set twice still fires, so undo and redo both pulse`() {
+        val patch = demoPatch()
+        patch.flash(setOf(1L))
+        val first = patch.flash.serial
+        patch.flash(setOf(1L))
+        assertTrue(patch.flash.serial > first)
+    }
+}

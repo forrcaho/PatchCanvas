@@ -1,5 +1,8 @@
 package io.github.forrcaho.patchcanvas
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -461,6 +464,28 @@ class Patch {
      */
     var inputEnabled by mutableStateOf(false)
 
+    /**
+     * Modules to pulse, after an undo moved something you were not looking at.
+     *
+     * View state, like the camera and the open panel: never serialised, invisible to the
+     * engine. At graph level a parameter is not drawn at all, so undoing a knob was pure
+     * audio with no visible cause -- this answers "what did that?" without taking the
+     * screen, which binding a whole panel to a repeatable button would.
+     *
+     * The serial makes the same set twice still fire; without it, undo and redo of one
+     * knob would flash once and then look broken.
+     */
+    var flash by mutableStateOf(Flash.none)
+        private set
+
+    fun flash(ids: Set<Long>) {
+        if (ids.isNotEmpty()) flash = Flash(ids, flash.serial + 1)
+    }
+
+    data class Flash(val ids: Set<Long>, val serial: Int) {
+        companion object { val none = Flash(emptySet(), 0) }
+    }
+
     private var nextId = FIRST_FREE_ID
 
     init {
@@ -757,6 +782,17 @@ fun PatchCanvas(
         CanvasControls(canUndo, canRedo, onToggleOutput, onToggleInput, onUndo, onRedo),
     )
 
+    // The pulse that says what an undo just touched. Snapped to full and faded out
+    // rather than eased both ways: the onset should be simultaneous with the sound
+    // changing, and an attack ramp would put it late.
+    val flash = patch.flash
+    val pulse = remember { Animatable(0f) }
+    LaunchedEffect(flash.serial) {
+        if (flash.ids.isEmpty()) return@LaunchedEffect
+        pulse.snapTo(1f)
+        pulse.animateTo(0f, tween(FLASH_MS, easing = LinearEasing))
+    }
+
     // Start the view clear of the cutout, the gesture bar and the left rail. Re-applies
     // while the user has not moved the camera, so a rotation still lands well.
     LaunchedEffect(insetLeft, insetTop, camera.userMoved) {
@@ -1009,6 +1045,9 @@ fun PatchCanvas(
                     showLabels = camera.zoom >= Camera.LABEL_ZOOM,
                     alpha = 1f,
                 )
+                if (module.id in flash.ids && pulse.value > 0f) {
+                    drawFlash(module.bounds, 1f, pulse.value, 3f / camera.zoom)
+                }
             }
         }
 
@@ -1049,6 +1088,9 @@ fun PatchCanvas(
                     cornerRadius = CornerRadius(PatchModule.CORNER * d, PatchModule.CORNER * d),
                     style = Stroke(width = 2.5f * d),
                 )
+            }
+            if (rail.id in flash.ids && pulse.value > 0f) {
+                drawFlash(frame.railRect(rail), d, pulse.value, 3f * d)
             }
         }
 
@@ -1151,6 +1193,26 @@ private fun Patch.hitModule(camera: Camera, frame: Frame, screen: Offset): Patch
     pinned.firstOrNull { frame.railRect(it).contains(screen) }?.let { return it }
     val world = camera.toWorld(screen)
     return free.lastOrNull { it.bounds.contains(world) }
+}
+
+/**
+ * How long the pulse lasts. Long enough to catch out of the corner of an eye, short
+ * enough that a second undo half a second later reads as a second event rather than one
+ * continuous glow.
+ */
+private const val FLASH_MS = 450
+
+/** Warm white rather than the module's accent: this means "changed", not "is a filter". */
+private val FlashColor = Color(0xFFE8EEF5)
+
+private fun DrawScope.drawFlash(rect: Rect, unit: Float, alpha: Float, strokeWidth: Float) {
+    drawRoundRect(
+        color = FlashColor.copy(alpha = alpha),
+        topLeft = rect.topLeft,
+        size = rect.size,
+        cornerRadius = CornerRadius(PatchModule.CORNER * unit, PatchModule.CORNER * unit),
+        style = Stroke(width = strokeWidth),
+    )
 }
 
 // ---------------------------------------------------------------- history buttons

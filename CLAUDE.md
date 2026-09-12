@@ -25,6 +25,10 @@ proposing direction. This file is the operating manual.
 Deploy and drive on a device:
 
 ```sh
+./gradlew assembleDebug                 # ALWAYS before installing: testDebugUnitTest
+                                        # compiles but does not reassemble the APK, so
+                                        # installing after a test run ships the previous
+                                        # build and the device shows you a bug you fixed
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 adb shell am force-stop io.github.forrcaho.patchcanvas
 adb shell am start -n io.github.forrcaho.patchcanvas/.MainActivity
@@ -102,6 +106,12 @@ the cables are cleared, and the engine renders an empty patch faithfully -- fadi
 voice out and back in. **Anything that changes what `toJson` emits changes what is
 undoable**, which is the intent; the byte-identical round trip is what stops `History`
 from recording an undo as a new edit, and `ReplaceWithTest` asserts it.
+
+**Compose's state collections are not their plain equivalents.** `SnapshotStateList`
+does not implement structural equality, so `a.params == b.params` is an identity check
+that is always false -- which made every module in the patch pulse on every undo.
+`toList()` both sides before comparing. Treat any `==` on a snapshot collection as a bug
+until proven otherwise.
 
 **State read inside the gesture loop must go through `rememberUpdatedState`.** The
 `pointerInput(Unit)` block captures its closure exactly once and never restarts, so a
