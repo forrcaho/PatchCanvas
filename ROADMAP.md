@@ -576,6 +576,27 @@ A horizontal bar is the right default and the wrong universal:
   last correctly wrapping past the period. A deliberately malformed file alongside it is
   skipped with a log line.
 
+  **Four things learned by using it.** The loop length was invisible: sixteen columns
+  always drew the same whether six were playing or all of them, so the boundary is now a
+  line and the columns past it are properly dark rather than faintly dim. They still hold
+  their notes, because coming back from a short loop to a long one and finding the old
+  bars intact is worth keeping.
+
+  A silenced step used to draw a grey box at the pitch it remembered. That was a lie
+  about what you would hear -- a rest is the absence of a note, not a note in another
+  colour -- so it draws nothing now. The degree is still remembered underneath, which is
+  what lets tapping the same cell bring the note back.
+
+  A note scrolled out of view left a column looking empty, which was indistinguishable
+  from a rest. Notes above or below the visible rows now leave a triangle on the edge
+  they went past.
+
+  And the sequencer shows what it is playing. That needed the first value to travel back
+  up out of the engine: commands go down a queue because they must all arrive and in
+  order, but a playhead is the opposite -- only the newest matters and a missed update is
+  a frame nobody saw -- so it is an atomic the audio thread publishes and the interface
+  polls per frame, only while a sequencer's panel is open.
+
   Still outstanding here: a scale picker (the patch holds a scale and persists it, but
   nothing in the UI changes it), and `transp` is still declared in semitones, which
   quietly assumes 12-TET.

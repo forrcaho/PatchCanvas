@@ -64,6 +64,17 @@ public:
     bool postSetParam(int64_t id, int32_t paramIndex, float value);
     /** One step of a sequence. Pitch in octaves from the root. */
     bool postSetStep(int64_t id, int32_t index, float pitch, bool gate);
+    /**
+     * Which step a sequencer is on, or -1 if it is not running or not a sequencer.
+     *
+     * The one thing that travels back up. Commands go down a queue because they must all
+     * arrive and in order; this is the opposite -- a value whose only reader is a
+     * repaint, where the newest is the only one that matters and a missed update is a
+     * frame nobody saw. So it is a published atomic rather than a queue, and the audio
+     * thread's side of it is one relaxed store per sequencer per block.
+     */
+    int32_t stepOf(int64_t id) const;
+
     /** Frees everything the audio thread handed back. Never called from the callback. */
     void collectGarbage();
     /** Frees anything still owned, after the stream has stopped. */
@@ -143,6 +154,13 @@ private:
     int32_t freeSlot() const;
     void rebuildOrder();
     void retire(int32_t slot);
+
+    /** Published by the audio thread, read by the interface. Never the reverse. */
+    struct Telemetry {
+        std::atomic<int64_t> id{0};
+        std::atomic<int32_t> step{-1};
+    };
+    std::array<Telemetry, kMaxNodes> telemetry_{};
 
     std::array<Record, kMaxNodes> nodes_{};
     std::array<int32_t, kMaxNodes> order_{};

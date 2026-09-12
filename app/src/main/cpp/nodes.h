@@ -134,6 +134,7 @@ public:
     void process(int32_t frames) override;
     void setParam(int32_t index, float value) override;
     void setStep(int32_t index, float pitch, bool gate) override;
+    int32_t position() const override { return step_; }
 
 private:
     int32_t step_ = 0;

@@ -315,6 +315,40 @@ void commandsSurviveAPartialBlock() {
     check(energy(graph.outputL(), kBlockSize / 2) > 0.0f, "a half block still renders");
 }
 
+/**
+ * The one value that travels back up. Everything else crosses as a command into a queue;
+ * this is published for a repaint, so it has to be current, and it has to stop being
+ * claimed the moment the node it describes is gone.
+ */
+void theGraphReportsWhereASequencerHasGot() {
+    std::printf("the graph reports where a sequencer has got to\n");
+    Graph graph;
+    graph.setSampleRate(48000);
+
+    graph.postAdd(1, NodeType::Clock);
+    graph.postAdd(2, NodeType::Steps);
+    graph.postAdd(3, NodeType::Out);
+    graph.postConnect(1, 0, 2, 0);
+    graph.postConnect(2, 0, 3, 0);
+    graph.postSetParam(1, 0, 300.0f); // fast, so a few steps pass quickly
+    graph.applyCommands();
+
+    check(graph.stepOf(99) == -1, "an id nothing owns reports nothing");
+    check(graph.stepOf(1) == -1, "a clock is not a sequencer");
+
+    graph.process(kBlockSize);
+    const int32_t first = graph.stepOf(2);
+    check(first >= 0, "a sequencer reports a step once it has run");
+
+    // 300bpm at 48k is 9600 frames a beat; run well past one.
+    for (int i = 0; i < 600; ++i) graph.process(kBlockSize);
+    check(graph.stepOf(2) != first, "and the step advances with the clock");
+
+    graph.postRemove(2);
+    graph.applyCommands();
+    check(graph.stepOf(2) == -1, "a removed sequencer stops being reported");
+}
+
 } // namespace
 
 int main() {
@@ -329,6 +363,7 @@ int main() {
     everyNodeInACycleStillRuns();
     duplicateAndOverfullAreRefusedNotCrashed();
     commandsSurviveAPartialBlock();
+    theGraphReportsWhereASequencerHasGot();
 
     std::printf("\n%d checks, %d failed\n", checks, failures);
     std::fflush(stdout);

@@ -66,6 +66,16 @@ object AudioEngine {
     fun setStep(id: Long, index: Int, pitch: Float, gate: Boolean): Boolean =
         available && started && nativeSetStep(id, index, pitch, gate)
 
+    /**
+     * Which step a sequencer is on, or -1 if it is not running.
+     *
+     * Polled per frame while a sequencer's panel is open, and nowhere else -- it reads
+     * one atomic the audio thread publishes, so it is cheap, but it is still a JNI hop
+     * per call and there is no reason to make it when nothing is watching.
+     */
+    fun stepOf(id: Long): Int =
+        if (available && started) nativeStepOf(id) else -1
+
     /** Frees nodes the audio thread retired. Cheap, and never on the audio thread. */
     fun collectGarbage() {
         if (available && started) nativeCollectGarbage()
@@ -130,6 +140,7 @@ object AudioEngine {
     private external fun nativeDisconnect(dstId: Long, dstPort: Int): Boolean
     private external fun nativeSetParam(id: Long, index: Int, value: Float): Boolean
     private external fun nativeSetStep(id: Long, index: Int, pitch: Float, gate: Boolean): Boolean
+    private external fun nativeStepOf(id: Long): Int
     private external fun nativeCollectGarbage()
     private external fun nativeStatus(): String
     private external fun nativeArmCapture(enabled: Boolean, path: String)

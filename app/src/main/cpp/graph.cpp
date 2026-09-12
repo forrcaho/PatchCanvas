@@ -45,6 +45,16 @@ bool Graph::postDisconnect(int64_t dstId, int32_t dstPort) {
     return commands_.push(cmd);
 }
 
+int32_t Graph::stepOf(int64_t id) const {
+    if (id == 0) return -1;
+    for (const auto &entry : telemetry_) {
+        if (entry.id.load(std::memory_order_relaxed) == id) {
+            return entry.step.load(std::memory_order_relaxed);
+        }
+    }
+    return -1;
+}
+
 bool Graph::postSetStep(int64_t id, int32_t index, float pitch, bool gate) {
     Command cmd;
     cmd.type = CommandType::SetStep;
@@ -135,6 +145,13 @@ void Graph::retire(int32_t slot) {
             if (ref.sourceIndex == slot) repatch(ref, -1, 0);
         }
     }
+    // Stop claiming this id, or the interface would go on drawing a playhead for a
+    // sequencer that has been deleted. Either store alone would be enough -- no match
+    // and no value both read as "nothing to draw" -- and both are here because the cost
+    // is two relaxed stores on a path that runs once per deletion.
+    telemetry_[slot].id.store(0, std::memory_order_relaxed);
+    telemetry_[slot].step.store(-1, std::memory_order_relaxed);
+
     if (outIndex_ == slot) outIndex_ = -1;
     if (inIndex_ == slot) inIndex_ = -1;
 
@@ -328,6 +345,15 @@ void Graph::process(int32_t frames) {
             }
         }
         node->process(frames);
+
+        // Publish where a sequencer has got to. One relaxed store each, for the only
+        // thing that travels back up: nothing reads it but a repaint, so a torn read is
+        // a frame that draws the previous step and the next frame corrects it.
+        const int32_t at = node->position();
+        if (at >= 0) {
+            telemetry_[order_[i]].id.store(record.id, std::memory_order_relaxed);
+            telemetry_[order_[i]].step.store(at, std::memory_order_relaxed);
+        }
     }
 
     reapDying(frames);

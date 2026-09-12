@@ -112,6 +112,11 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetStep(JNIEnv *, jobject,
                                                                            : JNI_FALSE;
 }
 
+JNIEXPORT jint JNICALL
+Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeStepOf(JNIEnv *, jobject, jlong id) {
+    return engine().graph().stepOf(id);
+}
+
 /** Frees whatever the audio thread handed back. Deliberately not on the audio thread. */
 JNIEXPORT void JNICALL
 Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeCollectGarbage(JNIEnv *, jobject) {

@@ -922,6 +922,24 @@ fun PatchCanvas(
         CanvasControls(canUndo, canRedo, onToggleOutput, onToggleInput, onUndo, onRedo),
     )
 
+    // What the sequencer is playing, polled per frame and only while its panel is open.
+    // A poll rather than a push because the audio thread cannot call into the JVM, and
+    // the newest value is the only one a repaint wants -- a step missed between frames is
+    // a step nobody could have seen.
+    val openModule = patch.modules.firstOrNull { it.expanded }
+    var playingStep by remember { mutableIntStateOf(-1) }
+    LaunchedEffect(openModule?.id, openModule?.type?.stepCount) {
+        val id = openModule?.takeIf { it.type.stepCount > 0 }?.id
+        if (id == null) {
+            playingStep = -1
+            return@LaunchedEffect
+        }
+        while (true) {
+            withFrameNanos { }
+            playingStep = AudioEngine.stepOf(id)
+        }
+    }
+
     // The pulse that says what an undo just touched. Snapped to full and faded out
     // rather than eased both ways: the onset should be simultaneous with the sound
     // changing, and an attack ramp would put it late.
@@ -1277,7 +1295,7 @@ fun PatchCanvas(
         }
 
         patch.modules.firstOrNull { it.expanded }?.let { open ->
-            drawPanel(open, patch, panelRect(frame), d, screenMeasurer, patch.scale)
+            drawPanel(open, patch, panelRect(frame), d, screenMeasurer, patch.scale, playingStep)
         }
 
         // After the panel, so they float over it rather than being buried by it. Undo is
@@ -1391,8 +1409,10 @@ private fun DrawScope.drawFlash(rect: Rect, unit: Float, alpha: Float, strokeWid
 private val GridLine = Color(0xFF232A33)
 private val GridCell = Color(0xFF12151A)
 private val GridTonic = Color(0xFF26333F)
-private val GridOutside = Color(0xFF0D0F13)
-private val GridRest = Color(0xFF4A5460)
+private val GridDisabled = Color(0xFF0B0D10)
+private val GridLoopEdge = Color(0xFF5A6675)
+private val GridPlayhead = Color(0x26FFFFFF)
+private val GridPlaying = Color(0xFFF2F6FB)
 
 /**
  * Steps across, scale degrees down.
@@ -1412,6 +1432,7 @@ private fun DrawScope.drawStepGrid(
     scale: Scale,
     accent: Color,
     measurer: TextMeasurer,
+    playingStep: Int,
 ) {
     val columns = module.type.stepCount
     val rows = gridRows(area, d)
@@ -1423,6 +1444,19 @@ private fun DrawScope.drawStepGrid(
     // Steps past the loop length still exist and are still editable; they simply are not
     // reached. Dimming them says so without hiding the work already in them.
     val length = module.params.getOrNull(0)?.toInt() ?: columns
+
+    val topDegree = module.gridBottom + rows - 1
+
+    // The column being played, behind the cells so a lit note still reads as a note.
+    // Only when it is inside the loop: a length change can leave the engine reporting a
+    // step that is no longer reached until the next clock edge.
+    if (playingStep in 0 until minOf(length, columns)) {
+        drawRect(
+            color = GridPlayhead,
+            topLeft = Offset(area.left + playingStep * cellW, area.top),
+            size = Size(cellW, area.height),
+        )
+    }
 
     repeat(rows) { row ->
         val degree = module.gridBottom + (rows - 1 - row)
@@ -1438,29 +1472,34 @@ private fun DrawScope.drawStepGrid(
                 Size(cellW - inset * 2f, cellH - inset * 2f),
             )
 
+            // A silenced step draws nothing at all. It still remembers its degree --
+            // which is what lets tapping the same cell bring the note back -- but a rest
+            // is the absence of a note, not a note in a different colour, and drawing one
+            // where nothing sounds was simply a lie about what you would hear.
+            val sounds = here && step.on
             val fill = when {
-                here && step.on -> accent
-                here -> GridRest
+                sounds -> if (live) accent else accent.copy(alpha = 0.22f)
+                !live -> GridDisabled
                 tonic -> GridTonic
-                !live -> GridOutside
                 else -> GridCell
             }
             drawRoundRect(
-                color = if (live || here) fill else fill.copy(alpha = 0.55f),
+                color = fill,
                 topLeft = cell.topLeft,
                 size = cell.size,
                 cornerRadius = radius,
             )
 
-            // A rest reads as an outline rather than a fill: the step still holds this
-            // pitch, it just does not fire, and an empty cell would lose that.
-            if (here && !step.on) {
+            // The note actually sounding right now, ringed rather than recoloured: the
+            // accent already means "there is a note here", and a second colour for
+            // "and it is happening" would compete with it.
+            if (sounds && column == playingStep) {
                 drawRoundRect(
-                    color = accent.copy(alpha = 0.8f),
+                    color = GridPlaying,
                     topLeft = cell.topLeft,
                     size = cell.size,
                     cornerRadius = radius,
-                    style = Stroke(width = 1.5f * d),
+                    style = Stroke(width = 2f * d),
                 )
             }
         }
@@ -1488,6 +1527,50 @@ private fun DrawScope.drawStepGrid(
                 area.left - label.size.width - 8f * d,
                 top + (cellH - label.size.height) / 2f,
             ),
+        )
+    }
+
+    // Where the loop turns over. The columns past it are already darker, but a boundary
+    // is a position rather than a shade, and counting sixteen dim squares to find it is
+    // exactly the work this saves.
+    if (length in 1 until columns) {
+        val x = area.left + length * cellW
+        drawLine(
+            color = GridLoopEdge,
+            start = Offset(x, area.top),
+            end = Offset(x, area.bottom),
+            strokeWidth = 2f * d,
+        )
+    }
+
+    // A note scrolled out of sight leaves a mark on the edge it went past, so a column
+    // is never silently empty -- which was indistinguishable from a rest, and is the one
+    // thing the grid should never be ambiguous about.
+    repeat(columns) { column ->
+        val step = module.steps.getOrNull(column) ?: return@repeat
+        if (!step.on) return@repeat
+        val above = step.degree > topDegree
+        if (!above && step.degree >= module.gridBottom) return@repeat
+
+        val live = column < length
+        val centreX = area.left + (column + 0.5f) * cellW
+        val edgeY = if (above) area.top else area.bottom
+        val point = if (above) edgeY + 1f * d else edgeY - 1f * d
+        val base = if (above) edgeY + 8f * d else edgeY - 8f * d
+        val half = 6f * d
+
+        // A marker sounds the same way a cell does, or a note you cannot see would be
+        // the one note the playhead never acknowledges.
+        val marker = Path().apply {
+            moveTo(centreX, point)
+            lineTo(centreX - half, base)
+            lineTo(centreX + half, base)
+            close()
+        }
+        drawPath(
+            marker,
+            color = if (column == playingStep) GridPlaying
+            else accent.copy(alpha = if (live) 0.9f else 0.25f),
         )
     }
 }
@@ -2033,6 +2116,7 @@ private fun DrawScope.drawPanel(
     d: Float,
     measurer: TextMeasurer,
     scale: Scale,
+    playingStep: Int,
 ) {
     val corner = CornerRadius(14f * d, 14f * d)
 
@@ -2086,7 +2170,9 @@ private fun DrawScope.drawPanel(
     }
 
     if (module.type.stepCount > 0) {
-        drawStepGrid(panelGrid(panel, d), d, module, scale, module.type.accent, measurer)
+        drawStepGrid(
+            panelGrid(panel, d), d, module, scale, module.type.accent, measurer, playingStep,
+        )
     }
 
     // Knobs.

@@ -56,6 +56,14 @@ public:
         (void) gate;
     }
 
+    /**
+     * Where a sequencer has got to, or -1 for everything that is not one.
+     *
+     * Read on the audio thread only, by the graph, which republishes it through an
+     * atomic the interface can see. Nothing outside the audio thread calls this.
+     */
+    virtual int32_t position() const { return -1; }
+
     virtual void process(int32_t frames) = 0;
 
     void setInput(int32_t port, const float *buffer) { inputs_[port] = buffer; }
