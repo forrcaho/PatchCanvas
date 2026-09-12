@@ -16,6 +16,13 @@ coroutine, or `System.nanoTime` will jitter by up to a buffer no matter what sit
 underneath it. So the sequencer lives *inside* the audio graph and counts frames.
 This is a design decision made once, early, and never revisited.
 
+**The model is Bespoke Synth, not Eurorack.** Eurorack supplied a lot of the early
+vocabulary -- 1V/oct, gates, "it is all voltage" -- and while the two agreed nothing
+depended on which was the model. They disagree about notes: a Eurorack cable carries one
+signal, so polyphony means copying voices, where Bespoke passes notes as events and lets
+whatever sounds them allocate the voices. Where they part, Bespoke's shape wins -- though
+not its names, and not its internal MIDI. See Phase 6.
+
 ## Stack
 
 | Layer | Choice | License |
@@ -94,7 +101,7 @@ MMAP is most reliably available there. Being GrapheneOS matters more than it loo
   `RELEASING.md` is already the right distribution channel. No Play Store dependency,
   no store-policy surface, nothing to change.
 - **The USB-C port can be locked down** when the device is locked, which is worth
-  remembering before debugging USB MIDI in Phase 7 and blaming the code.
+  remembering before debugging USB MIDI in Phase 8 and blaming the code.
 
 ---
 
@@ -105,7 +112,7 @@ Bookkeeping that should not be discovered at release time.
 - MIT `LICENSE`. *(done)*
 - README package paths corrected after the `com.example` move. *(done)*
 - `minSdk` 26 -> 33. The floor is 27, where Oboe first reaches AAudio and the OpenSL ES
-  fallback disappears; 31 adds one storage model instead of a legacy branch (Phase 7
+  fallback disappears; 31 adds one storage model instead of a legacy branch (Phase 8
   export). It went to 33 in Phase 2 for ADPF -- see there, the reasoning is real rather
   than tidiness. Android 13 is 2022, which is inside "reasonably high-end" by any
   reading. *(done)*
@@ -366,6 +373,9 @@ technique rather than a mistake -- audio-rate modulation lives there, and refusi
 would make this less modular than the thing it models. The colour says what to expect;
 the cable decides what happens. The oscillator updates its frequency per sample rather
 than per block precisely so that stays real.
+
+Phase 6 confines this to signals. Note events are typed, because an event is not a
+voltage and has nothing sensible to do arriving at an audio input.
 
 Inputs stay single-source -- `connect` already replaces an occupied input. That is a
 design choice (a patch stays readable, no hidden summing) and it is what makes an
@@ -656,7 +666,9 @@ So the panel is a **per-module-type editor surface**, not a generic list of slid
 
 Per-input **attenuverters**, without which CV routing is unusable in practice: with
 advisory typing, a full-scale CV into a cutoff sweeps six octaves, and the only control
-over that today is whatever drives the cable.
+over that today is whatever drives the cable. **Superseded in direction:** Phase 6 adopts
+modulation onto controls, where depth is a range stored on the target in its own units,
+and defers it on the gesture.
 
 Modules have ports but no knobs, which means nothing is tunable and the instrument is
 not yet an instrument. Parameter editing is the second hard touch problem after
@@ -670,7 +682,7 @@ and it lets parameters ship without risking the patching model. Then evaluate on
 knobs with vertical drag as a second pass, knowing it adds a fifth outcome to a gesture
 loop that was built to avoid exactly that kind of contention.
 
-Also here: per-input attenuverters, without which CV routing is unusable in practice.
+Also here: per-input attenuverters -- superseded in direction, as above.
 
 ## Undo
 
@@ -767,7 +779,190 @@ not.
 History is in memory only, so it starts empty each launch. A restore-across-restart would
 need the stack in the file, and that is a patch-library question rather than an undo one.
 
-## Phase 6 -- Subpatches
+## Phase 6 -- Notes, time and tuning
+
+**Designed, not built.** Settled in discussion on 2026-09-12, before any code, because it
+reverses several things recorded above.
+
+The goal that forced it is a polyphonic sequencer in the shape of Bespoke's
+`dotsequencer` -- a grid where a column can hold a chord -- and the current engine cannot
+express one. That is structural rather than a missing feature: every port is one
+32-sample buffer, an input has one source, `Steps` stores one pitch per step and emits one
+pitch and one gate, and an `Env` has one envelope for its one gate. Polyphony in that
+model means building a voice and copying it, which is where Phase 7's "a three-voice
+patch is twelve nodes" came from.
+
+### Notes are events
+
+**A second kind of connection, carrying events rather than samples.** Audio and control
+signals stay exactly as they are, advisory typing included. Notes are typed, because an
+event is not a voltage -- this is where "it is all voltage" stops applying.
+
+```cpp
+struct NoteEvent {
+    uint32_t id;        // chosen by the source; Off finds its note by this
+    uint16_t offset;    // sample within the block
+    uint8_t  kind;      // On, Off -- Change reserved for per-note expression
+    int32_t  degree;    // step in the current scale, running past the period
+    float    cents;     // glide, bend, pitch tracking
+    float    velocity;  // 0..1
+};
+```
+
+**Not MIDI.** Bespoke uses MIDI messages internally because people plug MIDI devices into
+computers; nobody does that to a phone often enough to shape the core around it. MIDI in,
+if it ever lands, translates at the edge.
+
+- **Every note has an id.** MIDI finds a note-off's note by matching pitch, which is
+  untenable once pitch is continuous -- it means comparing floats for equality -- and
+  awkward even without that: Bespoke's DotSequencer turns off "any colliding pitches"
+  before starting a note. SuperCollider's client picks node ids so it can address a synth
+  in the same bundle that creates it, and CLAP carries a `note_id`. Two dots at the same
+  pitch are two notes.
+- **On and off, not start and duration.** A sequencer knows how long a note is; a finger
+  landing on glass does not. A sequencer schedules its own off.
+- **Pitch is a scale degree plus cents**, resolved against the global scale by the voice
+  that sounds it. This moves degree-to-octave conversion out of `GraphSync` and into the
+  engine, which now holds scale tables -- but the engine still never learns what a
+  semitone is, which was the point of that rule. Octaves on the wire was the other
+  candidate and lost: every scale-aware note operation (up a step, quantise to the key)
+  would become a nearest-degree search on floats.
+
+  SuperCollider separates a `Tuning` from a `Scale` chosen within it, which buys an
+  accidental that means the same thing in every tuning. Rejected: one `.scl` per mode is
+  how these files are actually used. The cost is that a note outside the mode is either a
+  cents offset or a different scale.
+- **`Change` is reserved and unimplemented.** It is per-note expression -- what MPE does by
+  giving each note its own MIDI channel, since MIDI has no id; here the id already does
+  the channel's job. The only likely producer is a touch keyboard (open question 6), where
+  Android already reports every finger separately. Reserving the kind now keeps that from
+  being a format change later.
+
+**Delivery mirrors audio.** Each note output has a preallocated event buffer, filled
+during its node's `process()` and read by whatever it feeds, in topological order; a back
+edge delivers one block late, exactly as a buffer does. Nothing allocates.
+
+**Repatching a note cable cannot crossfade** -- there is no signal to fade. What it must do
+instead is end what it started: disconnecting a source sends `Off` for every note it has
+sounding through that input, or the voice hangs.
+
+**Whether a note input takes several sources is open.** Single-source exists to stop
+hidden summing of signals; merging two event streams hides nothing, and Bespoke allows it.
+
+**Voices are allocated by whatever sounds the notes**, from a preallocated pool, keyed by
+note id. Where the voices come from is the open part: a curated synth module with its
+voices built in, as Bespoke does, or a patched voice from Phase 7 stamped out N times --
+SuperCollider's "a note is an instance", with the instances made in advance because the
+audio thread cannot make them. Notes are the first step either way.
+
+### The transport
+
+**One position, owned by the engine** -- tempo, beats per bar, and where in the bar we are,
+advanced by the frame count. The commitment at the top of this document is unchanged;
+only its owner moves, from a `Clock` node to the graph.
+
+**A clocked module picks an interval instead of taking a cable** -- whole note through
+64th, triplets, dotted, and multiples of a bar -- from a chip in its header, as Bespoke's
+dropdown does. That makes a fast lead against a slow bass, or a polyrhythm, a setting
+rather than a patch. Every division is computed from the one shared position, so no two
+can drift. Two `Clock` nodes could: each truncates its own period, and 127bpm is 22677.16
+frames a beat. Starting the transport puts everything on bar 1 together, which nothing
+does today.
+
+`Clock` goes, and so does `Steps`' clock input, so the file version bumps. Note length then
+needs a control of its own, since today it is the width of the clock's gate.
+
+**Pulses are designed for and not built.** Bespoke has a third event type carrying only
+timing -- `OnPulse(time, velocity, flags)`, with flags for reset, backward, random and so
+on -- which is how it does rhythm the transport cannot: chance, delays, hocketing. Not now:
+each pulse input costs screen space, and the need is unproven. What keeps the door open is
+small: a clocked module advances through one entry point, "tick at sample offset *k*". The
+transport calls it now; a pulse cable would call the same thing later, over the same event
+path as notes with a different payload.
+
+### The scale, and changing it
+
+**The scale belongs to the patch**, as Phase 5 already argued, and moves out of the
+sequencer's header into a chip of its own.
+
+**It can be a list.** Entries are a scale plus a length in bars and beats, and the list
+loops -- so the same figure four bars in each of three modes is three entries of 4 bars, 0
+beats. Bars because that is almost always the boundary wanted; beats so it is not the only
+one. The beat is not subdivided. A one-entry list is simply a fixed scale, so there is one
+mechanism rather than a static mode and a progression mode.
+
+- **Which entry is current comes from the transport position**, modulo the list's length in
+  beats, never from a counter. Starting, stopping or editing mid-play lands somewhere
+  deterministic, for the same reason clock divisions cannot drift.
+- **The switch lands on its exact sample.** A note starting on the switch beat uses the new
+  scale; one starting a sample earlier uses the old. The engine holds every table in the
+  list in advance, which means a fixed cap on degrees per scale.
+- **Held notes keep their pitch.** A voice resolves its degree once, at note-on. Retuning a
+  sounding note was considered and rejected: a held major third dropping to a minor third
+  mid-note is a step with no ramp, the transient every crossfade in this engine exists to
+  prevent.
+- **Degrees map by position.** Degree 6 of a seven-note scale becomes degree 1 of the next
+  period in a five-note one -- the figure keeps its shape and spreads upward. Snapping to
+  the nearest pitch instead is a key change rather than the same figure in another mode,
+  and may be an option later.
+
+The sequencer grid while the scale cycles is undecided: its rows are the scale, so it
+either reflows every few bars or shows the scale being edited rather than the one playing.
+The device should settle it.
+
+### Chips that float
+
+**Transport and scale are small chips, always on screen, that expand on tap** into a
+larger card over whatever is showing -- graph or open panel -- without being modal. The
+undo buttons are the precedent: screen space, hit-tested by one function both gesture
+loops share. An expanded card takes touches inside its own bounds and nowhere else, and
+closes only from its own chip, because a tap outside it is doing something else. Where the
+chips sit is open; the bottom-left corner is taken.
+
+### Modulation onto controls -- adopted, deferred
+
+**Bespoke's model is the one wanted.** A modulator has one output, and you drop it onto
+*any slider on any module*. The slider then moves between a low and a high value stored on
+the slider itself, in its own units -- "sweep the cutoff from 400Hz to 2kHz" -- and animates
+to show where it is.
+
+That dissolves three problems at once. Every parameter becomes a target without a jack,
+where `kMaxPorts` is 4 and a jack costs 44dp. Depth lives in the destination's units, which
+answers the attenuverter problem rather than patching it. And polyphony sorts into three
+tiers: a modulator on a control moves every voice together, per-note values ride on note
+events, and per-sample signals stay on ports. FM into an oscillator is a signal it
+processes, not a knob being turned, so ports and advisory typing stay for exactly that.
+
+The engine side is cheap, and SuperCollider shows how: `/n_map` makes a control read from a
+bus by swapping one pointer (`Graph_MapControl` in scsynth). Our inputs are already
+pointers the graph rewires; parameters would be the same, pointing at their own value or at
+a modulator's output, with the usual crossfade on a change. SuperCollider's mapping has no
+range, and touching a mapped control unmaps it -- Bespoke's range on the target is the
+better shape for a finger.
+
+**Deferred because of the gesture, not the engine.** Targets live in the open panel, and
+the panel owns the screen. How a modulator's output reaches a slider inside it is the
+unsolved part (open question 7), and nothing is built until it is.
+
+### Names
+
+**Not Bespoke's, and not Eurorack's by default.** Bespoke calls a note source an
+"instrument" and the thing that sounds it a "synth"; nobody would call a MIDI controller
+that makes no sound an instrument. The current module names come from Eurorack -- `VCA` most
+obviously, in an engine with no voltage in it.
+
+To be settled in a deliberate pass, with one principle proposed: **name by what flows in
+and out**, since that is what a finger at the picker needs and it is unambiguous. The
+catalogue already knows every port's kind, so picker categories could be derived rather
+than filed by hand. One collision to watch: "voice" is the obvious word for notes-to-audio
+and also the word for one of the copies inside it. The eight-character limit belongs to
+the phone, not to Eurorack, and stays.
+
+The app's own name is part of the same question and equally open. Changing the name shown
+on the launcher costs nothing; changing the `applicationId` makes it a different app to
+Android, so an installed copy cannot update into it.
+
+## Phase 7 -- Subpatches
 
 A phone screen holds about 17 modules at zoom 1.0. A patch worth playing will exceed
 that, and panning around a flat sheet of forty nodes is a worse problem than the one
@@ -797,6 +992,12 @@ natural first half of abstraction, so neither choice wastes the other.
 **Why after parameters.** A Voice macro whose filter cutoff cannot be reached from
 outside is half a feature. Exposing a knob through the boundary matters as much as
 exposing a port, and that needs parameters to exist.
+
+**Polyphony no longer comes from copying.** This phase was written when a voice meant Osc,
+Env, VCA and Filter patched together, and three voices meant three copies. Phase 6 moves
+polyphony onto note events and voice pools, so grouping is about screen space again, and
+abstraction's stamped-out instances are one candidate for what fills a pool rather than
+the only route to a chord.
 
 ### Choosing from a library
 
@@ -832,18 +1033,30 @@ clean.
 A cheaper partial win, available any time: collapsing a module to a title-only strip
 buys back a good deal of the same screen space for far less work.
 
-## Phase 7 -- App-ness
+## Phase 8 -- App-ness
 
 - Patch library: name, save, load, duplicate, browse.
 - Undo/redo. Falls out of Phase 3's command structs nearly free if they are designed to
   be invertible -- worth spending ten minutes on then rather than a refactor here.
 - Foreground service so audio survives backgrounding and screen-off. An instrument that
   stops when the screen times out is not one.
-- Record to a file.
+- **Always recording**, as Bespoke is, so that something found while exploring can be
+  saved rather than reconstructed. A rolling ten-minute window -- Bespoke defaults to
+  thirty, held in memory -- kept **on disk** instead. Ten minutes of float stereo at 48kHz
+  is about 230MB; a backgrounded process that size is the first thing Android's
+  low-memory killer takes, which is exactly when you have gone to do something else, and
+  a file also survives a crash. The audio thread copies each block into a lock-free ring
+  and a writer thread drains it into a circular file, so the callback still never touches
+  I/O. Stored as the stream received it, with bit depth chosen at save; saving does not
+  clear the window. It grows out of the debug capture.
+
+  An idea rather than a decision: undo snapshots timestamped against the window would let
+  a saved recording carry the patch that made it.
 - In-app open-source licenses screen. MIT requires the notice ship with the binary;
   DaisySP alone brings three (DaisySP, Plaits, Soundpipe) and Oboe brings Apache-2.0.
 - Turn `isMinifyEnabled` on for release and confirm nothing reflective breaks.
-- MIDI in over USB/BLE via `android.media.midi`, if it still seems worth it by then.
+- MIDI in over USB/BLE via `android.media.midi`, translated at the edge into Phase 6's
+  note events, if it still seems worth it by then.
 
 ---
 
@@ -877,7 +1090,7 @@ use rather than by argument.
 2. **Is constant panning worse than the problem it solved?** Drag-a-cable was rejected
    partly for occlusion. If a phone-sized viewport means panning between every port
    pair, that trade may not pay. Measured at ~17 modules on screen at zoom 1.0, which
-   is more headroom than feared -- but Phase 6 exists because a patch worth playing
+   is more headroom than feared -- but Phase 7 exists because a patch worth playing
    will exceed it. A minimap or collapsed modules are the cheaper interim answers.
 3. **Does the unified gesture loop survive?** It already needs long-press (Phase 1) and
    may need knob-drag (Phase 5). At some point a single `awaitEachGesture` becomes the
@@ -892,3 +1105,17 @@ use rather than by argument.
 5. **Is single-source input the right call?** Replacing an occupied input keeps a patch
    readable and avoids hidden summing, but it makes a mult mandatory for things hardware
    modular does implicitly. It may prove to be one tap too many in practice.
+6. **Can a touchscreen be played live?** Monitoring the mic feels late, but the mic is the
+   harshest case -- the acoustic sound arrives instantly and the processed copy is heard
+   against it as an echo -- and the reference device listens over Bluetooth A2DP, which
+   adds 100ms or more before anything here. The estimated wired path is up to one display
+   frame for touch delivery (16.7ms at 60Hz, 8.3ms at 120Hz, less with
+   `requestUnbufferedDispatch`), up to 2ms to the next callback, and 4.2-5.9ms measured
+   out. Measure it before designing for it: tap a fingernail on the glass beside a laptop
+   mic while the speaker plays what the tap triggers, and read the gap off the recording.
+   Two uses survive latency regardless -- continuous gestures on notes already sounding,
+   and input the transport quantises, where the finger chooses what and the next step
+   chooses when.
+7. **How does a modulator reach a knob?** Phase 6 adopts modulation onto controls, and the
+   targets live in a panel that owns the screen. Tap-to-connect is already two taps, so
+   "tap the output, open the target, tap a slider" is plausible and untested.
