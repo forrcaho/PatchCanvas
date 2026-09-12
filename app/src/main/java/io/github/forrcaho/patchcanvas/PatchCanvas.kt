@@ -666,6 +666,30 @@ internal class CanvasControls(
     val onRedo: () -> Unit = {},
 )
 
+/**
+ * Fires whichever history button is under [at], if one is there and enabled.
+ *
+ * Shared by both gesture loops -- the canvas one and the panel's -- because the buttons
+ * are in the same screen position either way, and a control that moved depending on what
+ * was open would be worse than one that is sometimes absent.
+ */
+internal fun CanvasControls.tapHistory(frame: Frame, at: Offset): Boolean {
+    if (canUndo && frame.historyRect(false).contains(at)) {
+        onUndo()
+        return true
+    }
+    if (canRedo && frame.historyRect(true).contains(at)) {
+        onRedo()
+        return true
+    }
+    return false
+}
+
+/** Whether either enabled history button covers [at]. */
+internal fun CanvasControls.overHistory(frame: Frame, at: Offset): Boolean =
+    (canUndo && frame.historyRect(false).contains(at)) ||
+        (canRedo && frame.historyRect(true).contains(at))
+
 /** Screen position of any port, whether its module is pinned or free. */
 private fun portScreen(
     patch: Patch,
@@ -761,7 +785,13 @@ fun PatchCanvas(
                     val open = patch.modules.firstOrNull { it.expanded }
                     if (open != null) {
                         val panel = panelRect(frame)
-                        val knob = panelKnobAt(panel, frame.density, open, down.position)
+                        // Checked before the knobs, because the buttons float over the
+                        // panel and overhang its bottom edge -- where a tap would
+                        // otherwise be read as tapping away to close.
+                        val onHistory = controls.overHistory(frame, down.position)
+                        val knob =
+                            if (onHistory) null
+                            else panelKnobAt(panel, frame.density, open, down.position)
                         var moved = false
 
                         while (true) {
@@ -785,7 +815,9 @@ fun PatchCanvas(
                         }
 
                         if (!moved) {
-                            if (knob != null) {
+                            if (onHistory) {
+                                controls.tapHistory(frame, down.position)
+                            } else if (knob != null) {
                                 // A tap on a knob jumps there, which is faster than
                                 // dragging when you already know where you want it.
                                 val param = open.type.params[knob]
@@ -867,10 +899,7 @@ fun PatchCanvas(
                         GestureKind.LongPress -> {
                             // Holding a history button is not a request for the add menu;
                             // it is a finger resting on a button. Nothing happens.
-                            val onButton = (controls.canUndo && frame.historyRect(false)
-                                .contains(down.position)) ||
-                                (controls.canRedo && frame.historyRect(true)
-                                    .contains(down.position))
+                            val onButton = controls.overHistory(frame, down.position)
                             // A rail offers nothing to delete, so it opens no menu -- but
                             // it does have knobs, and tapping it is already its switch, so
                             // holding is the way in to its panel.
@@ -1034,15 +1063,21 @@ fun PatchCanvas(
             }
         }
 
-        // Hidden rather than greyed when there is nothing to undo. A disabled control
-        // is a promise that something could happen here; at the start of a session
-        // nothing could, and an empty corner says so without needing to be read.
-        if (canUndo) drawHistoryButton(frame.historyRect(false), d, redo = false)
-        if (canRedo) drawHistoryButton(frame.historyRect(true), d, redo = true)
-
         patch.modules.firstOrNull { it.expanded }?.let { open ->
             drawPanel(open, patch, panelRect(frame), d, screenMeasurer)
         }
+
+        // After the panel, so they float over it rather than being buried by it. Undo is
+        // most wanted from inside a panel, where the knob you just moved is on screen
+        // and can be watched moving back; having to close the panel, undo blind and
+        // reopen to see what happened is the opposite of that.
+        //
+        // Hidden rather than greyed when there is nothing to undo: a disabled control
+        // promises something could happen here, and at the start of a session nothing
+        // could. The panel's knob rows are inset by PANEL_SIDE, so the corner these sit
+        // in covers no control of the panel's own.
+        if (canUndo) drawHistoryButton(frame.historyRect(false), d, redo = false)
+        if (canRedo) drawHistoryButton(frame.historyRect(true), d, redo = true)
 
         (interaction as? Interaction.Menu)?.let { menu ->
             drawMenu(menuLayout(menuItems(menu.targetId), menu.anchor, d, size), d, screenMeasurer)
@@ -1225,14 +1260,7 @@ private fun handleTap(
     // Undo before anything else on the canvas, and regardless of what is armed. It is
     // the control you reach for when the last thing you did was wrong, and making it
     // wait its turn behind an armed connection would be exactly backwards.
-    if (controls.canUndo && frame.historyRect(false).contains(screen)) {
-        controls.onUndo()
-        return Interaction.Idle
-    }
-    if (controls.canRedo && frame.historyRect(true).contains(screen)) {
-        controls.onRedo()
-        return Interaction.Idle
-    }
+    if (controls.tapHistory(frame, screen)) return Interaction.Idle
 
     val port = patch.hitPort(camera, frame, screen, touchPx)
 

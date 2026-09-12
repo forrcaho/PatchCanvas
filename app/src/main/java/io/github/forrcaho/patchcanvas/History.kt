@@ -80,9 +80,17 @@ class History(private val limit: Int = 50) {
  * cleared and before they are restored -- and an empty patch is a real state to the
  * engine, which would dutifully crossfade every voice to silence and back. Undo would
  * click. One atomic apply means the diff only ever sees before and after.
+ *
+ * Which panel is open is carried across by id. Undo changes the document, not the view:
+ * the camera does not move, and neither should the thing you are looking at. Free
+ * modules are rebuilt as new objects here, so without this an undo from inside a panel
+ * would slam it shut -- which is the one moment you most want to watch, since the knob
+ * you just moved is on screen and about to move back.
  */
 fun Patch.replaceWith(source: Patch) {
     Snapshot.withMutableSnapshot {
+        val openId = modules.firstOrNull { it.expanded }?.id
+
         connections.clear()
         modules.removeAll { !it.isPinned }
 
@@ -99,5 +107,9 @@ fun Patch.replaceWith(source: Patch) {
         }
 
         source.connections.forEach { connections.add(it) }
+
+        // Null if the snapshot predates the module, in which case there is nothing left
+        // to have open and the panel closing is the right answer.
+        openId?.let { id -> module(id)?.expanded = true }
     }
 }

@@ -600,6 +600,23 @@ with its cables cleared. In the capture the transitions are a 30ms monotonic ram
 the largest single-sample step across them is 0.0762, identical to the steady-state
 saw and to the channel that was never touched. Undo is silent.
 
+**The buttons float over an open panel**, in the same screen position they occupy on the
+graph. Confined to the graph they were close to useless for the case that needs them
+most: a knob change is only visible while its panel is open, so undoing one meant closing
+the panel, undoing where nothing could be seen, and reopening to find out what happened.
+Same position in both contexts, so the control never moves under a thumb -- and the
+panel's knob rows are inset by `PANEL_SIDE`, which leaves that corner free. Asserted, not
+assumed: a geometry test checks the buttons against every module type's rows.
+
+The buttons overhang the panel's bottom edge, where a tap would otherwise be read as
+tapping away to close, so the panel's gesture loop checks them before the knobs and
+before that dismissal.
+
+For the same reason `replaceWith` carries the open panel across by id. Undo changes the
+document, not the view -- the camera does not move and neither should the thing you are
+looking at. Free modules are rebuilt as new objects, so without it every undo slammed the
+panel shut at exactly the moment you wanted to watch.
+
 History is in memory only, so it starts empty each launch. A restore-across-restart would
 need the stack in the file, and that is a patch-library question rather than an undo one.
 
