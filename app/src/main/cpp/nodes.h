@@ -122,20 +122,27 @@ private:
     float bpm_ = 120.0f;
 };
 
-/** Eight steps, advanced by a rising edge on its clock input. */
+/** A sequence, advanced by a rising edge on its clock input. */
 class StepsNode : public Node {
 public:
+    static constexpr int32_t kSteps = 16;
+
+    StepsNode();
+
     int32_t inputCount() const override { return 1; }  // clock
     int32_t outputCount() const override { return 2; } // pitch, gate
     void process(int32_t frames) override;
     void setParam(int32_t index, float value) override;
+    void setStep(int32_t index, float pitch, bool gate) override;
 
 private:
-    static constexpr int32_t kSteps = 8;
     int32_t step_ = 0;
-    int32_t length_ = kSteps;
+    int32_t length_ = 8;
     float transpose_ = 0.0f;
     bool wasHigh_ = false;
+    /** Octaves from the root, which is what every pitch on this boundary means. */
+    float pitch_[kSteps] = {};
+    bool gate_[kSteps] = {};
 };
 
 /** Sums its inputs. Necessary because an input takes exactly one source. */

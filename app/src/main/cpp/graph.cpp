@@ -45,6 +45,16 @@ bool Graph::postDisconnect(int64_t dstId, int32_t dstPort) {
     return commands_.push(cmd);
 }
 
+bool Graph::postSetStep(int64_t id, int32_t index, float pitch, bool gate) {
+    Command cmd;
+    cmd.type = CommandType::SetStep;
+    cmd.id = id;
+    cmd.paramIndex = index;
+    cmd.value = pitch;
+    cmd.gate = gate;
+    return commands_.push(cmd);
+}
+
 bool Graph::postSetParam(int64_t id, int32_t paramIndex, float value) {
     Command cmd;
     cmd.type = CommandType::SetParam;
@@ -206,6 +216,14 @@ void Graph::applyCommands() {
                 if (cmd.paramIndex < 0 || cmd.paramIndex >= kMaxParams) break;
                 // No topology change, so no re-sort: a knob does not move the graph.
                 nodes_[slot].node->setParam(cmd.paramIndex, cmd.value);
+                break;
+            }
+            case CommandType::SetStep: {
+                const int32_t slot = indexOf(cmd.id);
+                if (slot < 0) break;
+                // The node bounds-checks the index itself, because how many steps a
+                // sequence has is the node's business and not the graph's.
+                nodes_[slot].node->setStep(cmd.paramIndex, cmd.value, cmd.gate);
                 break;
             }
             case CommandType::Disconnect: {

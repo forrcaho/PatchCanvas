@@ -244,6 +244,74 @@ void stepsAdvanceOnEdgesNotLevels() {
     check(steps.output(0)[0] != afterHold, "the next edge advances it again");
 }
 
+/** Clocks the node once: low, then high, holding each long enough to be seen. */
+static void tick(StepsNode &steps, const std::array<float, kBlockSize> &low,
+                 const std::array<float, kBlockSize> &high) {
+    steps.setInput(0, low.data());
+    steps.process(kBlockSize);
+    steps.setInput(0, high.data());
+    steps.process(kBlockSize);
+}
+
+void stepsPlayTheirOwnPattern() {
+    std::printf("steps play the pattern they are given\n");
+    const auto high = constantBuffer(1.0f);
+    const auto low = constantBuffer(0.0f);
+
+    StepsNode steps;
+    steps.prepare(kRate);
+
+    // One octave up on step 1, which no default pattern contains.
+    steps.setStep(1, 1.0f, true);
+    tick(steps, low, high);   // -> step 1
+    check(std::fabs(steps.output(0)[0] - 1.0f) < 0.0001f,
+          "the pitch written to a step is the pitch it plays");
+
+    // Out of range in both directions must be ignored rather than corrupt a neighbour.
+    steps.setStep(-1, 9.0f, true);
+    steps.setStep(StepsNode::kSteps, 9.0f, true);
+    check(std::fabs(steps.output(0)[0] - 1.0f) < 0.0001f,
+          "an out-of-range step changes nothing");
+}
+
+void aClosedGateIsARestNotASkip() {
+    std::printf("a closed gate is a rest, not a skip\n");
+    const auto high = constantBuffer(1.0f);
+    const auto low = constantBuffer(0.0f);
+
+    StepsNode steps;
+    steps.prepare(kRate);
+    steps.setStep(1, 0.25f, false);  // silent
+    steps.setStep(2, 0.75f, true);
+
+    tick(steps, low, high);          // -> step 1, gated off
+    check(steps.output(1)[0] == 0.0f, "a closed step emits no gate");
+    check(std::fabs(steps.output(0)[0] - 0.25f) < 0.0001f,
+          "but its pitch is still on the output");
+
+    tick(steps, low, high);          // -> step 2
+    check(steps.output(1)[0] == 1.0f, "the next open step still fires");
+    check(std::fabs(steps.output(0)[0] - 0.75f) < 0.0001f,
+          "so a rest costs a step rather than being skipped");
+}
+
+void theGateFollowsTheClockNotTheStep() {
+    std::printf("the gate follows the clock, not the step\n");
+    const auto high = constantBuffer(1.0f);
+    const auto low = constantBuffer(0.0f);
+
+    StepsNode steps;
+    steps.prepare(kRate);
+    steps.setStep(1, 0.0f, true);
+
+    tick(steps, low, high);
+    check(steps.output(1)[0] == 1.0f, "gate up while the clock is up");
+    steps.setInput(0, low.data());
+    steps.process(kBlockSize);
+    check(steps.output(1)[0] == 0.0f,
+          "and down when the clock falls -- the step says whether, the clock says how long");
+}
+
 void mixSumsRatherThanAverages() {
     std::printf("mix sums rather than averages\n");
     const auto quarter = constantBuffer(0.25f);
@@ -325,6 +393,9 @@ int main() {
     vcaIsShutWithoutControl();
     clockRunsAtTheRequestedTempo();
     stepsAdvanceOnEdgesNotLevels();
+    stepsPlayTheirOwnPattern();
+    aClosedGateIsARestNotASkip();
+    theGateFollowsTheClockNotTheStep();
     mixSumsRatherThanAverages();
     outPassesAudioAtLevel();
     outProtectsTheListener();

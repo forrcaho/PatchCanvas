@@ -186,6 +186,27 @@ void ClockNode::setParam(int32_t index, float value) {
 
 // ---------------------------------------------------------------- Steps
 
+/**
+ * The pentatonic figure the module used to have hardcoded, now only a starting point.
+ *
+ * Kept as the default so a patch saved before the grid existed still sounds the same
+ * when it is loaded, and so a freshly added Steps makes music rather than one repeated
+ * note. Everything past the eighth step repeats it, which is what a length of 8 hides
+ * until the length is raised.
+ */
+StepsNode::StepsNode() {
+    for (int32_t i = 0; i < kSteps; ++i) {
+        pitch_[i] = kPattern[i % 8];
+        gate_[i] = true;
+    }
+}
+
+void StepsNode::setStep(int32_t index, float pitch, bool gate) {
+    if (index < 0 || index >= kSteps) return;
+    pitch_[index] = pitch;
+    gate_[index] = gate;
+}
+
 void StepsNode::process(int32_t frames) {
     float *pitch = out(0);
     float *gate = out(1);
@@ -198,8 +219,12 @@ void StepsNode::process(int32_t frames) {
         }
         wasHigh_ = high;
 
-        pitch[i] = kPattern[step_] + transpose_ / 12.0f;
-        gate[i] = high ? 1.0f : 0.0f;
+        pitch[i] = pitch_[step_] + transpose_ / 12.0f;
+        // A step whose gate is off is a rest: the clock still advances through it, and
+        // the pitch still holds, but nothing is triggered. Anding with the clock rather
+        // than replacing it keeps the gate's shape -- the sequencer decides whether a
+        // step sounds, the clock decides for how long.
+        gate[i] = (high && gate_[step_]) ? 1.0f : 0.0f;
     }
 }
 

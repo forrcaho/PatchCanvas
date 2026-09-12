@@ -62,6 +62,8 @@ public:
     bool postConnect(int64_t srcId, int32_t srcPort, int64_t dstId, int32_t dstPort);
     bool postDisconnect(int64_t dstId, int32_t dstPort);
     bool postSetParam(int64_t id, int32_t paramIndex, float value);
+    /** One step of a sequence. Pitch in octaves from the root. */
+    bool postSetStep(int64_t id, int32_t index, float pitch, bool gate);
     /** Frees everything the audio thread handed back. Never called from the callback. */
     void collectGarbage();
     /** Frees anything still owned, after the stream has stopped. */
@@ -76,7 +78,7 @@ public:
     const float *outputR() const;
 
 private:
-    enum class CommandType : int32_t { Add, Remove, Connect, Disconnect, SetParam };
+    enum class CommandType : int32_t { Add, Remove, Connect, Disconnect, SetParam, SetStep };
 
     struct Command {
         CommandType type = CommandType::Add;
@@ -88,6 +90,8 @@ private:
         Node *node = nullptr;
         int32_t paramIndex = 0;
         float value = 0.0f;
+        /** SetStep only: whether the step sounds. */
+        bool gate = false;
     };
 
     /**

@@ -40,6 +40,22 @@ public:
         (void) index;
         (void) value;
     }
+    /**
+     * One step of a sequence changed.
+     *
+     * Separate from setParam because a pattern is not a knob: kMaxParams is 4, which is
+     * the right size for the controls a panel shows and nowhere near a sequence. Pitch
+     * arrives in octaves, like every other pitch that crosses this boundary, so a scale
+     * is a table on the other side and nothing here needs to know about tuning.
+     *
+     * Audio thread, same rules as setParam.
+     */
+    virtual void setStep(int32_t index, float pitch, bool gate) {
+        (void) index;
+        (void) pitch;
+        (void) gate;
+    }
+
     virtual void process(int32_t frames) = 0;
 
     void setInput(int32_t port, const float *buffer) { inputs_[port] = buffer; }
