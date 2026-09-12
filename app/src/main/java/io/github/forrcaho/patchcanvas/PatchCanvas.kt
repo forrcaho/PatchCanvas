@@ -1315,36 +1315,44 @@ private fun DrawScope.drawChoices(
 }
 
 /**
- * One cycle of waveform [index], sampled rather than hand-drawn as four paths.
+ * Two cycles of waveform [index], sampled rather than hand-drawn as four paths.
  *
- * Sampling means all four glyphs are one code path and stay consistent with each other;
- * at this size the near-vertical segments of the saw and square read as vertical. Each
- * function is phased to start and end at zero so the glyphs line up across the row.
+ * Sampling keeps all four glyphs one code path and consistent with each other, and the
+ * near-vertical segments read as vertical at this size. Two cycles rather than one
+ * because a single descending ramp is a slope, not a sawtooth: the reset is the part
+ * that names it, and the same goes for the square's second edge.
+ *
+ * Sampled at segment midpoints so no sample ever lands exactly on a discontinuity, which
+ * would otherwise pin a vertex to the top or bottom of the jump depending on rounding.
  */
 private fun DrawScope.drawWave(box: Rect, d: Float, index: Int, color: Color) {
-    val w = minOf(box.width * 0.62f, 46f * d)
+    val w = minOf(box.width * 0.62f, 54f * d)
     val h = minOf(box.height * 0.46f, 15f * d)
     val left = box.center.x - w / 2f
     val mid = box.center.y
 
-    fun sample(t: Float): Float = when (index) {
-        // Descending, because that is what comes out. DaisySP's polyblep saw computes
-        // the rising ramp and then multiplies by -1, so it falls from +1 to -1 and
-        // resets upward -- confirmed in oscillator.cpp and in a capture of the real
-        // output. A glyph that showed the conventional rising saw would be prettier and
-        // wrong.
-        0 -> 1f - 2f * ((t + 0.5f) % 1f)                      // saw
-        1 -> if (kotlin.math.sin(2f * PI.toFloat() * (t + 0.25f)) >= 0f) 1f else -1f  // square
-        2 -> 1f - 4f * kotlin.math.abs(((t + 0.25f) % 1f) - 0.5f)                     // triangle
-        else -> kotlin.math.sin(2f * PI.toFloat() * t)                                // sine
+    // Phases follow the convention these glyphs are read by: the saw starts at the top
+    // of a ramp and the square starts high, so both switch on the cycle boundary rather
+    // than partway through it. Sine and triangle start at zero and rise.
+    fun sample(u: Float): Float {
+        val t = u % 1f
+        return when (index) {
+            // Descending, matching DaisySP: it computes the rising ramp and negates it,
+            // so the real output falls and resets upward.
+            0 -> 1f - 2f * t
+            1 -> if (t < 0.5f) 1f else -1f
+            2 -> 1f - 4f * kotlin.math.abs((t + 0.25f) % 1f - 0.5f)
+            else -> kotlin.math.sin(2f * PI.toFloat() * t)
+        }
     }
 
-    val steps = 64
+    val cycles = 2f
+    val steps = 96
     val path = Path()
-    repeat(steps + 1) { i ->
-        val t = i / steps.toFloat()
-        val x = left + w * t
-        val y = mid - sample(t) * h
+    repeat(steps) { i ->
+        val f = (i + 0.5f) / steps
+        val x = left + w * f
+        val y = mid - sample(f * cycles) * h
         if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
     }
     drawPath(path, color = color, style = Stroke(width = 2f * d, cap = StrokeCap.Round))

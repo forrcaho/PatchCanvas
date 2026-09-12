@@ -519,6 +519,14 @@ A horizontal bar is the right default and the wrong universal:
   rather than hand-drawn as paths, so they stay consistent with each other and the
   near-vertical edges of the saw and square read as vertical at this size.
 
+  **Two cycles, phased the way these glyphs are conventionally read.** One cycle was
+  wrong: a single descending ramp is a slope, not a sawtooth, since the reset is the part
+  that names it. Phasing them all to start and end at zero was wrong for the same kind of
+  reason -- it is right for sine and triangle, but it put the saw's reset in the middle of
+  the glyph and the square's edges at the quarter and three-quarter points, which reads as
+  an off-centre pulse. The saw starts at the top of a ramp and the square starts high, so
+  both switch on the cycle boundary.
+
   **The saw glyph descends**, because that is what comes out: DaisySP's polyblep saw
   computes the rising ramp and multiplies by -1, confirmed both in `oscillator.cpp` and
   in a capture of the real output. The conventional rising glyph would be prettier and
