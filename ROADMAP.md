@@ -582,6 +582,19 @@ A horizontal bar is the right default and the wrong universal:
   their notes, because coming back from a short loop to a long one and finding the old
   bars intact is worth keeping.
 
+  **A rest holds the pitch before it.** The first version emitted the rest's own
+  remembered degree, on the reasoning that a rest "still holds its pitch" -- which was
+  precisely backwards. The remembered degree exists so switching the step back on
+  restores the note that was there; it is not a note, nobody can see it, and emitting it
+  made the pitch jump for no visible reason. Holding is also what a hardware sequencer's
+  pitch output does, being a sample-and-hold that a rest simply never clocks.
+
+  Reported as "the rectangle disappears but the note still plays", and the report had two
+  causes. The visible one was this. The other was a patch with no `Env` and no `VCA` and
+  the gate output unpatched, where nothing controls amplitude and a gate has nothing to
+  act on -- correct modular behaviour, and worth knowing that the grid gives no hint of
+  it.
+
   A silenced step used to draw a grey box at the pitch it remembered. That was a lie
   about what you would hear -- a rest is the absence of a note, not a note in another
   colour -- so it draws nothing now. The degree is still remembered underneath, which is

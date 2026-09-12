@@ -281,18 +281,49 @@ void aClosedGateIsARestNotASkip() {
 
     StepsNode steps;
     steps.prepare(kRate);
-    steps.setStep(1, 0.25f, false);  // silent
+    steps.setStep(0, 0.5f, true);
+    steps.setStep(1, 0.25f, false);  // a rest, remembering a pitch of its own
     steps.setStep(2, 0.75f, true);
 
-    tick(steps, low, high);          // -> step 1, gated off
+    tick(steps, low, high);          // -> step 1, the rest
     check(steps.output(1)[0] == 0.0f, "a closed step emits no gate");
-    check(std::fabs(steps.output(0)[0] - 0.25f) < 0.0001f,
-          "but its pitch is still on the output");
+    // The remembered degree exists so switching the step back on restores what was
+    // there. It is not a note, nobody can see it, and emitting it makes the pitch jump
+    // for no visible reason -- so the output holds whatever last actually sounded.
+    check(std::fabs(steps.output(0)[0] - 0.5f) < 0.0001f,
+          "and the pitch holds the last note rather than the rest's own");
 
     tick(steps, low, high);          // -> step 2
     check(steps.output(1)[0] == 1.0f, "the next open step still fires");
     check(std::fabs(steps.output(0)[0] - 0.75f) < 0.0001f,
           "so a rest costs a step rather than being skipped");
+
+}
+
+/**
+ * The other half of holding: a rest keeps the degree it remembers, so switching it back
+ * on restores the note that was there rather than an empty step the user has to refill.
+ */
+void aRestKeepsTheNoteItRemembers() {
+    std::printf("a rest keeps the note it remembers\n");
+    const auto high = constantBuffer(1.0f);
+    const auto low = constantBuffer(0.0f);
+
+    StepsNode steps;
+    steps.prepare(kRate);
+    steps.setParam(0, 2.0f);          // a two-step loop, so step 1 comes round quickly
+    steps.setStep(0, 0.5f, true);
+    steps.setStep(1, 0.25f, false);
+
+    tick(steps, low, high);           // -> the rest
+    check(std::fabs(steps.output(0)[0] - 0.5f) < 0.0001f, "held while it is a rest");
+
+    steps.setStep(1, 0.25f, true);    // switch it back on
+    tick(steps, low, high);           // -> step 0
+    tick(steps, low, high);           // -> step 1, now sounding
+    check(steps.output(1)[0] == 1.0f, "it fires once it is open again");
+    check(std::fabs(steps.output(0)[0] - 0.25f) < 0.0001f,
+          "with the pitch it was holding on to all along");
 }
 
 void theGateFollowsTheClockNotTheStep() {
@@ -395,6 +426,7 @@ int main() {
     stepsAdvanceOnEdgesNotLevels();
     stepsPlayTheirOwnPattern();
     aClosedGateIsARestNotASkip();
+    aRestKeepsTheNoteItRemembers();
     theGateFollowsTheClockNotTheStep();
     mixSumsRatherThanAverages();
     outPassesAudioAtLevel();

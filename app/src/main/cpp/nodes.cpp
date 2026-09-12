@@ -225,14 +225,21 @@ void StepsNode::process(int32_t frames) {
         const bool high = gateHigh(clock[i]);
         if (high && !wasHigh_) {
             step_ = (step_ + 1) % (length_ > 0 ? length_ : 1);
+            // Only a sounding step moves the pitch. A rest is the absence of a note, so
+            // it has no pitch to offer -- it keeps the degree it remembers so that
+            // switching it back on restores what was there, but that degree is a note
+            // nobody can see and emitting it makes the pitch jump for no visible reason.
+            // Holding is also what a sequencer's pitch output does in hardware, where it
+            // is a sample-and-hold and a rest simply never clocks it.
+            if (gate_[step_]) voiced_ = step_;
         }
         wasHigh_ = high;
 
-        pitch[i] = pitch_[step_] + transposeCents_ / 1200.0f;
-        // A step whose gate is off is a rest: the clock still advances through it, and
-        // the pitch still holds, but nothing is triggered. Anding with the clock rather
-        // than replacing it keeps the gate's shape -- the sequencer decides whether a
-        // step sounds, the clock decides for how long.
+        // Read through voiced_ rather than copied at the edge, so editing the note that
+        // is currently sounding is heard immediately rather than on the next lap.
+        pitch[i] = pitch_[voiced_] + transposeCents_ / 1200.0f;
+        // Anding with the clock rather than replacing it keeps the gate's shape: the
+        // sequencer decides whether a step sounds, the clock decides for how long.
         gate[i] = (high && gate_[step_]) ? 1.0f : 0.0f;
     }
 }
@@ -242,6 +249,9 @@ void StepsNode::setParam(int32_t index, float value) {
         case 0: {
             length_ = static_cast<int32_t>(clampf(value, 1.0f, static_cast<float>(kSteps)) + 0.5f);
             if (step_ >= length_) step_ = 0;
+            // Shortening the loop past the note being held would leave the pitch on a
+            // step the sequence no longer reaches.
+            if (voiced_ >= length_) voiced_ = 0;
             break;
         }
         case 1: transposeCents_ = clampf(value, -kTuneRange, kTuneRange); break;

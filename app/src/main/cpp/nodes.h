@@ -139,6 +139,8 @@ public:
 
 private:
     int32_t step_ = 0;
+    /** The last step that actually sounded; what the pitch output holds through a rest. */
+    int32_t voiced_ = 0;
     int32_t length_ = 8;
     /** Cents. See OscNode::tuneCents_. */
     float transposeCents_ = 0.0f;
