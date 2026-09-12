@@ -512,8 +512,12 @@ A horizontal bar is the right default and the wrong universal:
 
 - **Stepped parameters want radio buttons**, not a bar. Dragging to pick "square" from
   four named waveforms is the wrong gesture, and a bar cannot show the names.
-- **`Steps` needs a grid.** It plays a hardcoded pentatonic figure with no way to edit
-  it, which is the clearest case for the panel: sixteen steps of pitch and gate is
+- **`Steps` needs a grid.** Verified working end to end on the device at last: given a
+  `Clock` into its gate input, it steps the pattern at exactly the clock's tempo
+  (measured +10, +12, +10, +7, +3, 0, +3, +7 semitones from middle C, one step every
+  333ms at 180bpm, with the envelope shaping each note). Nothing is broken; there is
+  simply no way to change the notes. It plays a hardcoded pentatonic figure with no way
+  to edit it, which is the clearest case for the panel: sixteen steps of pitch and gate is
   unrepresentable on a 116dp module and unremarkable across a screen. This is the
   argument that settled the panel design in the first place.
 - An envelope would read better as a draggable ADSR curve than four bars.
@@ -750,6 +754,13 @@ use rather than by argument.
 3. **Does the unified gesture loop survive?** It already needs long-press (Phase 1) and
    may need knob-drag (Phase 5). At some point a single `awaitEachGesture` becomes the
    tangle it was written to avoid. Watch for it.
-4. **Is single-source input the right call?** Replacing an occupied input keeps a patch
+4. **What was the tap glitch?** For several versions a tap anywhere -- canvas or open
+   panel -- produced a small click. Established at the time: taps send zero commands
+   (the `PatchSync` log is empty through one), captures were clean, xruns were zero, and
+   the canvas uses raw `pointerInput`, which never asks Android to play a touch sound.
+   It disappeared on its own across a later build and nobody fixed it deliberately. An
+   unexplained fix is not the same as a fixed bug, so it is recorded here rather than
+   deleted: if it returns, start from what was already ruled out.
+5. **Is single-source input the right call?** Replacing an occupied input keeps a patch
    readable and avoids hidden summing, but it makes a mult mandatory for things hardware
    modular does implicitly. It may prove to be one tap too many in practice.
