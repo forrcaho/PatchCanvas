@@ -111,6 +111,14 @@ fun Patch.replaceWith(source: Patch): Set<Long> {
 
         source.connections.forEach { connections.add(it) }
 
+        // The settings that belong to the patch as a whole. The scale was missing from
+        // here until the tempo joined it, so undoing a change of tuning kept the new one --
+        // and the byte-identical test could not see it, because both sides of it were in
+        // the default tuning.
+        scale = source.scale
+        tempo = source.tempo
+        beatsPerBar = source.beatsPerBar
+
         // Null if the snapshot predates the module, in which case there is nothing left
         // to have open and the panel closing is the right answer.
         openId?.let { id -> module(id)?.expanded = true }

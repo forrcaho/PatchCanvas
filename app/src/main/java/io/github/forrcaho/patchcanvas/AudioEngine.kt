@@ -76,6 +76,20 @@ object AudioEngine {
     fun stepOf(id: Long): Int =
         if (available && started) nativeStepOf(id) else -1
 
+    /** The transport's rate, in beats per minute. The engine clamps it to what it supports. */
+    fun setTempo(bpm: Float): Boolean = available && started && nativeSetTempo(bpm)
+
+    /** Sends the transport back to the start of bar one. Not part of the patch, so not undoable. */
+    fun resetTransport(): Boolean = available && started && nativeResetTransport()
+
+    /**
+     * Where the transport has got to, in beats from its start.
+     *
+     * Polled per frame while the transport card is open, and nowhere else -- the same
+     * shape as [stepOf], for the same reason.
+     */
+    fun transportBeat(): Double = if (available && started) nativeTransportBeat() else 0.0
+
     /** Frees nodes the audio thread retired. Cheap, and never on the audio thread. */
     fun collectGarbage() {
         if (available && started) nativeCollectGarbage()
@@ -141,6 +155,9 @@ object AudioEngine {
     private external fun nativeSetParam(id: Long, index: Int, value: Float): Boolean
     private external fun nativeSetStep(id: Long, index: Int, pitch: Float, gate: Boolean): Boolean
     private external fun nativeStepOf(id: Long): Int
+    private external fun nativeSetTempo(bpm: Float): Boolean
+    private external fun nativeResetTransport(): Boolean
+    private external fun nativeTransportBeat(): Double
     private external fun nativeCollectGarbage()
     private external fun nativeStatus(): String
     private external fun nativeArmCapture(enabled: Boolean, path: String)

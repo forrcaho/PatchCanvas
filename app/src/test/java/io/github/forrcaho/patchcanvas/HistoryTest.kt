@@ -213,6 +213,40 @@ class ReplaceWithTest {
     }
 
     @Test
+    fun `undo puts the tempo and beats per bar back`() {
+        val live = demoPatch()
+        val snapshot = live.toJson()
+        live.tempo = 211f
+        live.beatsPerBar = 7
+
+        live.replaceWith(patchFromJson(snapshot)!!)
+
+        assertEquals(TEMPO.default, live.tempo, 0.0001f)
+        assertEquals(BEATS_PER_BAR.default.toInt(), live.beatsPerBar)
+        assertEquals(snapshot, live.toJson())
+    }
+
+    /**
+     * A real bug, found while adding the tempo: replaceWith never copied the scale, so an
+     * undone change of tuning kept the new tuning. The snapshot is taken in a scale other
+     * than the default, because on the default the missing copy is invisible.
+     */
+    @Test
+    fun `undo puts the scale back`() {
+        val library = ScaleLibrary.of(File("src/main/assets/scales"))
+        val major = library.byName("Major")!!
+        val minor = library.byName("Minor")!!
+
+        val live = demoPatch().apply { scale = major }
+        val snapshot = live.toJson()
+        live.scale = minor
+
+        live.replaceWith(patchFromJson(snapshot, library)!!)
+
+        assertEquals("Major", live.scale.name)
+    }
+
+    @Test
     fun `a module added after the snapshot is gone once it is restored`() {
         val snapshot = demoPatch().toJson()
         val live = demoPatch()
@@ -256,7 +290,7 @@ class HistoryButtonGeometryTest {
         val buttons = listOf(frame.historyRect(false), frame.historyRect(true))
 
         Types.byName.values.forEach { type ->
-            repeat(type.params.size) { i ->
+            type.rowParams.forEach { i ->
                 val row = panelRow(panel, frame.density, type, i)
                 buttons.forEach { button ->
                     assertTrue(
@@ -432,5 +466,93 @@ class ScaleChooserGeometryTest {
         val tile = scaleTiles(panel, frame.density, 4).first()
         assertTrue("too narrow: ${tile.width / frame.density}dp", tile.width / frame.density >= 120f)
         assertTrue("too short: ${tile.height / frame.density}dp", tile.height / frame.density >= 40f)
+    }
+
+    @Test
+    fun `the interval chip sits in the header, clear of the scale chip and the title`() {
+        val interval = panelIntervalChip(panel, frame.density)
+        val scale = panelScaleChip(panel, frame.density)
+        assertFalse("overlaps the scale chip", interval.overlaps(scale))
+        assertTrue("spills past the header", interval.bottom <= panel.top + PatchModule.PANEL_HEADER * frame.density)
+        // The title is centred; keeping the chips in the right-hand side keeps them off it.
+        assertTrue("reaches the centred title", interval.left > panel.center.x + 60f * frame.density)
+    }
+
+    @Test
+    fun `every interval fits on one page of tiles`() {
+        assertEquals(INTERVALS.size, scaleTiles(panel, frame.density, INTERVALS.size).size)
+    }
+}
+
+/**
+ * The transport floats over the graph and over an open panel alike, so it must not sit
+ * on anything either of them needs -- a chip over a knob is a knob you cannot reach.
+ */
+class TransportGeometryTest {
+
+    private val frame = Frame(
+        canvas = Size(2404f, 1080f),
+        density = 2.4375f,
+        insetLeft = 160f,
+        insetTop = 54f,
+        insetRight = 0f,
+        insetBottom = 58f,
+    )
+    private val d = frame.density
+    private val panel = panelRect(frame)
+    private val chip = frame.transportChip()
+    private val card = frame.transportCard()
+
+    @Test
+    fun `the chip and its card clear the history buttons`() {
+        listOf(frame.historyRect(false), frame.historyRect(true)).forEach { button ->
+            assertFalse("chip overlaps $button", chip.overlaps(button))
+            assertFalse("card overlaps $button", card.overlaps(button))
+        }
+    }
+
+    @Test
+    fun `the chip clears every panel control it floats over`() {
+        assertFalse(chip.overlaps(panelScaleChip(panel, d)))
+        assertFalse(chip.overlaps(panelIntervalChip(panel, d)))
+        assertFalse(chip.overlaps(panelGrid(panel, d)))
+        Types.byName.values.forEach { type ->
+            type.rowParams.forEach { i ->
+                assertFalse("${type.name} row $i", chip.overlaps(panelRow(panel, d, type, i)))
+            }
+            type.inputs.indices.forEach { i ->
+                val jack = panelPort(panel, d, PortDirection.INPUT, i, type.inputs.size)
+                assertFalse("${type.name} input $i", chip.inflate(8f * d).contains(jack))
+            }
+        }
+    }
+
+    @Test
+    fun `the chip is inside the safe area and big enough to hit`() {
+        assertTrue(chip.left >= frame.insetLeft)
+        assertTrue(chip.top >= frame.insetTop)
+        assertTrue("too short: ${chip.height / d}dp", chip.height / d >= 36f)
+    }
+
+    @Test
+    fun `the card's controls stay inside it and apart`() {
+        val tempo = transportTempoRow(card, d)
+        val beats = transportBeatsRow(card, d)
+        val reset = transportReset(card, d)
+        listOf(tempo, beats, reset).forEach { part ->
+            assertTrue("$part escapes the card", card.contains(part.topLeft) &&
+                part.right <= card.right && part.bottom <= card.bottom)
+        }
+        assertFalse(tempo.overlaps(beats))
+        assertFalse(beats.overlaps(reset))
+        assertTrue("reset too small to hit", reset.height / d >= 36f && reset.width / d >= 64f)
+    }
+
+    /** Every beats-per-bar button wide enough for a finger. */
+    @Test
+    fun `the beats per bar buttons are big enough to hit`() {
+        val row = transportBeatsRow(card, d)
+        val width = (row.width - 5f * d * (BEATS_PER_BAR.steps - 1)) / BEATS_PER_BAR.steps
+        assertTrue("buttons ${width / d}dp wide", width / d >= 30f)
     }
 }

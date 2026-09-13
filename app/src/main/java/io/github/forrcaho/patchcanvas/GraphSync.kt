@@ -15,7 +15,7 @@ enum class NodeType(val id: Int) {
     Out(5),
     In(6),
     Vca(7),
-    Clock(8),
+    // 8 was Clock, retired when the transport replaced it, and deliberately not reused.
     Mix(9);
 
     companion object {
@@ -27,7 +27,6 @@ enum class NodeType(val id: Int) {
             "Out" -> Out
             "In" -> In
             "VCA" -> Vca
-            "Clock" -> Clock
             "Mix" -> Mix
             else -> Unknown
         }
@@ -47,6 +46,8 @@ interface GraphCommands {
     fun setParam(id: Long, index: Int, value: Float)
     /** One step of a sequence. Pitch in octaves from the root, not degrees. */
     fun setStep(id: Long, index: Int, pitch: Float, gate: Boolean)
+    /** The transport's rate, in beats per minute. */
+    fun setTempo(bpm: Float)
     fun collectGarbage()
 }
 
@@ -94,6 +95,11 @@ object EngineCommands : GraphCommands {
         AudioEngine.setStep(id, index, pitch, gate)
     }
 
+    override fun setTempo(bpm: Float) {
+        trace { "tempo $bpm" }
+        AudioEngine.setTempo(bpm)
+    }
+
     override fun collectGarbage() { AudioEngine.collectGarbage() }
 }
 
@@ -116,6 +122,7 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
     private var syncedSteps = emptyMap<Long, List<Step>>()
     /** Retuning is not an edit to any step, but every step's pitch changes with it. */
     private var syncedScale: Scale? = null
+    private var syncedTempo: Float? = null
 
     /** Forget what the engine has, so the next sync re-sends everything. */
     fun invalidate() {
@@ -124,6 +131,7 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
         syncedParams = emptyMap()
         syncedSteps = emptyMap()
         syncedScale = null
+        syncedTempo = null
     }
 
     fun sync(patch: Patch) {
@@ -186,11 +194,17 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
             }
         }
 
+        // The transport's rate, on a change of value alone. Not a node, so not part of the
+        // diff above -- and only the rate: where the transport has got to belongs to the
+        // engine, and is not the patch's to send.
+        if (syncedTempo != patch.tempo) commands.setTempo(patch.tempo)
+
         syncedNodes = nodes
         syncedCables = cables
         syncedParams = params
         syncedSteps = steps
         syncedScale = patch.scale
+        syncedTempo = patch.tempo
 
         // Whatever the audio thread retired during the last block is ours to free.
         commands.collectGarbage()

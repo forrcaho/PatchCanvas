@@ -129,11 +129,12 @@ enum class ParamCurve { LINEAR, EXPONENTIAL, STEPPED }
 /**
  * What a stepped parameter's options look like on the panel.
  *
- * NUMBER covers anything counted -- a length, a division. WAVE draws the waveform
- * itself, which is how every hardware oscillator labels this control and why: the shape
- * is the name, and reading it needs no translation from the word "saw".
+ * NUMBER covers anything counted, like a length. WAVE draws the waveform itself, which is
+ * how every hardware oscillator labels this control and why: the shape is the name, and
+ * reading it needs no translation from the word "saw". DIVISION is a note length from
+ * [INTERVALS], and the one choice a panel shows in its header rather than as a row.
  */
-enum class Choice { NUMBER, WAVE }
+enum class Choice { NUMBER, WAVE, DIVISION }
 
 data class Param(
     val name: String,
@@ -153,6 +154,13 @@ data class Param(
      * knob to it.
      */
     val marks: Boolean = false,
+    /**
+     * Drawn as a chip in the panel's header rather than as a row of the panel's body.
+     *
+     * For the interval, which a sequencer panel has no row to spare for: the grid takes
+     * two thirds of the body, and a third row in what is left overlaps the other two.
+     */
+    val header: Boolean = false,
 ) {
     /**
      * How many options a stepped parameter offers.
@@ -209,7 +217,7 @@ data class Param(
 /**
  * One step of a sequence: which degree of the scale, and whether it sounds.
  *
- * A rest is a step with [on] false rather than a missing entry, because the clock still
+ * A rest is a step with [on] false rather than a missing entry, because the transport still
  * advances through it and the pitch still holds -- the note is withheld, the step is not.
  */
 data class Step(val degree: Int, val on: Boolean = true)
@@ -227,7 +235,13 @@ data class ModuleType(
     val pinned: Edge? = null,
     /** Non-zero only for sequencers; mirrors StepsNode::kSteps. */
     val stepCount: Int = 0,
-)
+) {
+    /** Indices of the parameters drawn as rows of the panel; the rest live in its header. */
+    val rowParams: List<Int> get() = params.indices.filter { !params[it].header }
+
+    /** The parameter choosing a clocked module's interval, or -1 for one the transport does not drive. */
+    val intervalParam: Int get() = params.indexOfFirst { it.choice == Choice.DIVISION }
+}
 
 object Types {
     private val A = SignalKind.AUDIO
@@ -277,17 +291,20 @@ object Types {
         // Added to the control voltage, so a VCA with nothing patched can still open.
         params = listOf(Param("bias", 0f, 1f, 0f, "", LIN)),
     )
-    val Clock = ModuleType(
-        "Clock", emptyList(), listOf(Port("gate", G)),
-        Color(0xFFD9C46A),
-        params = listOf(Param("bpm", 20f, 300f, 120f, "", LIN)),
-    )
+    /**
+     * No clock input: the transport steps it, at the interval chosen in its header. Order
+     * mirrors StepsNode::setParam -- length, transpose, interval.
+     */
     val Steps = ModuleType(
-        "Steps", listOf(Port("clock", G)), listOf(Port("pitch", C), Port("gate", G)),
+        "Steps", emptyList(), listOf(Port("pitch", C), Port("gate", G)),
         Color(0xFF6FA8E5),
         params = listOf(
             Param("len", 1f, STEP_COUNT.toFloat(), 8f, "", STEP),
             Param("transp", -TUNE_RANGE, TUNE_RANGE, 0f, "\u00A2", LIN, marks = true),
+            Param(
+                "interval", 0f, (INTERVALS.size - 1).toFloat(), DEFAULT_INTERVAL.toFloat(),
+                curve = STEP, choice = Choice.DIVISION, header = true,
+            ),
         ),
         stepCount = STEP_COUNT,
     )
@@ -327,7 +344,7 @@ object Types {
      * inputs as you like, since each input stores its own source. Only summing ever
      * needed a module, and that is Mix.
      */
-    val palette = listOf(Osc, Filter, Env, Vca, Clock, Steps, Mix)
+    val palette = listOf(Osc, Filter, Env, Vca, Steps, Mix)
 
     val byName: Map<String, ModuleType> =
         (palette + listOf(Out, In)).associateBy { it.name }
@@ -540,16 +557,20 @@ private fun panelControls(panel: Rect, d: Float, type: ModuleType): Rect {
 /** A knob's row: label, value and the bar beneath them. */
 internal fun panelRow(panel: Rect, d: Float, type: ModuleType, index: Int): Rect {
     val area = panelControls(panel, d, type)
-    val count = type.params.size
+    val rows = type.rowParams
+    val count = rows.size
+    // Placed by its position among the rows, not among the parameters: a parameter that
+    // lives in the header takes no row, and must not leave a gap where one would be.
+    val slot = rows.indexOf(index).coerceAtLeast(0)
     val side = PatchModule.PANEL_SIDE * d
     val rowHeight = minOf(PatchModule.PANEL_ROW_MAX * d, area.height / maxOf(count, 1))
     val block = rowHeight * count
-    val top = area.top + (area.height - block) / 2f + index * rowHeight
+    val top = area.top + (area.height - block) / 2f + slot * rowHeight
     return Rect(panel.left + side, top, panel.right - side, top + rowHeight)
 }
 
 internal fun panelKnobAt(panel: Rect, d: Float, module: PatchModule, at: Offset): Int? {
-    module.type.params.indices.forEach { i ->
+    module.type.rowParams.forEach { i ->
         // Generous vertically: the rows are the only targets on the panel, so a near
         // miss should still land rather than do nothing.
         if (panelRow(panel, d, module.type, i).inflate(6f * d).contains(at)) return i
@@ -681,6 +702,69 @@ private fun DrawScope.drawScaleTile(
 
 private val scaleAccent = Color(0xFF6FA8E5)
 
+/** A chip: a label in a rounded box, lit while whatever it opens is open. */
+private fun DrawScope.drawChip(
+    rect: Rect,
+    d: Float,
+    label: String,
+    open: Boolean,
+    accent: Color,
+    measurer: TextMeasurer,
+) {
+    val corner = CornerRadius(7f * d, 7f * d)
+    drawRoundRect(
+        color = if (open) accent else ChipFill,
+        topLeft = rect.topLeft,
+        size = rect.size,
+        cornerRadius = corner,
+    )
+    drawRoundRect(
+        color = ChipEdge,
+        topLeft = rect.topLeft,
+        size = rect.size,
+        cornerRadius = corner,
+        style = Stroke(width = 1.5f * d),
+    )
+    val text = measurer.measure(label, if (open) PanelChipOnStyle else PanelChipStyle)
+    drawText(
+        text,
+        topLeft = Offset(rect.center.x - text.size.width / 2f, rect.center.y - text.size.height / 2f),
+    )
+}
+
+/** A tile in a chooser: a name, and a quieter line of detail beneath it. */
+private fun DrawScope.drawTile(
+    rect: Rect,
+    d: Float,
+    name: String,
+    detail: String,
+    chosen: Boolean,
+    measurer: TextMeasurer,
+) {
+    drawRoundRect(
+        color = if (chosen) scaleAccent else TileFill,
+        topLeft = rect.topLeft,
+        size = rect.size,
+        cornerRadius = CornerRadius(7f * d, 7f * d),
+    )
+    if (!chosen) {
+        drawRoundRect(
+            color = ChipEdge,
+            topLeft = rect.topLeft,
+            size = rect.size,
+            cornerRadius = CornerRadius(7f * d, 7f * d),
+            style = Stroke(width = 1.5f * d),
+        )
+    }
+    val title = measurer.measure(name, if (chosen) PanelChipOnStyle else PanelChipStyle)
+    val titleTop = rect.top + 7f * d
+    drawText(title, topLeft = Offset(rect.left + 10f * d, titleTop))
+    drawText(
+        measurer.measure(detail, GridLabelStyle),
+        topLeft = Offset(rect.left + 10f * d, titleTop + title.size.height),
+    )
+}
+
 /**
  * The tuning chip, in the panel header.
  *
@@ -696,6 +780,18 @@ internal fun panelScaleChip(panel: Rect, d: Float): Rect {
         Offset(panel.right - width - 14f * d, panel.top + (PatchModule.PANEL_HEADER * d - height) / 2f),
         Size(width, height),
     )
+}
+
+/**
+ * The interval chip, beside the tuning chip in a clocked module's header.
+ *
+ * On the right with its neighbour rather than on the left, where it would be the mirror
+ * of the scale chip: the left of the header is where the transport chip floats.
+ */
+internal fun panelIntervalChip(panel: Rect, d: Float): Rect {
+    val scale = panelScaleChip(panel, d)
+    val width = 72f * d
+    return Rect(Offset(scale.left - width - 8f * d, scale.top), Size(width, scale.height))
 }
 
 /** Where each scale's tile lands when the chip is open. */
@@ -777,6 +873,18 @@ class Patch {
      * a key in the same way it has a tempo.
      */
     var scale by mutableStateOf(Scale.Chromatic)
+
+    /**
+     * Beats per minute, for the transport every clocked module divides.
+     *
+     * Part of the patch like the scale, so it saves and undoes. Where the transport has
+     * got to is not: that is a performance state, like the output switch, and lives only
+     * in the engine.
+     */
+    var tempo by mutableFloatStateOf(TEMPO.default)
+
+    /** How the transport's position reads as bars. Nothing divides by it yet. */
+    var beatsPerBar by mutableIntStateOf(BEATS_PER_BAR.default.toInt())
 
     /**
      * Modules to pulse, after an undo moved something you were not looking at.
@@ -982,10 +1090,40 @@ internal class Frame(
         )
     }
 
+    /**
+     * The transport's chip, top-left.
+     *
+     * Screen space and always present, floating over the graph and an open panel alike --
+     * the undo buttons' arrangement, in the opposite corner. Top-left because it is free
+     * on both: the In rail is centred on the left edge, and a panel keeps its own header
+     * chips on the right.
+     */
+    fun transportChip(): Rect {
+        val d = density
+        return Rect(
+            Offset(insetLeft + RAIL_MARGIN * d, insetTop + RAIL_MARGIN * d),
+            Size(TRANSPORT_CHIP_W * d, TRANSPORT_CHIP_H * d),
+        )
+    }
+
+    /** What the chip opens into, hanging beneath it over whatever is there. */
+    fun transportCard(): Rect {
+        val d = density
+        val chip = transportChip()
+        return Rect(
+            Offset(chip.left, chip.bottom + 6f * d),
+            Size(TRANSPORT_CARD_W * d, TRANSPORT_CARD_H * d),
+        )
+    }
+
     companion object {
         const val RAIL_MARGIN = 8f
         const val HISTORY_SIDE = 44f
         const val HISTORY_GAP = 8f
+        const val TRANSPORT_CHIP_W = 96f
+        const val TRANSPORT_CHIP_H = 36f
+        const val TRANSPORT_CARD_W = 300f
+        const val TRANSPORT_CARD_H = 204f
     }
 }
 
@@ -1003,6 +1141,7 @@ internal class CanvasControls(
     val onToggleInput: () -> Unit = {},
     val onUndo: () -> Unit = {},
     val onRedo: () -> Unit = {},
+    val onResetTransport: () -> Unit = {},
 )
 
 /**
@@ -1028,6 +1167,29 @@ internal fun CanvasControls.tapHistory(frame: Frame, at: Offset): Boolean {
 internal fun CanvasControls.overHistory(frame: Frame, at: Offset): Boolean =
     (canUndo && frame.historyRect(false).contains(at)) ||
         (canRedo && frame.historyRect(true).contains(at))
+
+// ---------------------------------------------------------------- the transport card
+
+private const val CARD_PAD = 14f
+
+/** The tempo: a label, its reading and a bar beneath, like a panel's continuous knob. */
+internal fun transportTempoRow(card: Rect, d: Float) =
+    Rect(card.left + CARD_PAD * d, card.top + 12f * d, card.right - CARD_PAD * d, card.top + 66f * d)
+
+/**
+ * Beats per bar: a label over a row of buttons. 68dp rather than the 60 it was, which
+ * put the label's descenders under the buttons on the reference device -- a measured
+ * text height includes its line spacing, so the label is taller than its point size.
+ */
+internal fun transportBeatsRow(card: Rect, d: Float) =
+    Rect(card.left + CARD_PAD * d, card.top + 74f * d, card.right - CARD_PAD * d, card.top + 142f * d)
+
+/** Back to bar one, bottom-right, with the position it would reset drawn beside it. */
+internal fun transportReset(card: Rect, d: Float) =
+    Rect(
+        Offset(card.right - CARD_PAD * d - 88f * d, card.bottom - 12f * d - 40f * d),
+        Size(88f * d, 40f * d),
+    )
 
 /** Screen position of any port, whether its module is pinned or free. */
 private fun portScreen(
@@ -1063,6 +1225,8 @@ fun PatchCanvas(
     canRedo: Boolean = false,
     onUndo: () -> Unit = {},
     onRedo: () -> Unit = {},
+    /** Sends the transport back to bar one. */
+    onResetTransport: () -> Unit = {},
     /** Whatever `.scl` files were found. Never empty; at worst just the fallback. */
     scales: List<Scale> = listOf(Scale.Chromatic),
 ) {
@@ -1095,7 +1259,9 @@ fun PatchCanvas(
     // draw correctly (that lambda is rebuilt every recomposition) while never being
     // hittable. They did exactly that on the device.
     val controls by rememberUpdatedState(
-        CanvasControls(canUndo, canRedo, onToggleOutput, onToggleInput, onUndo, onRedo),
+        CanvasControls(
+            canUndo, canRedo, onToggleOutput, onToggleInput, onUndo, onRedo, onResetTransport,
+        ),
     )
 
     // What the sequencer is playing, polled per frame and only while its panel is open.
@@ -1111,7 +1277,23 @@ fun PatchCanvas(
     // read the newest one, and the chooser would never open. Same trap as the controls
     // above, wearing a different hat.
     var scaleMenu by remember { mutableStateOf(false) }
-    LaunchedEffect(openModule?.id) { scaleMenu = false }
+    var intervalMenu by remember { mutableStateOf(false) }
+    LaunchedEffect(openModule?.id) {
+        scaleMenu = false
+        intervalMenu = false
+    }
+
+    // The transport's card. Unkeyed, for the same reason as the chooser above, and left
+    // alone when a panel opens or closes: it floats over both, so neither of them owns it.
+    var transportOpen by remember { mutableStateOf(false) }
+    var transportBeat by remember { mutableDoubleStateOf(0.0) }
+    LaunchedEffect(transportOpen) {
+        if (!transportOpen) return@LaunchedEffect
+        while (true) {
+            withFrameNanos { }
+            transportBeat = AudioEngine.transportBeat()
+        }
+    }
     LaunchedEffect(openModule?.id, openModule?.type?.stepCount) {
         val id = openModule?.takeIf { it.type.stepCount > 0 }?.id
         if (id == null) {
@@ -1157,6 +1339,23 @@ fun PatchCanvas(
                     val frame = frameFor(Size(size.width.toFloat(), size.height.toFloat()))
                     val down = awaitFirstDown(requireUnconsumed = false)
 
+                    // The transport floats over the graph and the panel alike, so it is
+                    // asked before either. Only its own chip and, while open, its own
+                    // card: a touch anywhere else carries on to whatever is underneath,
+                    // which is what keeps it from being modal. An open context menu keeps
+                    // its tiles, since it is the thing that was just asked for.
+                    if (interaction !is Interaction.Menu) {
+                        if (frame.transportChip().contains(down.position)) {
+                            waitForUpRelease()
+                            transportOpen = !transportOpen
+                            return@awaitEachGesture
+                        }
+                        if (transportOpen && frame.transportCard().contains(down.position)) {
+                            transportCardGesture(frame, down.position, patch, controls.onResetTransport)
+                            return@awaitEachGesture
+                        }
+                    }
+
                     // An open panel owns the screen. Pan, zoom and patching all belong to
                     // the canvas behind it, so this is a separate and much simpler loop
                     // rather than another outcome bolted into the one below.
@@ -1180,11 +1379,29 @@ fun PatchCanvas(
                             return@awaitEachGesture
                         }
 
+                        // The interval chooser, on exactly the terms of the scale's.
+                        val intervalParam = open.type.intervalParam
+                        if (intervalParam >= 0 && intervalMenu) {
+                            val tiles = scaleTiles(panel, frame.density, INTERVALS.size)
+                            waitForUpRelease()
+                            val hit = tiles.indexOfFirst { it.contains(down.position) }
+                            if (hit >= 0) open.setParam(intervalParam, hit.toFloat())
+                            intervalMenu = false
+                            return@awaitEachGesture
+                        }
+
                         if (open.type.stepCount > 0 &&
                             panelScaleChip(panel, frame.density).contains(down.position)
                         ) {
                             waitForUpRelease()
                             scaleMenu = true
+                            return@awaitEachGesture
+                        }
+                        if (intervalParam >= 0 &&
+                            panelIntervalChip(panel, frame.density).contains(down.position)
+                        ) {
+                            waitForUpRelease()
+                            intervalMenu = true
                             return@awaitEachGesture
                         }
                         val knob =
@@ -1501,7 +1718,7 @@ fun PatchCanvas(
         patch.modules.firstOrNull { it.expanded }?.let { open ->
             drawPanel(
                 open, patch, panelRect(frame), d, screenMeasurer, patch.scale, playingStep,
-                scales, scaleMenu,
+                scales, scaleMenu, intervalMenu,
             )
         }
 
@@ -1516,6 +1733,10 @@ fun PatchCanvas(
         // in covers no control of the panel's own.
         if (canUndo) drawHistoryButton(frame.historyRect(false), d, redo = false)
         if (canRedo) drawHistoryButton(frame.historyRect(true), d, redo = true)
+
+        // Over the panel for the same reason as the buttons, and before the context menu,
+        // which is transient and should cover everything while it is up.
+        drawTransport(frame, d, patch, transportOpen, transportBeat, screenMeasurer)
 
         (interaction as? Interaction.Menu)?.let { menu ->
             drawMenu(menuLayout(menuItems(menu.targetId), menu.anchor, d, size), d, screenMeasurer)
@@ -1665,7 +1886,7 @@ private fun DrawScope.drawStepGrid(
 
     // The column being played, behind the cells so a lit note still reads as a note.
     // Only when it is inside the loop: a length change can leave the engine reporting a
-    // step that is no longer reached until the next clock edge.
+    // step that is no longer reached until the next tick.
     if (playingStep in 0 until minOf(length, columns)) {
         drawRect(
             color = GridPlayhead,
@@ -1841,6 +2062,17 @@ private fun DrawScope.drawChoices(
         val ink = if (on) Color(0xFF14171C) else Color(0xFFB7C0CE)
         when (param.choice) {
             Choice.WAVE -> drawWave(box, d, i, ink)
+            Choice.DIVISION -> {
+                val text = measurer.measure(INTERVALS.getOrNull(i)?.label.orEmpty(), PanelValueStyle)
+                drawText(
+                    text,
+                    color = ink,
+                    topLeft = Offset(
+                        box.center.x - text.size.width / 2f,
+                        box.center.y - text.size.height / 2f,
+                    ),
+                )
+            }
             Choice.NUMBER -> {
                 val text = measurer.measure((param.min + i).toInt().toString(), PanelValueStyle)
                 drawText(
@@ -1971,6 +2203,119 @@ private fun DrawScope.drawHistoryButton(rect: Rect, d: Float, redo: Boolean) {
 private const val START_ANGLE = 200f
 private const val SWEEP_ANGLE = 140f
 
+// ---------------------------------------------------------------- transport
+
+private val TransportAccent = Color(0xFFD9C46A)
+
+/**
+ * The transport chip, and its card while open.
+ *
+ * The chip shows the tempo, since that is the number you glance at it for. Where the
+ * transport has got to is drawn only while the card is open, which is also the only time
+ * it is polled: a readout ticking in the corner would keep the canvas repainting every
+ * frame for nobody.
+ */
+private fun DrawScope.drawTransport(
+    frame: Frame,
+    d: Float,
+    patch: Patch,
+    open: Boolean,
+    beat: Double,
+    measurer: TextMeasurer,
+) {
+    val bpm = "${patch.tempo.roundToInt()} bpm"
+    drawChip(frame.transportChip(), d, bpm, open, TransportAccent, measurer)
+    if (!open) return
+
+    val card = frame.transportCard()
+    val corner = CornerRadius(10f * d, 10f * d)
+    drawRoundRect(Color(0xFF1B1F26), card.topLeft, card.size, corner)
+    drawRoundRect(ChipEdge, card.topLeft, card.size, corner, style = Stroke(width = 1.5f * d))
+
+    val tempoRow = transportTempoRow(card, d)
+    drawText(measurer.measure(TEMPO.name, PanelParamStyle), topLeft = tempoRow.topLeft)
+    val reading = measurer.measure(bpm, PanelValueStyle)
+    drawText(reading, topLeft = Offset(tempoRow.right - reading.size.width, tempoRow.top))
+    val barHeight = PatchModule.PANEL_BAR * d
+    val barTop = tempoRow.bottom - barHeight - 4f * d
+    val radius = CornerRadius(barHeight / 2f, barHeight / 2f)
+    drawRoundRect(
+        Color(0xFF12151A), Offset(tempoRow.left, barTop), Size(tempoRow.width, barHeight), radius,
+    )
+    drawRoundRect(
+        TransportAccent,
+        Offset(tempoRow.left, barTop),
+        Size((tempoRow.width * TEMPO.positionOf(patch.tempo)).coerceAtLeast(barHeight), barHeight),
+        radius,
+    )
+
+    val beatsRow = transportBeatsRow(card, d)
+    drawText(measurer.measure(BEATS_PER_BAR.name, PanelParamStyle), topLeft = beatsRow.topLeft)
+    drawChoices(beatsRow, d, BEATS_PER_BAR, patch.beatsPerBar.toFloat(), TransportAccent, measurer)
+
+    // Bar and beat, both counted from one, as they are said.
+    val reset = transportReset(card, d)
+    val perBar = patch.beatsPerBar.coerceAtLeast(1)
+    val whole = floor(beat).toLong().coerceAtLeast(0L)
+    val position = measurer.measure(
+        "bar ${whole / perBar + 1}  ·  beat ${whole % perBar + 1}",
+        PanelValueStyle,
+    )
+    drawText(position, topLeft = Offset(tempoRow.left, reset.center.y - position.size.height / 2f))
+
+    val buttonCorner = CornerRadius(8f * d, 8f * d)
+    drawRoundRect(ChipFill, reset.topLeft, reset.size, buttonCorner)
+    drawRoundRect(ChipEdge, reset.topLeft, reset.size, buttonCorner, style = Stroke(width = 1.5f * d))
+    val label = measurer.measure("reset", PanelChipStyle)
+    drawText(
+        label,
+        topLeft = Offset(reset.center.x - label.size.width / 2f, reset.center.y - label.size.height / 2f),
+    )
+}
+
+/**
+ * A touch that landed on the open transport card.
+ *
+ * Its own short loop, like the panel's, because the card owns what lands on it: a drag
+ * along the tempo bar must not also pan the canvas underneath.
+ */
+private suspend fun AwaitPointerEventScope.transportCardGesture(
+    frame: Frame,
+    down: Offset,
+    patch: Patch,
+    onReset: () -> Unit,
+) {
+    val d = frame.density
+    val card = frame.transportCard()
+    val tempoRow = transportTempoRow(card, d)
+    // Generous vertically, like a panel's knobs: the bar is the row's only target.
+    val onTempo = tempoRow.inflate(6f * d).contains(down)
+
+    // Whole beats per minute. The bar is some 270dp for 280bpm, so a finger cannot hold a
+    // fraction of one steady anyway, and the chip reads better without it.
+    fun tempoAt(x: Float) =
+        TEMPO.valueAt((x - tempoRow.left) / tempoRow.width).roundToInt().toFloat()
+
+    if (onTempo) patch.tempo = tempoAt(down.x)
+    while (true) {
+        val event = awaitPointerEvent()
+        val pressed = event.changes.filter { it.pressed }
+        if (pressed.isEmpty()) break
+        val change = pressed.first()
+        if (onTempo) patch.tempo = tempoAt(change.position.x)
+        change.consume()
+    }
+    if (onTempo) return
+
+    val beatsRow = transportBeatsRow(card, d)
+    if (beatsRow.contains(down)) {
+        patch.beatsPerBar =
+            BEATS_PER_BAR.valueAt((down.x - beatsRow.left) / beatsRow.width).toInt()
+    } else if (transportReset(card, d).contains(down)) {
+        onReset()
+    }
+}
+
 // ---------------------------------------------------------------- tap logic
 
 private fun handleTap(
@@ -2076,6 +2421,35 @@ internal const val STEP_COUNT = 16
 
 /** Mirrors kTuneRange in nodes.cpp: how far a tuning control reaches, in cents. */
 internal const val TUNE_RANGE = 2400f
+
+/**
+ * A note length a clocked module can step at: [num]/[den] quarter-note beats.
+ *
+ * Written as fractions of a whole note because that is how they are said -- "sixteenths",
+ * "eighth-note triplets" -- rather than Bespoke's 16n and 8nt, which have to be learned.
+ */
+internal data class Interval(val label: String, val detail: String, val num: Int, val den: Int)
+
+/** Mirrors kIntervals in nodes.h, and is indexed the same way. Append rather than reorder. */
+internal val INTERVALS = listOf(
+    Interval("1/1", "whole", 4, 1),
+    Interval("1/2", "half", 2, 1),
+    Interval("1/4", "quarter", 1, 1),
+    Interval("1/8", "eighth", 1, 2),
+    Interval("1/16", "sixteenth", 1, 4),
+    Interval("1/32", "thirty-second", 1, 8),
+    Interval("1/4T", "quarter triplet", 2, 3),
+    Interval("1/8T", "eighth triplet", 1, 3),
+    Interval("1/16T", "sixteenth triplet", 1, 6),
+)
+
+/** Mirrors kDefaultInterval: an eighth. */
+internal const val DEFAULT_INTERVAL = 3
+
+/** The transport's rate. The range mirrors kMinTempo and kMaxTempo in transport.h. */
+internal val TEMPO = Param("tempo", 20f, 300f, 120f, " bpm")
+
+internal val BEATS_PER_BAR = Param("beats per bar", 2f, 8f, 4f, curve = ParamCurve.STEPPED)
 
 
 /**
@@ -2350,6 +2724,7 @@ private fun DrawScope.drawPanel(
     playingStep: Int,
     scales: List<Scale>,
     scaleMenu: Boolean,
+    intervalMenu: Boolean,
 ) {
     val corner = CornerRadius(14f * d, 14f * d)
 
@@ -2406,6 +2781,25 @@ private fun DrawScope.drawPanel(
         drawScaleChip(panelScaleChip(panel, d), d, scale, scaleMenu, measurer)
     }
 
+    val intervalParam = module.type.intervalParam
+    val chosenInterval = if (intervalParam < 0) -1
+        else module.params.getOrElse(intervalParam) { DEFAULT_INTERVAL.toFloat() }.roundToInt()
+    INTERVALS.getOrNull(chosenInterval)?.let {
+        drawChip(panelIntervalChip(panel, d), d, it.label, intervalMenu, scaleAccent, measurer)
+    }
+
+    if (intervalParam >= 0 && intervalMenu) {
+        drawRect(
+            color = PanelScrim,
+            topLeft = panelBody(panel, d).topLeft,
+            size = panelBody(panel, d).size,
+        )
+        scaleTiles(panel, d, INTERVALS.size).forEachIndexed { i, tile ->
+            drawTile(tile, d, INTERVALS[i].label, INTERVALS[i].detail, i == chosenInterval, measurer)
+        }
+        return
+    }
+
     if (module.type.stepCount > 0 && scaleMenu) {
         // The tiles take the body, so the grid beneath them is not a distraction while
         // you are choosing what its rows will mean.
@@ -2425,8 +2819,11 @@ private fun DrawScope.drawPanel(
         )
     }
 
-    // Knobs.
-    module.type.params.forEachIndexed { index, param ->
+    // Knobs -- the rows only. Walking every parameter drew the interval, which lives in the
+    // header, as a row of buttons laid over the first real row: it showed intervals where
+    // taps set the length.
+    module.type.rowParams.forEach { index ->
+        val param = module.type.params[index]
         val row = panelRow(panel, d, module.type, index)
         val value = module.params.getOrElse(index) { param.default }
 
@@ -2445,7 +2842,7 @@ private fun DrawScope.drawPanel(
 
         if (param.curve == ParamCurve.STEPPED) {
             drawChoices(row, d, param, value, module.type.accent, measurer)
-            return@forEachIndexed
+            return@forEach
         }
 
         val barHeight = PatchModule.PANEL_BAR * d
@@ -2479,12 +2876,11 @@ fun rememberDemoPatch(): Patch = remember { demoPatch() }
 
 /**
  * The patch a fresh install opens with: a complete voice, so the first thing you hear is
- * an instrument rather than a test tone. Clock drives Steps, Steps plays Osc and fires
- * Env, Env opens the VCA, and the VCA feeds both output channels.
+ * an instrument rather than a test tone. The transport steps Steps, Steps plays Osc and
+ * fires Env, Env opens the VCA, and the VCA feeds both output channels.
  */
 fun demoPatch(): Patch =
     Patch().apply {
-        val clock = add(Types.Clock, Offset(20f, 40f))!!
         val steps = add(Types.Steps, Offset(165f, 40f))!!
         val osc = add(Types.Osc, Offset(310f, 40f))!!
         val filter = add(Types.Filter, Offset(455f, 40f))!!
@@ -2494,7 +2890,6 @@ fun demoPatch(): Patch =
         fun out(m: PatchModule, i: Int) = PortRef(m.id, PortDirection.OUTPUT, i)
         fun into(m: PatchModule, i: Int) = PortRef(m.id, PortDirection.INPUT, i)
 
-        connect(out(clock, 0), into(steps, 0))
         connect(out(steps, 0), into(osc, 0))   // pitch
         connect(out(steps, 1), into(env, 0))   // gate
         connect(out(osc, 0), into(filter, 0))

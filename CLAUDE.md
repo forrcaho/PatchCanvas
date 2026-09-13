@@ -75,6 +75,7 @@ short loop rather than another outcome bolted into the canvas one.
 | `ScalaFile.kt` | `.scl` parsing — untrusted input, every bad shape returns null |
 | `ScaleLibrary.kt` | seeds the bundled scales and reads the user's folder |
 | `graph.{h,cpp}` | command queue, topological sort, crossfades, node lifetime |
+| `transport.h` | musical time: one position every clocked node divides, header-only |
 | `nodes.{h,cpp}` | the module set, DaisySP-backed |
 | `audio_engine.{h,cpp}` | Oboe streams, ADPF, debug capture |
 

@@ -117,6 +117,21 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeStepOf(JNIEnv *, jobject, 
     return engine().graph().stepOf(id);
 }
 
+JNIEXPORT jboolean JNICALL
+Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetTempo(JNIEnv *, jobject, jfloat bpm) {
+    return engine().graph().postSetTempo(bpm) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeResetTransport(JNIEnv *, jobject) {
+    return engine().graph().postResetTransport() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jdouble JNICALL
+Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeTransportBeat(JNIEnv *, jobject) {
+    return engine().graph().transportBeat();
+}
+
 /** Frees whatever the audio thread handed back. Deliberately not on the audio thread. */
 JNIEXPORT void JNICALL
 Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeCollectGarbage(JNIEnv *, jobject) {

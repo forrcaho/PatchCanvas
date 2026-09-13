@@ -21,7 +21,8 @@ import java.io.File
  * geometry being persisted.
  */
 
-private const val FORMAT_VERSION = 1
+/** 2: the Clock module became the patch's tempo. */
+private const val FORMAT_VERSION = 2
 private const val TAG = "PatchStore"
 
 fun Patch.toJson(): String {
@@ -69,6 +70,8 @@ fun Patch.toJson(): String {
         .put("rails", rails)
         .put("connections", cables)
         .put("scale", scale.name)
+        .put("tempo", tempo.toDouble())
+        .put("beatsPerBar", beatsPerBar)
         .toString()
 }
 
@@ -116,16 +119,18 @@ private fun restoreParams(module: PatchModule, stored: JSONObject?) {
 /** Returns null for anything unreadable, so the caller can fall back to a fresh patch. */
 fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): Patch? {
     return try {
-        val root = JSONObject(text)
-        if (root.optInt("version", -1) != FORMAT_VERSION) {
-            Log.w(TAG, "unsupported patch version ${root.optInt("version", -1)}")
-            return null
-        }
+        val root = upgrade(JSONObject(text)) ?: return null
 
         val patch = Patch()
         // An unknown or absent name leaves the default, so a file naming a scale that
         // has since been removed loads as a patch in 12-TET rather than not at all.
         patch.scale = scales.byName(root.optString("scale")) ?: scales.default
+        // Clamped because the file is untrusted: the engine would clamp an absurd tempo
+        // too, but then the chip and the sound would disagree about what it is.
+        patch.tempo = root.optDouble("tempo", TEMPO.default.toDouble()).toFloat()
+            .coerceIn(TEMPO.min, TEMPO.max)
+        patch.beatsPerBar = root.optInt("beatsPerBar", BEATS_PER_BAR.default.toInt())
+            .coerceIn(BEATS_PER_BAR.min.toInt(), BEATS_PER_BAR.max.toInt())
 
         val modules = root.optJSONArray("modules") ?: JSONArray()
         for (i in 0 until modules.length()) {
@@ -171,6 +176,39 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
         Log.w(TAG, "could not read patch", e)
         null
     }
+}
+
+/**
+ * Brings an older file up to the current format, or returns null for one this build
+ * cannot read -- a newer format, or no version at all.
+ *
+ * One step per format change, applied in order, so each step only has to know the format
+ * immediately before it and a file several versions old walks up through all of them.
+ */
+private fun upgrade(root: JSONObject): JSONObject? {
+    var version = root.optInt("version", -1)
+
+    if (version == 1) {
+        // The Clock module became the transport. Only its tempo needs moving: the module
+        // itself is no longer a type and is skipped like any unknown one, and the cable
+        // into Steps' old clock input points at a port that no longer exists, so it is
+        // dropped by the same check that drops any out-of-range cable.
+        val modules = root.optJSONArray("modules") ?: JSONArray()
+        for (i in 0 until modules.length()) {
+            val m = modules.optJSONObject(i) ?: continue
+            val bpm = m.optJSONObject("params")?.takeIf { m.optString("type") == "Clock" && it.has("bpm") }
+                ?: continue
+            root.put("tempo", bpm.optDouble("bpm"))
+            break
+        }
+        version = 2
+    }
+
+    if (version != FORMAT_VERSION) {
+        Log.w(TAG, "unsupported patch version ${root.optInt("version", -1)}")
+        return null
+    }
+    return root
 }
 
 /** Null unless the module exists and actually has a port at that index and direction. */

@@ -124,4 +124,60 @@ class PatchJsonTest {
         assertTrue(restored.connections.isEmpty())
         assertEquals(2, restored.pinned.size)
     }
+
+    @Test
+    fun `tempo and beats per bar survive a reload`() {
+        val p = sample().apply {
+            tempo = 97f
+            beatsPerBar = 7
+        }
+        val restored = patchFromJson(p.toJson())!!
+        assertEquals(97f, restored.tempo, 0.0001f)
+        assertEquals(7, restored.beatsPerBar)
+    }
+
+    @Test
+    fun `a tempo or bar length outside the range is clamped on load`() {
+        val root = JSONObject(sample().toJson()).put("tempo", 100000.0).put("beatsPerBar", -3)
+        val restored = patchFromJson(root.toString())!!
+        assertEquals(TEMPO.max, restored.tempo, 0.0001f)
+        assertEquals(BEATS_PER_BAR.min.toInt(), restored.beatsPerBar)
+    }
+
+    /**
+     * Format 1 had a Clock module where format 2 has a tempo. Nothing saved in format 1
+     * was worth keeping, but a working upgrade is the pattern the next format change
+     * copies -- and without it every older file silently became the demo patch.
+     */
+    @Test
+    fun `a format 1 file takes its tempo from its Clock and drops the Clock`() {
+        val root = JSONObject(sample().toJson()).put("version", 1)
+        root.remove("tempo")
+        val steps = sample().free.first { it.type.stepCount > 0 }
+        root.getJSONArray("modules").put(
+            JSONObject()
+                .put("id", 500L)
+                .put("type", "Clock")
+                .put("x", 0.0)
+                .put("y", 0.0)
+                .put("params", JSONObject().put("bpm", 90.0)),
+        )
+        root.getJSONArray("connections").put(
+            JSONObject().put("from", 500L).put("fromPort", 0).put("to", steps.id).put("toPort", 0),
+        )
+
+        val restored = patchFromJson(root.toString())
+        assertNotNull("a format 1 file must still load", restored)
+        assertEquals(90f, restored!!.tempo, 0.0001f)
+        assertNull("the Clock is gone", restored.module(500L))
+        assertTrue("and so is its cable", restored.connections.none { it.from.moduleId == 500L })
+        assertEquals(sample().free.size, restored.free.size)
+    }
+
+    @Test
+    fun `a format 1 file with no Clock loads at the default tempo`() {
+        val root = JSONObject(sample().toJson()).put("version", 1)
+        root.remove("tempo")
+        assertEquals(TEMPO.default, patchFromJson(root.toString())!!.tempo, 0.0001f)
+    }
 }

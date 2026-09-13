@@ -156,7 +156,7 @@ class MainActivity : ComponentActivity() {
                 }
         }
 
-        // Topology, knobs, sequences and the tuning. Position is deliberately absent, so
+        // Topology, knobs, sequences, the tuning and the tempo. Position is deliberately absent, so
         // dragging a module around does not re-sync -- the audio graph has no opinion
         // about where a module sits.
         //
@@ -174,6 +174,7 @@ class MainActivity : ComponentActivity() {
                     patch.modules.map { it.params.toList() },
                     patch.modules.map { it.steps.toList() },
                     patch.scale,
+                    patch.tempo,
                 )
             }
                 .distinctUntilChanged()
@@ -194,6 +195,10 @@ class MainActivity : ComponentActivity() {
                 canRedo = history.canRedo,
                 onUndo = { restore(history.undo()) },
                 onRedo = { restore(history.redo()) },
+                // Straight to the engine rather than through the patch: where the
+                // transport has got to is a performance state, like the output switch,
+                // so resetting it is neither saved nor undone.
+                onResetTransport = { AudioEngine.resetTransport() },
                 scales = scales.scales,
             )
         }
@@ -346,6 +351,7 @@ fun PatchCanvasApp(
     canRedo: Boolean = false,
     onUndo: () -> Unit = {},
     onRedo: () -> Unit = {},
+    onResetTransport: () -> Unit = {},
     scales: List<Scale> = listOf(Scale.Chromatic),
 ) {
     // The canvas paints edge to edge, but the initial framing keeps the patch clear of
@@ -362,6 +368,7 @@ fun PatchCanvasApp(
         canRedo = canRedo,
         onUndo = onUndo,
         onRedo = onRedo,
+        onResetTransport = onResetTransport,
         scales = scales,
         modifier = Modifier
             .fillMaxSize()

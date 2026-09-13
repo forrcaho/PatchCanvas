@@ -12,6 +12,7 @@ private sealed interface Cmd {
     data class Disconnect(val dst: Long, val dstPort: Int) : Cmd
     data class SetParam(val id: Long, val index: Int, val value: Float) : Cmd
     data class SetStep(val id: Long, val index: Int, val pitch: Float, val gate: Boolean) : Cmd
+    data class SetTempo(val bpm: Float) : Cmd
 }
 
 private class Recorder : GraphCommands {
@@ -30,6 +31,7 @@ private class Recorder : GraphCommands {
     override fun setStep(id: Long, index: Int, pitch: Float, gate: Boolean) {
         log += Cmd.SetStep(id, index, pitch, gate)
     }
+    override fun setTempo(bpm: Float) { log += Cmd.SetTempo(bpm) }
     override fun collectGarbage() { collected++ }
 
     fun clear() { log.clear() }
@@ -622,5 +624,92 @@ class SequenceTest {
         val text = patch.toJson().replace("\"scale\":\"12-TET\"", "\"scale\":\"Slendro\"")
         val back = patchFromJson(text, ScaleLibrary.of(null))
         assertEquals(Scale.Chromatic, back!!.scale)
+    }
+}
+
+/**
+ * The tempo is patch data read by the snapshot flow in MainActivity, and it reaches the
+ * engine through the same diff as everything else -- which has twice been where a new
+ * piece of patch data silently failed to arrive.
+ */
+class TransportSyncTest {
+
+    private val rec = Recorder()
+    private val sync = GraphSync(rec)
+
+    private fun tempos() = rec.log.filterIsInstance<Cmd.SetTempo>()
+
+    @Test
+    fun `the first sync sends the tempo`() {
+        val patch = demoPatch().apply { tempo = 133f }
+        sync.sync(patch)
+        assertEquals(listOf(Cmd.SetTempo(133f)), tempos())
+    }
+
+    @Test
+    fun `changing the tempo sends it once and nothing else`() {
+        val patch = demoPatch()
+        sync.sync(patch)
+        rec.clear()
+
+        patch.tempo = 90f
+        sync.sync(patch)
+
+        assertEquals(listOf<Cmd>(Cmd.SetTempo(90f)), rec.log)
+    }
+
+    @Test
+    fun `an unchanged tempo is not sent again`() {
+        val patch = demoPatch()
+        sync.sync(patch)
+        rec.clear()
+        sync.sync(patch)
+        assertTrue(tempos().isEmpty())
+    }
+
+    /** The engine keeps its transport across a restart, but not the rate it was told. */
+    @Test
+    fun `invalidate sends the tempo again`() {
+        val patch = demoPatch()
+        sync.sync(patch)
+        rec.clear()
+
+        sync.invalidate()
+        sync.sync(patch)
+
+        assertEquals(1, tempos().size)
+    }
+
+    /** Mirrors kIntervals in nodes.h. A mismatch is a button that plays the wrong length. */
+    @Test
+    fun `the interval selector offers exactly the divisions the engine has`() {
+        assertEquals(ENGINE_INTERVALS, INTERVALS.size)
+        assertEquals(ENGINE_DEFAULT_INTERVAL, DEFAULT_INTERVAL)
+
+        val interval = Types.Steps.params[Types.Steps.intervalParam]
+        assertEquals(INTERVALS.size, interval.steps)
+        assertTrue("the interval belongs in the header", interval.header)
+    }
+
+    /** Mirrors kMinTempo and kMaxTempo in transport.h, so the chip and the sound agree. */
+    @Test
+    fun `the tempo range is the engine's`() {
+        assertEquals(20f, TEMPO.min)
+        assertEquals(300f, TEMPO.max)
+    }
+
+    @Test
+    fun `nothing is left patched to a clock`() {
+        assertTrue("Clock is gone from the palette", Types.palette.none { it.name == "Clock" })
+        assertTrue(
+            "and no module waits for a clock input",
+            Types.byName.values.none { type -> type.inputs.any { it.name == "clock" } },
+        )
+    }
+
+    private companion object {
+        /** kIntervalCount and kDefaultInterval in nodes.h. */
+        const val ENGINE_INTERVALS = 9
+        const val ENGINE_DEFAULT_INTERVAL = 3
     }
 }

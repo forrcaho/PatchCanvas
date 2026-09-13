@@ -53,15 +53,6 @@ int countCycles(const std::vector<float> &samples) {
     return cycles;
 }
 
-/** Sample indices where a gate goes high, for measuring a period rather than a count. */
-std::vector<std::size_t> risingEdgeIndices(const std::vector<float> &samples) {
-    std::vector<std::size_t> at;
-    for (std::size_t i = 1; i < samples.size(); ++i) {
-        if (samples[i - 1] <= 0.5f && samples[i] > 0.5f) at.push_back(i);
-    }
-    return at;
-}
-
 float peak(const std::vector<float> &samples) {
     float worst = 0.0f;
     for (float s : samples) worst = std::max(worst, std::fabs(s));
@@ -191,79 +182,52 @@ void vcaIsShutWithoutControl() {
     check(std::fabs(peak(run(vca, 4)) - 1.0f) < 0.001f, "open at full CV");
 }
 
-void clockRunsAtTheRequestedTempo() {
-    std::printf("clock runs at the requested tempo\n");
-    ClockNode clock;
-    clock.prepare(kRate);
-    const auto ticks = run(clock, 4 * kRate / kBlockSize); // four seconds
+/** 120bpm at 48k: 24000 frames a beat, so the default 1/8 step is 12000. */
+constexpr double kBeatsPerFrame = 120.0 / 60.0 / kRate;
 
-    // The interval, not the count: the clock starts its first beat on sample zero, which
-    // is a tick but not an edge, so counting edges undercounts by one and says nothing
-    // about regularity anyway.
-    const auto edges = risingEdgeIndices(ticks);
-    check(edges.size() >= 3, "it ticks at all");
-    if (edges.size() >= 3) {
-        bool even = true;
-        for (std::size_t i = 2; i < edges.size(); ++i) {
-            if (edges[i] - edges[i - 1] != edges[1] - edges[0]) even = false;
-        }
-        const auto period = edges[1] - edges[0];
-        // 120bpm at 48k is 24000 frames a beat. Because it counts frames rather than
-        // consulting a timer this is exact, not approximate -- so assert it exactly.
-        check(period == 24000, "24000 frames a beat, got " + std::to_string(period));
-        check(even, "and every beat the same length");
+/** Delivers one tick the way the graph does -- timing, then the tick, then the block. */
+void tickAt(StepsNode &steps, int64_t count, int32_t offset = 0) {
+    steps.setTiming(kBeatsPerFrame, true);
+    steps.tick(offset, count);
+    steps.process(kBlockSize);
+}
+
+/** Renders blocks with no tick in them, running or stopped. */
+void idle(StepsNode &steps, int blocks, bool running = true) {
+    for (int i = 0; i < blocks; ++i) {
+        steps.setTiming(running ? kBeatsPerFrame : 0.0, running);
+        steps.process(kBlockSize);
     }
 }
 
-void stepsAdvanceOnEdgesNotLevels() {
-    std::printf("steps advance on edges, not levels\n");
-    const auto high = constantBuffer(1.0f);
-    const auto low = constantBuffer(0.0f);
-
+void stepsTakeTheirStepFromTheCount() {
+    std::printf("steps take their step from the count\n");
     StepsNode steps;
     steps.prepare(kRate);
+    steps.setParam(0, 4.0f);
 
-    steps.setInput(0, low.data());
-    steps.process(kBlockSize);
-    const float first = steps.output(0)[0];
+    // -1 is what keeps a sequencer the transport has never reached from drawing a playhead.
+    check(steps.position() == -1, "no step before the first tick");
 
-    // Held high for many blocks: a level-triggered sequencer would race through its
-    // pattern here, an edge-triggered one moves exactly once.
-    steps.setInput(0, high.data());
-    for (int i = 0; i < 32; ++i) steps.process(kBlockSize);
-    const float afterHold = steps.output(0)[0];
-    check(afterHold != first, "a rising edge advances it");
-
-    for (int i = 0; i < 32; ++i) steps.process(kBlockSize);
-    check(steps.output(0)[0] == afterHold, "holding the gate does not advance it again");
-
-    steps.setInput(0, low.data());
-    steps.process(kBlockSize);
-    steps.setInput(0, high.data());
-    steps.process(kBlockSize);
-    check(steps.output(0)[0] != afterHold, "the next edge advances it again");
-}
-
-/** Clocks the node once: low, then high, holding each long enough to be seen. */
-static void tick(StepsNode &steps, const std::array<float, kBlockSize> &low,
-                 const std::array<float, kBlockSize> &high) {
-    steps.setInput(0, low.data());
-    steps.process(kBlockSize);
-    steps.setInput(0, high.data());
-    steps.process(kBlockSize);
+    tickAt(steps, 0);
+    check(steps.position() == 0, "count 0 is step 0");
+    tickAt(steps, 6);
+    check(steps.position() == 2, "the count wraps at the loop length, got " +
+                                         std::to_string(steps.position()));
+    // Where the transport is, not one more than last time: after a reset or a skip the
+    // step is whatever the position names.
+    tickAt(steps, 3);
+    check(steps.position() == 3, "a count out of sequence lands where it says");
 }
 
 void stepsPlayTheirOwnPattern() {
     std::printf("steps play the pattern they are given\n");
-    const auto high = constantBuffer(1.0f);
-    const auto low = constantBuffer(0.0f);
-
     StepsNode steps;
     steps.prepare(kRate);
 
     // One octave up on step 1, which no default pattern contains.
     steps.setStep(1, 1.0f, true);
-    tick(steps, low, high);   // -> step 1
+    tickAt(steps, 1);
     check(std::fabs(steps.output(0)[0] - 1.0f) < 0.0001f,
           "the pitch written to a step is the pitch it plays");
 
@@ -276,16 +240,14 @@ void stepsPlayTheirOwnPattern() {
 
 void aClosedGateIsARestNotASkip() {
     std::printf("a closed gate is a rest, not a skip\n");
-    const auto high = constantBuffer(1.0f);
-    const auto low = constantBuffer(0.0f);
-
     StepsNode steps;
     steps.prepare(kRate);
     steps.setStep(0, 0.5f, true);
     steps.setStep(1, 0.25f, false);  // a rest, remembering a pitch of its own
     steps.setStep(2, 0.75f, true);
 
-    tick(steps, low, high);          // -> step 1, the rest
+    tickAt(steps, 0);
+    tickAt(steps, 1);                // the rest
     check(steps.output(1)[0] == 0.0f, "a closed step emits no gate");
     // The remembered degree exists so switching the step back on restores what was
     // there. It is not a note, nobody can see it, and emitting it makes the pitch jump
@@ -293,11 +255,10 @@ void aClosedGateIsARestNotASkip() {
     check(std::fabs(steps.output(0)[0] - 0.5f) < 0.0001f,
           "and the pitch holds the last note rather than the rest's own");
 
-    tick(steps, low, high);          // -> step 2
+    tickAt(steps, 2);
     check(steps.output(1)[0] == 1.0f, "the next open step still fires");
     check(std::fabs(steps.output(0)[0] - 0.75f) < 0.0001f,
           "so a rest costs a step rather than being skipped");
-
 }
 
 /**
@@ -306,41 +267,93 @@ void aClosedGateIsARestNotASkip() {
  */
 void aRestKeepsTheNoteItRemembers() {
     std::printf("a rest keeps the note it remembers\n");
-    const auto high = constantBuffer(1.0f);
-    const auto low = constantBuffer(0.0f);
-
     StepsNode steps;
     steps.prepare(kRate);
     steps.setParam(0, 2.0f);          // a two-step loop, so step 1 comes round quickly
     steps.setStep(0, 0.5f, true);
     steps.setStep(1, 0.25f, false);
 
-    tick(steps, low, high);           // -> the rest
+    tickAt(steps, 0);
+    tickAt(steps, 1);                 // the rest
     check(std::fabs(steps.output(0)[0] - 0.5f) < 0.0001f, "held while it is a rest");
 
     steps.setStep(1, 0.25f, true);    // switch it back on
-    tick(steps, low, high);           // -> step 0
-    tick(steps, low, high);           // -> step 1, now sounding
+    tickAt(steps, 2);                 // step 0
+    tickAt(steps, 3);                 // step 1, now sounding
     check(steps.output(1)[0] == 1.0f, "it fires once it is open again");
     check(std::fabs(steps.output(0)[0] - 0.25f) < 0.0001f,
           "with the pitch it was holding on to all along");
 }
 
-void theGateFollowsTheClockNotTheStep() {
-    std::printf("the gate follows the clock, not the step\n");
-    const auto high = constantBuffer(1.0f);
-    const auto low = constantBuffer(0.0f);
-
+void aNoteLastsHalfItsStep() {
+    std::printf("a note lasts half its step\n");
     StepsNode steps;
     steps.prepare(kRate);
-    steps.setStep(1, 0.0f, true);
+    steps.setStep(0, 0.0f, true);
 
-    tick(steps, low, high);
-    check(steps.output(1)[0] == 1.0f, "gate up while the clock is up");
-    steps.setInput(0, low.data());
-    steps.process(kBlockSize);
-    check(steps.output(1)[0] == 0.0f,
-          "and down when the clock falls -- the step says whether, the clock says how long");
+    // The default 1/8 at 120bpm is 12000 frames, so the gate is open for frames 0-5999.
+    tickAt(steps, 0);
+    check(steps.output(1)[0] == 1.0f, "open as the step starts");
+    idle(steps, 185);                 // through frame 5951
+    check(steps.output(1)[kBlockSize - 1] == 1.0f, "still open just short of half the step");
+    idle(steps, 2);                   // through frame 6015
+    check(steps.output(1)[kBlockSize - 1] == 0.0f, "closed by half the step");
+}
+
+/**
+ * Stopping the transport stops time, not just the ticks. A gate that ran out while
+ * stopped would cut a note short at the moment the output was switched off, and resume
+ * on a different note than the one that was playing.
+ */
+void aStoppedTransportHoldsTheNote() {
+    std::printf("a stopped transport holds the note\n");
+    StepsNode steps;
+    steps.prepare(kRate);
+    steps.setStep(0, 0.0f, true);
+
+    tickAt(steps, 0);
+    idle(steps, 400, false);          // 12800 frames, twice the gate, stopped
+    check(steps.output(1)[kBlockSize - 1] == 1.0f, "the gate does not run out while stopped");
+    idle(steps, 200, true);
+    check(steps.output(1)[kBlockSize - 1] == 0.0f, "and does once time moves again");
+}
+
+void aTickLandsOnItsOwnSample() {
+    std::printf("a tick lands on its own sample\n");
+    StepsNode steps;
+    steps.prepare(kRate);
+    steps.setStep(0, 0.0f, true);
+    steps.setStep(1, 1.0f, true);
+
+    tickAt(steps, 0);
+    idle(steps, 200);                 // well past the first note's gate
+
+    // Inside the block rather than at its start: the transport knows the frame, and a
+    // sequencer that rounded to the block would be up to 32 frames late on every note.
+    tickAt(steps, 1, 10);
+    const float *gate = steps.output(1);
+    const float *pitch = steps.output(0);
+    check(gate[9] == 0.0f && gate[10] == 1.0f, "the gate opens on the tick's sample");
+    check(std::fabs(pitch[9]) < 0.0001f && std::fabs(pitch[10] - 1.0f) < 0.0001f,
+          "and the pitch moves on the same sample");
+}
+
+void theIntervalIsChosenByParameter() {
+    std::printf("the interval is chosen by parameter\n");
+    StepsNode steps;
+    steps.prepare(kRate);
+
+    const Interval initial = steps.interval();
+    check(initial.num == kIntervals[kDefaultInterval].num &&
+          initial.den == kIntervals[kDefaultInterval].den, "starts on the default interval");
+
+    steps.setParam(2, 4.0f);
+    check(steps.interval().num == 1 && steps.interval().den == 4, "index 4 is a sixteenth");
+
+    steps.setParam(2, 99.0f);
+    const Interval last = kIntervals[kIntervalCount - 1];
+    check(steps.interval().num == last.num && steps.interval().den == last.den,
+          "an out-of-range choice clamps rather than reading past the table");
 }
 
 void mixSumsRatherThanAverages() {
@@ -422,12 +435,14 @@ int main() {
     filterTracksCutoffAtAudioRate();
     envFollowsItsGate();
     vcaIsShutWithoutControl();
-    clockRunsAtTheRequestedTempo();
-    stepsAdvanceOnEdgesNotLevels();
+    stepsTakeTheirStepFromTheCount();
     stepsPlayTheirOwnPattern();
     aClosedGateIsARestNotASkip();
     aRestKeepsTheNoteItRemembers();
-    theGateFollowsTheClockNotTheStep();
+    aNoteLastsHalfItsStep();
+    aStoppedTransportHoldsTheNote();
+    aTickLandsOnItsOwnSample();
+    theIntervalIsChosenByParameter();
     mixSumsRatherThanAverages();
     outPassesAudioAtLevel();
     outProtectsTheListener();

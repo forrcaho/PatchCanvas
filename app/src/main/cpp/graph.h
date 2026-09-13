@@ -56,6 +56,10 @@ public:
         // and a CV input probably wants to arrive faster than an audio one.
         rampInSamples_ = rate / 33;  // ~30ms
         rampOutSamples_ = rate / 33; // ~30ms
+
+        // Written from here, off the audio thread, which is safe only because this is
+        // called while a stream is being opened and no callback can be running.
+        transport_.setSampleRate(rate);
     }
     bool postAdd(int64_t id, NodeType type);
     bool postRemove(int64_t id);
@@ -75,6 +79,16 @@ public:
      */
     int32_t stepOf(int64_t id) const;
 
+    /** The transport's rate. Rebased on arrival, so the position carries on rather than jumping. */
+    bool postSetTempo(float bpm);
+    /** Back to the start of bar one. */
+    bool postResetTransport();
+    /**
+     * Where the transport has got to, in beats. Published once per block, like stepOf and
+     * for the same reason: a repaint wants only the newest value.
+     */
+    double transportBeat() const;
+
     /** Frees everything the audio thread handed back. Never called from the callback. */
     void collectGarbage();
     /** Frees anything still owned, after the stream has stopped. */
@@ -82,6 +96,11 @@ public:
 
     // ---- audio thread
     void applyCommands();
+    /**
+     * Whether musical time is moving. Owned by the engine rather than sent as a command,
+     * because it follows the output switch, which the engine already reads every callback.
+     */
+    void setTransportRunning(bool running) { transport_.setRunning(running); }
     /** Hands the live microphone block to the In rail, if the patch has one. */
     void setLiveInput(const float *mono);
     void process(int32_t frames);
@@ -89,7 +108,9 @@ public:
     const float *outputR() const;
 
 private:
-    enum class CommandType : int32_t { Add, Remove, Connect, Disconnect, SetParam, SetStep };
+    enum class CommandType : int32_t {
+        Add, Remove, Connect, Disconnect, SetParam, SetStep, SetTempo, ResetTransport,
+    };
 
     struct Command {
         CommandType type = CommandType::Add;
@@ -161,6 +182,17 @@ private:
         std::atomic<int32_t> step{-1};
     };
     std::array<Telemetry, kMaxNodes> telemetry_{};
+
+    /** Enough for any interval longer than a millisecond, which is all of them. */
+    static constexpr int32_t kMaxTicks = 4;
+
+    /**
+     * Musical time. Deliberately untouched by reset(): the graph is rebuilt every time
+     * the app comes back to the front, and that should not lose your place in the bar.
+     */
+    Transport transport_;
+    /** The transport's beat, published for the interface once per block. */
+    std::atomic<double> beat_{0.0};
 
     std::array<Record, kMaxNodes> nodes_{};
     std::array<int32_t, kMaxNodes> order_{};

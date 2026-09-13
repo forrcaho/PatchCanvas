@@ -857,9 +857,55 @@ audio thread cannot make them. Notes are the first step either way.
 
 ### The transport
 
-**One position, owned by the engine** -- tempo, beats per bar, and where in the bar we are,
-advanced by the frame count. The commitment at the top of this document is unchanged;
-only its owner moves, from a `Clock` node to the graph.
+**Built and verified on the device.** 45 graph checks, 39 node checks, 149 JVM tests.
+
+On the reference device, 2026-09-12:
+
+- The real format 1 patch on the phone -- a Clock at 150bpm into a four-step arpeggio --
+  upgraded on launch: `tempo 150.0` reached the engine, the Clock and its cable were gone,
+  and the autosave rewrote the file as format 2.
+- In a capture played, paused and resumed, every note onset sat on the 9600-frame grid
+  of a 1/8 step at 150bpm, on both sides of the pause. Switched to 1/16, 38 consecutive
+  onsets were 4800 frames apart. No boundary-aligned discontinuities, 0 xruns.
+- The card: dragging the tempo sends whole beats per minute as it moves; reset restarts
+  the position at bar one; two undos put back beats per bar and then the tempo, and the
+  engine received the restored tempo; the undo button stayed reachable with the card open.
+- The position survived the app being backgrounded and the graph rebuilt.
+
+**Two defects the host could not see, both found in screenshots.** The panel drew the
+interval as a row of buttons laid over the length row, because the knob loop still walked
+every parameter while the hit test walked only the rows -- so it showed intervals where
+taps set the length. The geometry tests assert rectangles, not what is drawn in them. And
+the card's "beats per bar" label ran into its buttons, since a measured text height
+includes line spacing; the row is 8dp taller.
+
+Heard by ear: two Steps modules at different intervals play in sync. The same session
+also noticed that the tuning chip changes every sequencer while living inside one --
+which is the case for moving it out of the sequencer header, below.
+
+**One position, owned by the engine** -- a tempo and a beat anchored at a frame count, in
+`transport.h`. The commitment at the top of this document is unchanged; only its owner
+moves, from a `Clock` node to the graph. Beats per bar lives in the patch, for reading
+the position as bars; nothing in the engine divides by it yet.
+
+**Intervals are ratios, not doubles.** A node's boundary count is floor(beat * den / num),
+and because rounding is monotonic a beat and the triplet starting on it land on the same
+frame -- asserted over ten minutes at 127bpm, where every beat is also a sixteenth and a
+triplet on the very same frame, and every beat lands within one frame of exact. One frame
+rather than zero, because every 127th beat falls exactly on a frame and can round a hair
+late; every division of that beat is late by the same frame. Mutation-checked: counting a
+truncated period per interval, which is what two Clocks did, puts beat 1270 210 frames
+late.
+
+**A tick carries its count**, so a sequencer's step is the count modulo its length rather
+than a tally of ticks it has seen. That is what makes reset and resume need nothing from
+the nodes.
+
+**The output switch is play and pause.** Off stops time where it is, and on picks up from
+there; the transport also survives the graph being rebuilt when the app comes back to the
+front. A note sounding when time stops holds rather than running out, so resuming
+continues the same note. Reset is a button in the transport's card and goes straight to
+the engine -- a performance action, like the output switch, so not saved and not undone.
 
 **A clocked module picks an interval instead of taking a cable** -- whole note through
 64th, triplets, dotted, and multiples of a bar -- from a chip in its header, as Bespoke's
@@ -869,8 +915,23 @@ can drift. Two `Clock` nodes could: each truncates its own period, and 127bpm is
 frames a beat. Starting the transport puts everything on bar 1 together, which nothing
 does today.
 
-`Clock` goes, and so does `Steps`' clock input, so the file version bumps. Note length then
-needs a control of its own, since today it is the width of the clock's gate.
+`Clock` is gone, and so is `Steps`' clock input. The file format is now 2, and a format 1
+file upgrades rather than being refused: its Clock's tempo becomes the patch's, and the
+module and its cable drop out through the checks that already skip unknown types and
+missing ports. Nothing in format 1 was worth keeping; the upgrade step exists as the
+pattern the next format change copies.
+
+**Note length is fixed at half the step**, not the knob this section planned. It used to
+be the width of the clock's gate, and a replacement knob would be a third row in the
+roughly 106dp a sequencer panel leaves for knobs on the reference device, where two rows
+already fill it. The dot sequencer carries a length on every note, which is where the
+control belongs. The interval is chosen from a chip in the panel header, beside the
+tuning, with a page of tiles like the tuning's.
+
+**Found on the way:** `replaceWith` never copied the scale, so undoing a change of tuning
+kept the new tuning. The byte-identical round-trip test could not see it, because both
+sides were in the default tuning. Fixed alongside the tempo, which travels the same path,
+with a test taken in a non-default scale and mutation-checked.
 
 **Pulses are designed for and not built.** Bespoke has a third event type carrying only
 timing -- `OnPulse(time, velocity, flags)`, with flags for reset, backward, random and so
@@ -916,8 +977,13 @@ The device should settle it.
 larger card over whatever is showing -- graph or open panel -- without being modal. The
 undo buttons are the precedent: screen space, hit-tested by one function both gesture
 loops share. An expanded card takes touches inside its own bounds and nowhere else, and
-closes only from its own chip, because a tap outside it is doing something else. Where the
-chips sit is open; the bottom-left corner is taken.
+closes only from its own chip, because a tap outside it is doing something else.
+
+The transport chip is built, top-left: it shows the tempo, and its card holds the tempo
+bar, beats per bar, the position as bar and beat, and reset. The position is polled only
+while the card is open, so a closed chip costs no repainting. The card covers the In rail
+and the top of an open panel while it is open, which is the price of not being modal. The
+scale chip has not moved out of the sequencer header yet.
 
 ### Modulation onto controls -- adopted, deferred
 

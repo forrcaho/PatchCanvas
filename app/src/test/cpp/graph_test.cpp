@@ -325,28 +325,222 @@ void theGraphReportsWhereASequencerHasGot() {
     Graph graph;
     graph.setSampleRate(48000);
 
-    graph.postAdd(1, NodeType::Clock);
+    graph.postAdd(1, NodeType::Osc);
     graph.postAdd(2, NodeType::Steps);
     graph.postAdd(3, NodeType::Out);
-    graph.postConnect(1, 0, 2, 0);
-    graph.postConnect(2, 0, 3, 0);
-    graph.postSetParam(1, 0, 300.0f); // fast, so a few steps pass quickly
+    graph.postConnect(2, 0, 1, 0);
+    graph.postConnect(1, 0, 3, 0);
+    graph.postSetTempo(300.0f); // fast, so a few steps pass quickly
     graph.applyCommands();
 
     check(graph.stepOf(99) == -1, "an id nothing owns reports nothing");
-    check(graph.stepOf(1) == -1, "a clock is not a sequencer");
+    check(graph.stepOf(1) == -1, "an oscillator is not a sequencer");
 
     graph.process(kBlockSize);
-    const int32_t first = graph.stepOf(2);
-    check(first >= 0, "a sequencer reports a step once it has run");
+    check(graph.stepOf(2) == -1, "a stopped transport starts nothing");
 
-    // 300bpm at 48k is 9600 frames a beat; run well past one.
+    graph.setTransportRunning(true);
+    graph.process(kBlockSize);
+    check(graph.stepOf(2) == 0, "the first tick is the first step");
+
+    // 300bpm at 48k is 9600 frames a beat, so a default 1/8 step is 4800; run well past one.
     for (int i = 0; i < 600; ++i) graph.process(kBlockSize);
-    check(graph.stepOf(2) != first, "and the step advances with the clock");
+    check(graph.stepOf(2) > 0, "and the step advances with the transport");
 
     graph.postRemove(2);
     graph.applyCommands();
     check(graph.stepOf(2) == -1, "a removed sequencer stops being reported");
+}
+
+/**
+ * Switching the output off is a pause, not a stop. Everything a sequencer does comes
+ * from the position, so if the position holds, so does the music.
+ */
+void stoppingHoldsThePositionAndResetReturnsToTheStart() {
+    std::printf("stopping holds the position, and reset returns to the start\n");
+    Graph graph;
+    graph.setSampleRate(48000);
+    graph.postAdd(2, NodeType::Steps);
+    graph.postSetTempo(300.0f);
+    graph.applyCommands();
+
+    graph.setTransportRunning(true);
+    for (int i = 0; i < 1000; ++i) graph.process(kBlockSize);
+    const int32_t step = graph.stepOf(2);
+    const double beat = graph.transportBeat();
+    check(beat > 0.0, "the transport moves while running");
+
+    graph.setTransportRunning(false);
+    for (int i = 0; i < 1000; ++i) graph.process(kBlockSize);
+    check(graph.transportBeat() == beat, "and holds exactly still while stopped");
+    check(graph.stepOf(2) == step, "and so does the sequencer");
+
+    graph.postResetTransport();
+    graph.applyCommands();
+    graph.setTransportRunning(true);
+    graph.process(kBlockSize);
+    check(graph.stepOf(2) == 0, "reset puts the sequencer back on its first step");
+    check(graph.transportBeat() < 0.01, "and the transport back at the top");
+}
+
+/** Backgrounding the app rebuilds the graph, and should not lose your place in the bar. */
+void theTransportSurvivesAGraphReset() {
+    std::printf("the transport survives a graph reset\n");
+    Graph graph;
+    graph.setSampleRate(48000);
+    graph.setTransportRunning(true);
+    for (int i = 0; i < 1000; ++i) graph.process(kBlockSize);
+    const double before = graph.transportBeat();
+
+    graph.reset();
+    graph.process(kBlockSize);
+    check(graph.transportBeat() > before, "it carries on from where it was, not from zero");
+}
+
+// ---------------------------------------------------------------- the transport itself
+
+/** Every tick of each interval across a run, as absolute frames and counts. */
+struct Heard {
+    std::vector<int64_t> frames;
+    std::vector<int64_t> counts;
+};
+
+void listen(const Transport &transport, Interval interval, int64_t blockStart, Heard &into) {
+    std::array<Tick, 4> ticks{};
+    const int32_t n = transport.ticks(interval, kBlockSize, ticks.data(), 4);
+    for (int32_t i = 0; i < n; ++i) {
+        into.frames.push_back(blockStart + ticks[i].offset);
+        into.counts.push_back(ticks[i].count);
+    }
+}
+
+std::size_t between(const std::vector<int64_t> &frames, int64_t from, int64_t to) {
+    return static_cast<std::size_t>(
+            std::lower_bound(frames.begin(), frames.end(), to) -
+            std::lower_bound(frames.begin(), frames.end(), from));
+}
+
+/**
+ * The reason the transport exists. 127bpm is 22677.17 frames a beat, which no whole
+ * number of frames can hold, so anything counting its own period drifts -- by a sixth of
+ * a second after twenty minutes. Divisions of one position cannot.
+ */
+void divisionsOfOneTransportNeverDrift() {
+    std::printf("divisions of one transport never drift\n");
+    Transport transport;
+    transport.setSampleRate(48000);
+    transport.setTempo(127.0);
+    transport.setRunning(true);
+
+    Heard beats, sixteenths, triplets;
+    const int64_t blocks = 10LL * 60 * 48000 / kBlockSize; // ten minutes
+    for (int64_t b = 0; b < blocks; ++b) {
+        const int64_t start = b * kBlockSize;
+        listen(transport, Interval{1, 1}, start, beats);
+        listen(transport, Interval{1, 4}, start, sixteenths);
+        listen(transport, Interval{1, 3}, start, triplets);
+        transport.advance(kBlockSize);
+    }
+
+    const double framesPerBeat = 48000.0 * 60.0 / 127.0;
+    check(beats.frames.size() > 1200, "ten minutes at 127bpm is some 1270 beats");
+
+    // Within one frame of exactly on time, every beat for ten minutes. Up to and including
+    // one, because every 127th beat falls exactly on a frame, where frame * beatsPerFrame
+    // can round a hair below the whole beat and tick a frame late -- 21 microseconds,
+    // and every division of that beat is late by the same frame, since rounding cannot
+    // reorder them. A counter that truncated its period would be 200 frames out by now.
+    double earliest = 0.0;
+    double latest = 0.0;
+    for (std::size_t n = 0; n < beats.frames.size(); ++n) {
+        const double off = static_cast<double>(beats.frames[n]) - static_cast<double>(n) * framesPerBeat;
+        earliest = std::min(earliest, off);
+        latest = std::max(latest, off);
+    }
+    check(earliest >= 0.0 && latest <= 1.0,
+          "beat n lands within a frame of n beats, ten minutes in -- offsets ran " +
+          std::to_string(earliest) + " to " + std::to_string(latest));
+
+    bool together = true;
+    bool divided = true;
+    for (std::size_t n = 0; n + 1 < beats.frames.size(); ++n) {
+        const int64_t at = beats.frames[n];
+        if (!std::binary_search(sixteenths.frames.begin(), sixteenths.frames.end(), at) ||
+            !std::binary_search(triplets.frames.begin(), triplets.frames.end(), at)) {
+            together = false;
+        }
+        if (between(sixteenths.frames, at, beats.frames[n + 1]) != 4 ||
+            between(triplets.frames, at, beats.frames[n + 1]) != 3) {
+            divided = false;
+        }
+    }
+    check(together, "every beat is a sixteenth and a triplet on the very same frame");
+    check(divided, "with exactly four sixteenths and three triplets in every beat");
+}
+
+void resumingNeitherRepeatsNorSkipsATick() {
+    std::printf("resuming neither repeats nor skips a tick\n");
+    Transport transport;
+    transport.setSampleRate(48000);
+    transport.setTempo(120.0);
+    transport.setRunning(true);
+
+    Heard heard;
+    int64_t frame = 0;
+    auto play = [&](int blocks) {
+        for (int b = 0; b < blocks; ++b) {
+            listen(transport, Interval{1, 4}, frame, heard);
+            transport.advance(kBlockSize);
+            frame += kBlockSize;
+        }
+    };
+
+    play(1500);
+    transport.setRunning(false);
+    const double held = transport.beatAt(0);
+    const std::size_t before = heard.counts.size();
+    play(1500);
+    check(heard.counts.size() == before, "nothing ticks while stopped");
+    check(transport.beatAt(0) == held, "and the position does not move");
+    transport.setRunning(true);
+    play(1500);
+
+    bool consecutive = heard.counts.size() > 2 && heard.counts.front() == 0;
+    for (std::size_t i = 1; i < heard.counts.size(); ++i) {
+        if (heard.counts[i] != heard.counts[i - 1] + 1) consecutive = false;
+    }
+    check(consecutive, "every count from zero, once each, across the pause");
+}
+
+void aTempoChangeCarriesOnFromTheCurrentBeat() {
+    std::printf("a tempo change carries on from the current beat\n");
+    Transport transport;
+    transport.setSampleRate(48000);
+    transport.setRunning(true);
+    for (int b = 0; b < 1000; ++b) transport.advance(kBlockSize);
+
+    const double before = transport.beatAt(0);
+    transport.setTempo(90.0);
+    check(std::fabs(transport.beatAt(0) - before) < 1e-9, "the position does not jump");
+    check(std::fabs(transport.beatsPerFrame() - 90.0 / 60.0 / 48000.0) < 1e-15,
+          "but moves at the new rate from here");
+
+    transport.setTempo(9999.0);
+    check(transport.tempo() == Transport::kMaxTempo, "an absurd tempo is clamped");
+}
+
+void resetStartsOnTheFirstFrameOfBarOne() {
+    std::printf("reset starts on the first frame of bar one\n");
+    Transport transport;
+    transport.setSampleRate(48000);
+    transport.setRunning(true);
+    for (int b = 0; b < 777; ++b) transport.advance(kBlockSize);
+
+    transport.reset();
+    std::array<Tick, 4> ticks{};
+    const int32_t n = transport.ticks(Interval{4, 1}, kBlockSize, ticks.data(), 4);
+    check(n == 1 && ticks[0].offset == 0 && ticks[0].count == 0,
+          "the very first frame after a reset is the downbeat");
 }
 
 } // namespace
@@ -364,6 +558,12 @@ int main() {
     duplicateAndOverfullAreRefusedNotCrashed();
     commandsSurviveAPartialBlock();
     theGraphReportsWhereASequencerHasGot();
+    stoppingHoldsThePositionAndResetReturnsToTheStart();
+    theTransportSurvivesAGraphReset();
+    divisionsOfOneTransportNeverDrift();
+    resumingNeitherRepeatsNorSkipsATick();
+    aTempoChangeCarriesOnFromTheCurrentBeat();
+    resetStartsOnTheFirstFrameOfBarOne();
 
     std::printf("\n%d checks, %d failed\n", checks, failures);
     std::fflush(stdout);

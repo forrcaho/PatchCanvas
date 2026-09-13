@@ -219,6 +219,11 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(oboe::AudioStream * /*stream*
             (!fading && outputEnabled_.load(std::memory_order_relaxed)) ? kMasterGain : 0.0f;
     const float smoothing = fading ? kFadeOutSmoothing : kGainSmoothing;
 
+    // The output switch is the transport's play button. Off stops time where it is, so
+    // switching back on picks up from there; the gain still fades on its own, and a note
+    // held when time stopped simply holds while it does.
+    graph_.setTransportRunning(!fading && outputEnabled_.load(std::memory_order_relaxed));
+
     int32_t done = 0;
     while (done < numFrames) {
         const int32_t block = std::min(numFrames - done, kBlockSize);

@@ -74,6 +74,23 @@ bool Graph::postSetParam(int64_t id, int32_t paramIndex, float value) {
     return commands_.push(cmd);
 }
 
+bool Graph::postSetTempo(float bpm) {
+    Command cmd;
+    cmd.type = CommandType::SetTempo;
+    cmd.value = bpm;
+    return commands_.push(cmd);
+}
+
+bool Graph::postResetTransport() {
+    Command cmd;
+    cmd.type = CommandType::ResetTransport;
+    return commands_.push(cmd);
+}
+
+double Graph::transportBeat() const {
+    return beat_.load(std::memory_order_relaxed);
+}
+
 void Graph::collectGarbage() {
     Node *dead = nullptr;
     while (garbage_.pop(dead)) {
@@ -243,6 +260,12 @@ void Graph::applyCommands() {
                 nodes_[slot].node->setStep(cmd.paramIndex, cmd.value, cmd.gate);
                 break;
             }
+            case CommandType::SetTempo:
+                transport_.setTempo(cmd.value);
+                break;
+            case CommandType::ResetTransport:
+                transport_.reset();
+                break;
             case CommandType::Disconnect: {
                 const int32_t dst = indexOf(cmd.id);
                 if (dst < 0) break;
@@ -304,12 +327,25 @@ void Graph::setLiveInput(const float *mono) {
 }
 
 void Graph::process(int32_t frames) {
+    // Read once for the whole block, so every node divides the same position and no two
+    // can disagree about the frame a beat fell on.
+    const bool running = transport_.running();
+    const double beatsPerFrame = running ? transport_.beatsPerFrame() : 0.0;
+    std::array<Tick, kMaxTicks> ticks{};
+
     for (int32_t i = 0; i < orderCount_; ++i) {
         Record &record = nodes_[order_[i]];
         // Belt and braces against an order that has outlived a slot. Cheap, and the
         // alternative is a null dereference on the audio thread.
         if (!record.used || record.node == nullptr) continue;
         Node *node = record.node;
+
+        node->setTiming(beatsPerFrame, running);
+        const Interval interval = node->interval();
+        if (!interval.none()) {
+            const int32_t count = transport_.ticks(interval, frames, ticks.data(), kMaxTicks);
+            for (int32_t t = 0; t < count; ++t) node->tick(ticks[t].offset, ticks[t].count);
+        }
 
         const int32_t ins = node->inputCount();
         for (int32_t p = 0; p < ins; ++p) {
@@ -355,6 +391,10 @@ void Graph::process(int32_t frames) {
             telemetry_[order_[i]].step.store(at, std::memory_order_relaxed);
         }
     }
+
+    // After every node, so all of them saw this block at the same position.
+    transport_.advance(frames);
+    beat_.store(transport_.beatAt(0), std::memory_order_relaxed);
 
     reapDying(frames);
 }

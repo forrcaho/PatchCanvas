@@ -23,9 +23,29 @@ enum class NodeType : int32_t {
     Out = 5,
     In = 6,
     Vca = 7,
-    Clock = 8,
+    // 8 was Clock, retired when the transport replaced it. Left unused rather than
+    // reassigned, so nothing can mistake an old id for a new module.
     Mix = 9,
 };
+
+/**
+ * The note lengths a clocked module can step at. Mirrored by INTERVALS in
+ * PatchCanvas.kt and indexed by the parameter that chooses one, so append rather than
+ * reorder.
+ */
+constexpr Interval kIntervals[] = {
+        {4, 1}, // 1/1
+        {2, 1}, // 1/2
+        {1, 1}, // 1/4
+        {1, 2}, // 1/8
+        {1, 4}, // 1/16
+        {1, 8}, // 1/32
+        {2, 3}, // 1/4 triplet
+        {1, 3}, // 1/8 triplet
+        {1, 6}, // 1/16 triplet
+};
+constexpr int32_t kIntervalCount = static_cast<int32_t>(sizeof(kIntervals) / sizeof(kIntervals[0]));
+constexpr int32_t kDefaultInterval = 3; // 1/8
 
 /**
  * Pitch is 1V/oct in the Eurorack sense, expressed in octaves: 0 is middle C, 1.0 is an
@@ -102,49 +122,44 @@ private:
 };
 
 /**
- * The clock, and the reason the sequencer lives down here at all.
+ * A sequence, stepped by the transport at the interval it is set to.
  *
- * It counts frames. That makes it sample-accurate by construction and gives it exactly
- * the stability of the audio device's own crystal -- which is the most stable thing
- * available. A tick originating from a Handler or a coroutine would jitter by up to a
- * buffer no matter what sat underneath it.
+ * It has no clock input. Its step is the transport's count of intervals, modulo the loop
+ * length, so two sequencers at different intervals cannot drift apart and resetting the
+ * transport puts every one of them back on its first step.
  */
-class ClockNode : public Node {
-public:
-    int32_t inputCount() const override { return 0; }
-    int32_t outputCount() const override { return 1; } // gate
-    void prepare(int32_t sampleRate) override;
-    void process(int32_t frames) override;
-    void setParam(int32_t index, float value) override;
-
-private:
-    int64_t counter_ = 0;
-    int64_t period_ = 24000;
-    float bpm_ = 120.0f;
-};
-
-/** A sequence, advanced by a rising edge on its clock input. */
 class StepsNode : public Node {
 public:
     static constexpr int32_t kSteps = 16;
 
     StepsNode();
 
-    int32_t inputCount() const override { return 1; }  // clock
+    int32_t inputCount() const override { return 0; }
     int32_t outputCount() const override { return 2; } // pitch, gate
     void process(int32_t frames) override;
     void setParam(int32_t index, float value) override;
     void setStep(int32_t index, float pitch, bool gate) override;
     int32_t position() const override { return step_; }
+    Interval interval() const override { return kIntervals[intervalIndex_]; }
+    void tick(int32_t offset, int64_t count) override;
 
 private:
-    int32_t step_ = 0;
+    /** More than one interval boundary per block would need an interval under a millisecond. */
+    static constexpr int32_t kMaxPending = 4;
+
+    Tick pending_[kMaxPending] = {};
+    int32_t pendingCount_ = 0;
+
+    /** -1 until the first tick, which is what keeps a stopped sequencer from drawing a playhead. */
+    int32_t step_ = -1;
     /** The last step that actually sounded; what the pitch output holds through a rest. */
     int32_t voiced_ = 0;
     int32_t length_ = 8;
+    int32_t intervalIndex_ = kDefaultInterval;
+    /** Frames of gate left on the note that last started. Counts only while the transport runs. */
+    int64_t gateRemaining_ = 0;
     /** Cents. See OscNode::tuneCents_. */
     float transposeCents_ = 0.0f;
-    bool wasHigh_ = false;
     /** Octaves from the root, which is what every pitch on this boundary means. */
     float pitch_[kSteps] = {};
     bool gate_[kSteps] = {};

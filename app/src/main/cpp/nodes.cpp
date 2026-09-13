@@ -168,31 +168,6 @@ void VcaNode::setParam(int32_t index, float value) {
     if (index == 0) bias_ = clampf(value, 0.0f, 1.0f);
 }
 
-// ---------------------------------------------------------------- Clock
-
-void ClockNode::prepare(int32_t sampleRate) {
-    Node::prepare(sampleRate);
-    period_ = static_cast<int64_t>(sampleRate) * 60 / 120; // 120bpm
-    counter_ = 0;
-}
-
-void ClockNode::process(int32_t frames) {
-    float *o = out(0);
-    const int64_t high = period_ / 4; // a quarter-length gate
-    for (int32_t i = 0; i < frames; ++i) {
-        o[i] = counter_ < high ? 1.0f : 0.0f;
-        if (++counter_ >= period_) counter_ = 0;
-    }
-}
-
-void ClockNode::setParam(int32_t index, float value) {
-    if (index != 0) return;
-    bpm_ = clampf(value, 20.0f, 300.0f);
-    period_ = static_cast<int64_t>(static_cast<float>(sampleRate_) * 60.0f / bpm_);
-    if (period_ < 2) period_ = 2;
-    if (counter_ >= period_) counter_ = 0;
-}
-
 // ---------------------------------------------------------------- Steps
 
 /**
@@ -216,15 +191,34 @@ void StepsNode::setStep(int32_t index, float pitch, bool gate) {
     gate_[index] = gate;
 }
 
+void StepsNode::tick(int32_t offset, int64_t count) {
+    if (pendingCount_ < kMaxPending) {
+        pending_[pendingCount_].offset = offset;
+        pending_[pendingCount_].count = count;
+        ++pendingCount_;
+    }
+}
+
+/**
+ * How much of its step a note sounds for.
+ *
+ * Fixed for now. The note length used to be the width of the clock's gate, and a knob to
+ * replace it would be a third row on a panel that fits two; the dot sequencer brings a
+ * length on every note, which is where the control belongs. Half keeps notes distinct
+ * and leaves the envelope a release before the next one.
+ */
+constexpr double kGateFraction = 0.5;
+
 void StepsNode::process(int32_t frames) {
     float *pitch = out(0);
     float *gate = out(1);
-    const float *clock = input(0);
+    int32_t next = 0;
 
     for (int32_t i = 0; i < frames; ++i) {
-        const bool high = gateHigh(clock[i]);
-        if (high && !wasHigh_) {
-            step_ = (step_ + 1) % (length_ > 0 ? length_ : 1);
+        while (next < pendingCount_ && pending_[next].offset <= i) {
+            const int64_t length = length_ > 0 ? length_ : 1;
+            const int64_t count = pending_[next].count;
+            step_ = static_cast<int32_t>(((count % length) + length) % length);
             // Only a sounding step moves the pitch. A rest is the absence of a note, so
             // it has no pitch to offer -- it keeps the degree it remembers so that
             // switching it back on restores what was there, but that degree is a note
@@ -232,29 +226,41 @@ void StepsNode::process(int32_t frames) {
             // Holding is also what a sequencer's pitch output does in hardware, where it
             // is a sample-and-hold and a rest simply never clocks it.
             if (gate_[step_]) voiced_ = step_;
-        }
-        wasHigh_ = high;
 
-        // Read through voiced_ rather than copied at the edge, so editing the note that
+            // In frames, worked out at the tick from the tempo it started at. Stopping
+            // the transport freezes it rather than letting it run out, so a note held
+            // when time stops is still the same note when it starts again.
+            const Interval step = interval();
+            gateRemaining_ = beatsPerFrame_ > 0.0
+                    ? static_cast<int64_t>(kGateFraction * step.num / (step.den * beatsPerFrame_))
+                    : 0;
+            ++next;
+        }
+
+        // Read through voiced_ rather than copied at the tick, so editing the note that
         // is currently sounding is heard immediately rather than on the next lap.
         pitch[i] = pitch_[voiced_] + transposeCents_ / 1200.0f;
-        // Anding with the clock rather than replacing it keeps the gate's shape: the
-        // sequencer decides whether a step sounds, the clock decides for how long.
-        gate[i] = (high && gate_[step_]) ? 1.0f : 0.0f;
+        gate[i] = (step_ >= 0 && gate_[step_] && gateRemaining_ > 0) ? 1.0f : 0.0f;
+        if (running_ && gateRemaining_ > 0) --gateRemaining_;
     }
+    pendingCount_ = 0;
 }
 
 void StepsNode::setParam(int32_t index, float value) {
     switch (index) {
         case 0: {
             length_ = static_cast<int32_t>(clampf(value, 1.0f, static_cast<float>(kSteps)) + 0.5f);
-            if (step_ >= length_) step_ = 0;
             // Shortening the loop past the note being held would leave the pitch on a
-            // step the sequence no longer reaches.
+            // step the sequence no longer reaches. The step itself is left alone: the next
+            // tick derives it from the count, so it lands in range without being told.
             if (voiced_ >= length_) voiced_ = 0;
             break;
         }
         case 1: transposeCents_ = clampf(value, -kTuneRange, kTuneRange); break;
+        case 2:
+            intervalIndex_ = static_cast<int32_t>(
+                    clampf(value, 0.0f, static_cast<float>(kIntervalCount - 1)) + 0.5f);
+            break;
         default: break;
     }
 }
@@ -348,7 +354,6 @@ Node *makeNode(NodeType type) {
         case NodeType::Filter: return new FilterNode();
         case NodeType::Env: return new EnvNode();
         case NodeType::Vca: return new VcaNode();
-        case NodeType::Clock: return new ClockNode();
         case NodeType::Steps: return new StepsNode();
         case NodeType::Mix: return new MixNode();
         case NodeType::Out: return new OutNode();
