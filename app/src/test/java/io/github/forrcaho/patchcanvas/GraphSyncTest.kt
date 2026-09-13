@@ -1,6 +1,8 @@
 package io.github.forrcaho.patchcanvas
 
 import androidx.compose.ui.geometry.Offset
+import java.io.File
+import java.util.Locale
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -11,7 +13,9 @@ private sealed interface Cmd {
     data class Connect(val src: Long, val srcPort: Int, val dst: Long, val dstPort: Int) : Cmd
     data class Disconnect(val dst: Long, val dstPort: Int) : Cmd
     data class SetParam(val id: Long, val index: Int, val value: Float) : Cmd
-    data class SetStep(val id: Long, val index: Int, val pitch: Float, val gate: Boolean) : Cmd
+    data class SetStep(val id: Long, val index: Int, val degree: Int, val gate: Boolean) : Cmd
+    /** Each entry's scale name and its length in beats, which is what the engine gets. */
+    data class SetScales(val entries: List<Pair<String, Int>>) : Cmd
     data class SetTempo(val bpm: Float) : Cmd
 }
 
@@ -28,8 +32,11 @@ private class Recorder : GraphCommands {
     override fun setParam(id: Long, index: Int, value: Float) {
         log += Cmd.SetParam(id, index, value)
     }
-    override fun setStep(id: Long, index: Int, pitch: Float, gate: Boolean) {
-        log += Cmd.SetStep(id, index, pitch, gate)
+    override fun setStep(id: Long, index: Int, degree: Int, gate: Boolean) {
+        log += Cmd.SetStep(id, index, degree, gate)
+    }
+    override fun setScales(entries: List<ScaleEntry>, beatsPerBar: Int) {
+        log += Cmd.SetScales(entries.map { it.scale.name to it.lengthInBeats(beatsPerBar) })
     }
     override fun setTempo(bpm: Float) { log += Cmd.SetTempo(bpm) }
     override fun collectGarbage() { collected++ }
@@ -509,36 +516,62 @@ class SequenceTest {
         assertEquals(false, sent[0].gate)
     }
 
-    /** Degrees become octaves here and nowhere else; the engine never sees a degree. */
+    /** Steps cross as degrees. The engine resolves them, against the scale of the beat. */
     @Test
-    fun `degrees are converted to octaves on the way out`() {
+    fun `steps cross as degrees, not pitches`() {
         val recorder = Recorder()
         val (patch, steps) = withSteps()
         val sync = GraphSync(recorder)
         sync.sync(patch)
         recorder.clear()
 
-        steps.setStep(0, Step(12))     // one octave up
+        steps.setStep(0, Step(12))
         sync.sync(patch)
-        assertEquals(1f, recorder.log.filterIsInstance<Cmd.SetStep>().single().pitch, 1e-6f)
+        assertEquals(12, recorder.log.filterIsInstance<Cmd.SetStep>().single().degree)
+    }
+
+    /**
+     * A change of scale changes no step. The engine holds the tables, so the list goes
+     * whole and not one step does: resending every step of every sequencer for each edit
+     * to the list would be a flood of commands saying nothing.
+     */
+    @Test
+    fun `changing the scale sends the list and no steps`() {
+        val recorder = Recorder()
+        val (patch, _) = withSteps()
+        val sync = GraphSync(recorder)
+        sync.sync(patch)
+        recorder.clear()
+
+        patch.scales = listOf(ScaleEntry(Scale.steps("Major", 12, listOf(2, 2, 1, 2, 2, 2, 1))))
+        sync.sync(patch)
+
+        assertTrue(recorder.log.filterIsInstance<Cmd.SetStep>().isEmpty())
+        assertEquals(listOf(Cmd.SetScales(listOf("Major" to 16))), recorder.log.filterIsInstance<Cmd.SetScales>())
+    }
+
+    /** Entries last bars and beats and the engine counts beats, so a new bar length is a new list. */
+    @Test
+    fun `a new bar length resends the list with new lengths`() {
+        val recorder = Recorder()
+        val (patch, _) = withSteps()
+        val sync = GraphSync(recorder)
+        patch.scales = listOf(
+            ScaleEntry(Scale.Chromatic, bars = 2, beats = 1),
+            ScaleEntry(Scale.equal("19-TET", 19)),
+        )
+        sync.sync(patch)
+        recorder.clear()
+
+        patch.beatsPerBar = 3
+        sync.sync(patch)
+
+        assertEquals(listOf(Cmd.SetScales(listOf("12-TET" to 7, "19-TET" to 12))), recorder.log)
     }
 
     @Test
-    fun `a different tuning sends different pitches for the same pattern`() {
-        val chromatic = Recorder()
-        val nineteen = Recorder()
-        val (patch, steps) = withSteps()
-        steps.setStep(0, Step(1))
-
-        patch.scale = Scale.Chromatic
-        GraphSync(chromatic).sync(patch)
-        patch.scale = Scale.equal("19-TET", 19)
-        GraphSync(nineteen).sync(patch)
-
-        fun firstPitch(r: Recorder) =
-            r.log.filterIsInstance<Cmd.SetStep>().first { it.index == 0 }.pitch
-        assertEquals(1f / 12f, firstPitch(chromatic), 1e-6f)
-        assertEquals(1f / 19f, firstPitch(nineteen), 1e-6f)
+    fun `an entry never lasts zero beats`() {
+        assertEquals(1, ScaleEntry(Scale.Chromatic, bars = 0, beats = 0).lengthInBeats(4))
     }
 
     @Test
@@ -586,44 +619,31 @@ class SequenceTest {
         assertTrue("the sequencer is flagged for the pulse", steps.id in changed)
     }
 
+    /** Resolved by name against the library on reload, which is how a scale is found again. */
+    @Test
+    fun `the scale list survives a save and a reload`() {
+        val library = ScaleLibrary.of(File("src/main/assets/scales"))
+        val (patch, _) = withSteps()
+        patch.scales = listOf(
+            ScaleEntry(library.byName("Major")!!, 4, 0),
+            ScaleEntry(library.byName("Minor pentatonic")!!, 2, 3),
+        )
+        assertEquals(patch.scales, patchFromJson(patch.toJson(), library)!!.scales)
+    }
+
     /**
-     * Retuning changes no step and every pitch. The diff is over steps, so without
-     * noticing the scale it would send nothing at all and the patch would go on sounding
-     * in the tuning it was last synced in.
+     * An entry naming a scale whose file is gone keeps its place, in the fallback tuning,
+     * so the list keeps its shape and its timing rather than losing a bar somewhere.
      */
     @Test
-    fun `changing the scale resends every step`() {
-        val recorder = Recorder()
-        val (patch, steps) = withSteps()
-        val sync = GraphSync(recorder)
-        sync.sync(patch)
-        recorder.clear()
-
-        patch.scale = Scale.steps("Major", 12, listOf(2, 2, 1, 2, 2, 2, 1))
-        sync.sync(patch)
-
-        val sent = recorder.log.filterIsInstance<Cmd.SetStep>().filter { it.id == steps.id }
-        assertEquals(STEP_COUNT, sent.size)
-    }
-
-    @Test
-    fun `the patch remembers its scale across a save`() {
+    fun `an entry naming a scale that is not installed keeps its place`() {
         val (patch, _) = withSteps()
-        val harmonic = Scale.steps("Harmonic minor", 12, listOf(2, 1, 2, 2, 1, 3, 1))
-        patch.scale = harmonic
-        // Resolved by name against the library, which is how a reload finds it again.
-        val library = ScaleLibrary.of(null)
-        assertEquals(Scale.Chromatic, patchFromJson(patch.toJson(), library)!!.scale)
-        assertEquals("Harmonic minor", org.json.JSONObject(patch.toJson()).getString("scale"))
-    }
-
-    /** A patch naming a scale whose file is gone loads in the fallback, not not at all. */
-    @Test
-    fun `a file naming a scale that is not installed still loads`() {
-        val (patch, _) = withSteps()
-        val text = patch.toJson().replace("\"scale\":\"12-TET\"", "\"scale\":\"Slendro\"")
-        val back = patchFromJson(text, ScaleLibrary.of(null))
-        assertEquals(Scale.Chromatic, back!!.scale)
+        patch.scales = listOf(ScaleEntry(Scale.Chromatic, 2, 0), ScaleEntry(Scale.equal("Slendro", 5), 1, 2))
+        val back = patchFromJson(patch.toJson(), ScaleLibrary.of(null))!!
+        assertEquals(
+            listOf(Triple("12-TET", 2, 0), Triple("12-TET", 1, 2)),
+            back.scales.map { Triple(it.scale.name, it.bars, it.beats) },
+        )
     }
 }
 
@@ -711,5 +731,38 @@ class TransportSyncTest {
         /** kIntervalCount and kDefaultInterval in nodes.h. */
         const val ENGINE_INTERVALS = 9
         const val ENGINE_DEFAULT_INTERVAL = 3
+    }
+}
+
+/** The limits the engine's fixed tables impose. A disagreement fails silently, at the top of a scale. */
+class ScaleLimitTest {
+
+    /** kMaxDegrees and kMaxScaleEntries in scales.h. */
+    @Test
+    fun `the limits are the engine's`() {
+        assertEquals(64, MAX_DEGREES)
+        assertEquals(16, MAX_SCALE_ENTRIES)
+    }
+
+    @Test
+    fun `a scale bigger than the engine's table is skipped, and one that just fits is not`() {
+        val dir = kotlin.io.path.createTempDirectory("scales").toFile()
+        try {
+            fun edo(n: Int) = buildString {
+                appendLine("! $n-EDO.scl")
+                appendLine("$n equal divisions of the octave")
+                appendLine(" $n")
+                appendLine("!")
+                (1..n).forEach { appendLine(" " + String.format(Locale.ROOT, "%.5f", it * 1200.0 / n)) }
+            }
+            File(dir, "64-EDO.scl").writeText(edo(64))
+            File(dir, "65-EDO.scl").writeText(edo(65))
+
+            val loaded = ScaleLibrary.of(dir).scales.associateBy { it.name }
+            assertEquals("64 degrees fits", 64, loaded["64-EDO"]?.size)
+            assertTrue("65 degrees does not", "65-EDO" !in loaded)
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 }

@@ -174,6 +174,17 @@ class PatchJsonTest {
         assertEquals(sample().free.size, restored.free.size)
     }
 
+    /** Format 2 had one scale where format 3 has a list; the scale there was becomes the only entry. */
+    @Test
+    fun `a format 2 file's scale becomes a list of one`() {
+        val library = ScaleLibrary.of(java.io.File("src/main/assets/scales"))
+        val root = JSONObject(sample().toJson()).put("version", 2).put("scale", "Major")
+        root.remove("scales")
+
+        val restored = patchFromJson(root.toString(), library)!!
+        assertEquals(listOf("Major"), restored.scales.map { it.scale.name })
+    }
+
     @Test
     fun `a format 1 file with no Clock loads at the default tempo`() {
         val root = JSONObject(sample().toJson()).put("version", 1)

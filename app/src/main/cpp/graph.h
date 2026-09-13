@@ -66,8 +66,16 @@ public:
     bool postConnect(int64_t srcId, int32_t srcPort, int64_t dstId, int32_t dstPort);
     bool postDisconnect(int64_t dstId, int32_t dstPort);
     bool postSetParam(int64_t id, int32_t paramIndex, float value);
-    /** One step of a sequence. Pitch in octaves from the root. */
-    bool postSetStep(int64_t id, int32_t index, float pitch, bool gate);
+    /** One step of a sequence, as a degree of the patch's scales. */
+    bool postSetStep(int64_t id, int32_t index, int32_t degree, bool gate);
+    /**
+     * Replaces the patch's scales with [list], which the graph takes ownership of. Built
+     * by the caller off the audio thread and swapped in whole; the list it replaces comes
+     * back through collectGarbage. Freed here if it cannot be queued.
+     */
+    bool postSetScales(ScaleList *list);
+    /** Which scale is sounding, published once per block for the interface. */
+    int32_t scaleEntry() const;
     /**
      * Which step a sequencer is on, or -1 if it is not running or not a sequencer.
      *
@@ -110,6 +118,7 @@ public:
 private:
     enum class CommandType : int32_t {
         Add, Remove, Connect, Disconnect, SetParam, SetStep, SetTempo, ResetTransport,
+        SetScales,
     };
 
     struct Command {
@@ -122,8 +131,11 @@ private:
         Node *node = nullptr;
         int32_t paramIndex = 0;
         float value = 0.0f;
-        /** SetStep only: whether the step sounds. */
+        /** SetStep only: whether the step sounds, and its degree. */
         bool gate = false;
+        int32_t degree = 0;
+        /** SetScales only: the list to swap in. */
+        ScaleList *scales = nullptr;
     };
 
     /**
@@ -194,6 +206,11 @@ private:
     /** The transport's beat, published for the interface once per block. */
     std::atomic<double> beat_{0.0};
 
+    /** The patch's scales. Null until the interface sends some, which reads as 12-TET. */
+    ScaleList *scales_ = nullptr;
+    /** Which of them is sounding, published for the interface once per block. */
+    std::atomic<int32_t> scaleEntry_{0};
+
     std::array<Record, kMaxNodes> nodes_{};
     std::array<int32_t, kMaxNodes> order_{};
     std::array<bool, kMaxNodes> emitted_{};
@@ -213,4 +230,5 @@ private:
 
     SpscQueue<Command, kCommandCapacity> commands_;
     SpscQueue<Node *, kCommandCapacity> garbage_;
+    SpscQueue<ScaleList *, 16> retiredScales_;
 };

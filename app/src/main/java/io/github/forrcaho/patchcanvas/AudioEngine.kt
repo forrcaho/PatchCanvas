@@ -62,9 +62,34 @@ object AudioEngine {
     fun setParam(id: Long, index: Int, value: Float): Boolean =
         available && started && nativeSetParam(id, index, value)
 
-    /** One step of a sequence. Pitch in octaves from the root. */
-    fun setStep(id: Long, index: Int, pitch: Float, gate: Boolean): Boolean =
-        available && started && nativeSetStep(id, index, pitch, gate)
+    /** One step of a sequence, as a degree of whichever scale is sounding when it plays. */
+    fun setStep(id: Long, index: Int, degree: Int, gate: Boolean): Boolean =
+        available && started && nativeSetStep(id, index, degree, gate)
+
+    /**
+     * The patch's scales, in order, with each entry's length in beats.
+     *
+     * Flattened into arrays because that is what JNI copies cheaply. The engine builds its
+     * list from them off the audio thread and swaps the whole thing in at once.
+     */
+    fun setScales(entries: List<ScaleEntry>, beatsPerBar: Int): Boolean {
+        if (!available || !started) return false
+        val kept = entries.take(MAX_SCALE_ENTRIES)
+        return nativeSetScales(
+            kept.flatMap { it.scale.degrees.take(MAX_DEGREES) }.toFloatArray(),
+            kept.map { minOf(it.scale.size, MAX_DEGREES) }.toIntArray(),
+            kept.map { it.scale.period }.toFloatArray(),
+            kept.map { it.lengthInBeats(beatsPerBar) }.toIntArray(),
+        )
+    }
+
+    /**
+     * Which entry of the scale list is sounding.
+     *
+     * From the engine rather than worked out here, so the grid and the sound cannot
+     * disagree about when a switch happened.
+     */
+    fun scaleEntry(): Int = if (available && started) nativeScaleEntry() else 0
 
     /**
      * Which step a sequencer is on, or -1 if it is not running.
@@ -153,7 +178,14 @@ object AudioEngine {
     private external fun nativeConnect(srcId: Long, srcPort: Int, dstId: Long, dstPort: Int): Boolean
     private external fun nativeDisconnect(dstId: Long, dstPort: Int): Boolean
     private external fun nativeSetParam(id: Long, index: Int, value: Float): Boolean
-    private external fun nativeSetStep(id: Long, index: Int, pitch: Float, gate: Boolean): Boolean
+    private external fun nativeSetStep(id: Long, index: Int, degree: Int, gate: Boolean): Boolean
+    private external fun nativeSetScales(
+        degrees: FloatArray,
+        sizes: IntArray,
+        periods: FloatArray,
+        beats: IntArray,
+    ): Boolean
+    private external fun nativeScaleEntry(): Int
     private external fun nativeStepOf(id: Long): Int
     private external fun nativeSetTempo(bpm: Float): Boolean
     private external fun nativeResetTransport(): Boolean

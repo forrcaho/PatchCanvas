@@ -34,6 +34,8 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -628,76 +630,15 @@ private val ChipEdge = Color(0xFF3A424E)
 private val PanelScrim = Color(0xE6161A20)
 private val TileFill = Color(0xFF1A1F27)
 
-private fun DrawScope.drawScaleChip(
-    rect: Rect,
-    d: Float,
-    scale: Scale,
-    open: Boolean,
-    measurer: TextMeasurer,
-) {
-    drawRoundRect(
-        color = if (open) scaleAccent else ChipFill,
-        topLeft = rect.topLeft,
-        size = rect.size,
-        cornerRadius = CornerRadius(7f * d, 7f * d),
-    )
-    drawRoundRect(
-        color = ChipEdge,
-        topLeft = rect.topLeft,
-        size = rect.size,
-        cornerRadius = CornerRadius(7f * d, 7f * d),
-        style = Stroke(width = 1.5f * d),
-    )
-    // The degree count, because it is what changes about the grid when you pick one --
-    // seven rows to the octave rather than twelve is the whole difference.
-    val text = measurer.measure(
-        "${scale.name}  ·  ${scale.size}",
-        if (open) PanelChipOnStyle else PanelChipStyle,
-    )
-    drawText(
-        text,
-        topLeft = Offset(
-            rect.center.x - text.size.width / 2f,
-            rect.center.y - text.size.height / 2f,
-        ),
-    )
-}
-
-private fun DrawScope.drawScaleTile(
-    rect: Rect,
-    d: Float,
-    scale: Scale,
-    current: Scale,
-    measurer: TextMeasurer,
-) {
-    val chosen = scale.name == current.name
-    drawRoundRect(
-        color = if (chosen) scaleAccent else TileFill,
-        topLeft = rect.topLeft,
-        size = rect.size,
-        cornerRadius = CornerRadius(7f * d, 7f * d),
-    )
-    if (!chosen) {
-        drawRoundRect(
-            color = ChipEdge,
-            topLeft = rect.topLeft,
-            size = rect.size,
-            cornerRadius = CornerRadius(7f * d, 7f * d),
-            style = Stroke(width = 1.5f * d),
-        )
-    }
-    val name = measurer.measure(scale.name, if (chosen) PanelChipOnStyle else PanelChipStyle)
-    val nameTop = rect.top + 7f * d
-    drawText(name, topLeft = Offset(rect.left + 10f * d, nameTop))
-
-    // Degrees per period, and the period itself when it is not the octave. A tuning that
-    // does not repeat at the octave is the thing most worth knowing before you pick it.
+/**
+ * What a scale's tile says under its name: degrees per period, and the period itself when
+ * it is not the octave. A tuning that does not repeat at the octave is the thing most
+ * worth knowing before you pick it.
+ */
+private fun scaleDetail(scale: Scale): String {
     val period = if (kotlin.math.abs(scale.period - 1f) < 1e-4f) ""
     else "  ·  ${"%.3f".format(Math.pow(2.0, scale.period.toDouble()))}:1"
-    val detail = measurer.measure("${scale.size} degrees$period", GridLabelStyle)
-    // Stacked under the name by its measured height rather than pinned to the tile's
-    // bottom: a measured height includes line spacing, so the two ran into each other.
-    drawText(detail, topLeft = Offset(rect.left + 10f * d, nameTop + name.size.height))
+    return "${scale.size} degrees$period"
 }
 
 private val scaleAccent = Color(0xFF6FA8E5)
@@ -710,6 +651,8 @@ private fun DrawScope.drawChip(
     open: Boolean,
     accent: Color,
     measurer: TextMeasurer,
+    /** Drawn after the label and never shortened; the label gives way to it. */
+    suffix: String = "",
 ) {
     val corner = CornerRadius(7f * d, 7f * d)
     drawRoundRect(
@@ -725,11 +668,24 @@ private fun DrawScope.drawChip(
         cornerRadius = corner,
         style = Stroke(width = 1.5f * d),
     )
-    val text = measurer.measure(label, if (open) PanelChipOnStyle else PanelChipStyle)
-    drawText(
-        text,
-        topLeft = Offset(rect.center.x - text.size.width / 2f, rect.center.y - text.size.height / 2f),
+    // A long label ends in an ellipsis rather than running off both ends of the chip,
+    // which is what "Harmonic minor · 1 of 2" did on the device. The suffix keeps its
+    // room: on the scale chip it is which entry is playing, the part nothing else shows.
+    val style = if (open) PanelChipOnStyle else PanelChipStyle
+    val room = (rect.width - 16f * d).toInt().coerceAtLeast(0)
+    val tail = if (suffix.isEmpty()) null else measurer.measure(suffix, style, maxLines = 1)
+    val head = measurer.measure(
+        label,
+        style,
+        overflow = TextOverflow.Ellipsis,
+        maxLines = 1,
+        constraints = Constraints(maxWidth = (room - (tail?.size?.width ?: 0)).coerceAtLeast(0)),
     )
+    val left = rect.center.x - (head.size.width + (tail?.size?.width ?: 0)) / 2f
+    drawText(head, topLeft = Offset(left, rect.center.y - head.size.height / 2f))
+    tail?.let {
+        drawText(it, topLeft = Offset(left + head.size.width, rect.center.y - it.size.height / 2f))
+    }
 }
 
 /** A tile in a chooser: a name, and a quieter line of detail beneath it. */
@@ -766,37 +722,27 @@ private fun DrawScope.drawTile(
 }
 
 /**
- * The tuning chip, in the panel header.
+ * The interval chip, at the right of a clocked module's header.
  *
- * The scale belongs to the patch rather than to this module, but the header of a
- * sequencer is where you are standing when you want it -- the grid's rows are the scale,
- * so the label for them belongs beside the grid. Two sequencers share one tuning, which
- * is the intent: a patch has a key the way it has a tempo.
+ * The right rather than the left, because the left of the header is where the floating
+ * chips hang. The tuning chip that used to sit beside it is one of those now: the scale
+ * belongs to the patch, and a control for it inside one sequencer changed all the others.
  */
-internal fun panelScaleChip(panel: Rect, d: Float): Rect {
+internal fun panelIntervalChip(panel: Rect, d: Float): Rect {
     val height = 28f * d
-    val width = 150f * d
+    val width = 72f * d
     return Rect(
         Offset(panel.right - width - 14f * d, panel.top + (PatchModule.PANEL_HEADER * d - height) / 2f),
         Size(width, height),
     )
 }
 
-/**
- * The interval chip, beside the tuning chip in a clocked module's header.
- *
- * On the right with its neighbour rather than on the left, where it would be the mirror
- * of the scale chip: the left of the header is where the transport chip floats.
- */
-internal fun panelIntervalChip(panel: Rect, d: Float): Rect {
-    val scale = panelScaleChip(panel, d)
-    val width = 72f * d
-    return Rect(Offset(scale.left - width - 8f * d, scale.top), Size(width, scale.height))
-}
+/** Where each of [count] chooser tiles lands inside a panel's body. */
+internal fun panelTiles(panel: Rect, d: Float, count: Int): List<Rect> =
+    tileGrid(panelBody(panel, d).deflate(10f * d), d, count)
 
-/** Where each scale's tile lands when the chip is open. */
-internal fun scaleTiles(panel: Rect, d: Float, count: Int): List<Rect> {
-    val area = panelBody(panel, d).deflate(10f * d)
+/** Where each of [count] tiles lands in [area], row by row, stopping at one page. */
+internal fun tileGrid(area: Rect, d: Float, count: Int): List<Rect> {
     val tileW = SCALE_TILE_W * d
     val tileH = SCALE_TILE_H * d
     val columns = maxOf(1, (area.width / tileW).toInt())
@@ -810,7 +756,7 @@ internal fun scaleTiles(panel: Rect, d: Float, count: Int): List<Rect> {
     }
 }
 
-internal const val SCALE_TILE_W = 196f
+internal const val SCALE_TILE_W = 188f
 internal const val SCALE_TILE_H = 56f
 
 // ------------------------------------------------------------------- the step grid
@@ -866,13 +812,15 @@ class Patch {
     var inputEnabled by mutableStateOf(false)
 
     /**
-     * The tuning every sequencer degree is read against.
+     * The tunings every sequencer degree is read against, in the order they loop.
      *
-     * One per patch rather than one per module: two sequencers in different tunings is a
-     * thing somebody will eventually want and nobody wants by accident, and a patch has
-     * a key in the same way it has a tempo.
+     * One list per patch rather than a scale per module: two sequencers in different
+     * tunings is a thing somebody will eventually want and nobody wants by accident, and a
+     * patch has a key in the same way it has a tempo. A plain immutable list replaced whole
+     * on every edit, so comparing two of them compares their contents -- a snapshot list
+     * would not. Never empty.
      */
-    var scale by mutableStateOf(Scale.Chromatic)
+    var scales by mutableStateOf(listOf(ScaleEntry(Scale.Chromatic)))
 
     /**
      * Beats per minute, for the transport every clocked module divides.
@@ -1116,6 +1064,52 @@ internal class Frame(
         )
     }
 
+    /** The scale chip, beside the transport's. */
+    fun scaleChip(): Rect {
+        val d = density
+        val transport = transportChip()
+        return Rect(
+            Offset(transport.right + 8f * d, transport.top),
+            Size(SCALE_CHIP_W * d, TRANSPORT_CHIP_H * d),
+        )
+    }
+
+    /**
+     * How many entry rows the scale card shows before it scrolls.
+     *
+     * The card hangs from the scale chip rather than the corner, which keeps it to the
+     * right of the undo buttons, so it can use the height all the way down to the
+     * gesture bar.
+     */
+    fun scaleRowsThatFit(): Int {
+        val d = density
+        val top = scaleChip().bottom + 6f * d
+        val bottom = canvas.height - insetBottom - RAIL_MARGIN * d
+        val room = bottom - top - (SCALE_CARD_PAD * 2 + SCALE_CARD_HEAD + SCALE_CARD_FOOT) * d
+        return (room / (SCALE_ROW * d)).toInt().coerceIn(1, MAX_SCALE_ENTRIES)
+    }
+
+    /** The scale card, sized for [entries] rows up to as many as fit. */
+    fun scaleCard(entries: Int): Rect {
+        val d = density
+        val chip = scaleChip()
+        val rows = entries.coerceIn(1, scaleRowsThatFit())
+        val height = (SCALE_CARD_PAD * 2 + SCALE_CARD_HEAD + SCALE_CARD_FOOT + rows * SCALE_ROW) * d
+        return Rect(Offset(chip.left, chip.bottom + 6f * d), Size(SCALE_CARD_W * d, height))
+    }
+
+    /** The page of scales one entry chooses from, shown in place of the card while it does. */
+    fun scalePicker(): Rect {
+        val d = density
+        val chip = scaleChip()
+        return Rect(
+            chip.left,
+            chip.bottom + 6f * d,
+            minOf(canvas.width - insetRight - RAIL_MARGIN * d, chip.left + SCALE_PICKER_W * d),
+            canvas.height - insetBottom - RAIL_MARGIN * d,
+        )
+    }
+
     companion object {
         const val RAIL_MARGIN = 8f
         const val HISTORY_SIDE = 44f
@@ -1124,6 +1118,13 @@ internal class Frame(
         const val TRANSPORT_CHIP_H = 36f
         const val TRANSPORT_CARD_W = 300f
         const val TRANSPORT_CARD_H = 204f
+        const val SCALE_CHIP_W = 230f
+        const val SCALE_CARD_W = 520f
+        const val SCALE_CARD_PAD = 14f
+        const val SCALE_CARD_HEAD = 26f
+        const val SCALE_CARD_FOOT = 54f
+        const val SCALE_ROW = 44f
+        const val SCALE_PICKER_W = 830f
     }
 }
 
@@ -1190,6 +1191,75 @@ internal fun transportReset(card: Rect, d: Float) =
         Offset(card.right - CARD_PAD * d - 88f * d, card.bottom - 12f * d - 40f * d),
         Size(88f * d, 40f * d),
     )
+
+// ---------------------------------------------------------------- the scale card
+
+/** Its entry rows, below the column headings and above the add button. */
+internal fun scaleCardList(card: Rect, d: Float) = Rect(
+    card.left + Frame.SCALE_CARD_PAD * d,
+    card.top + (Frame.SCALE_CARD_PAD + Frame.SCALE_CARD_HEAD) * d,
+    card.right - Frame.SCALE_CARD_PAD * d,
+    card.bottom - (Frame.SCALE_CARD_PAD + Frame.SCALE_CARD_FOOT) * d,
+)
+
+/** The row at visible position [slot], counting from the top of what is shown. */
+internal fun scaleCardRow(card: Rect, d: Float, slot: Int): Rect {
+    val list = scaleCardList(card, d)
+    val top = list.top + slot * Frame.SCALE_ROW * d
+    return Rect(list.left, top, list.right, top + Frame.SCALE_ROW * d)
+}
+
+/** One entry's controls: its scale, bars and beats each with a pair of steppers, and remove. */
+internal class ScaleRowParts(
+    val name: Rect,
+    val barsLess: Rect,
+    val bars: Rect,
+    val barsMore: Rect,
+    val beatsLess: Rect,
+    val beats: Rect,
+    val beatsMore: Rect,
+    val remove: Rect,
+) {
+    val all: List<Rect> get() = listOf(name, barsLess, bars, barsMore, beatsLess, beats, beatsMore, remove)
+}
+
+/**
+ * Steppers rather than sliders, because a length is counted: one more bar is one tap,
+ * and there is no way to land between two.
+ */
+internal fun scaleRowParts(row: Rect, d: Float): ScaleRowParts {
+    val height = 36f * d
+    val top = row.center.y - height / 2f
+    fun box(from: Float, width: Float) = Rect(Offset(row.left + from * d, top), Size(width * d, height))
+    return ScaleRowParts(
+        name = box(0f, 196f),
+        barsLess = box(208f, 36f),
+        bars = box(244f, 40f),
+        barsMore = box(284f, 36f),
+        beatsLess = box(332f, 36f),
+        beats = box(368f, 40f),
+        beatsMore = box(408f, 36f),
+        remove = box(456f, 36f),
+    )
+}
+
+internal fun scaleCardAdd(card: Rect, d: Float) = Rect(
+    Offset(card.left + Frame.SCALE_CARD_PAD * d, card.bottom - Frame.SCALE_CARD_PAD * d - 40f * d),
+    Size(120f * d, 40f * d),
+)
+
+/** The picker's tiles, below its title. */
+internal fun scalePickerTiles(picker: Rect, d: Float, count: Int): List<Rect> =
+    tileGrid(Rect(picker.left + 10f * d, picker.top + 40f * d, picker.right - 10f * d, picker.bottom - 10f * d), d, count)
+
+/** Which floating card is open. One at a time, because both hang from the top-left corner. */
+internal enum class FloatingCard { None, Transport, Scales }
+
+/** The scale card's view state: which entry is choosing a scale, and how far the list is scrolled. */
+internal class ScaleCardView {
+    var pickingFor by mutableIntStateOf(-1)
+    var scroll by mutableIntStateOf(0)
+}
 
 /** Screen position of any port, whether its module is pinned or free. */
 private fun portScreen(
@@ -1276,24 +1346,39 @@ fun PatchCanvas(
     // would go on writing to the state object from the first composition while the draw
     // read the newest one, and the chooser would never open. Same trap as the controls
     // above, wearing a different hat.
-    var scaleMenu by remember { mutableStateOf(false) }
     var intervalMenu by remember { mutableStateOf(false) }
-    LaunchedEffect(openModule?.id) {
-        scaleMenu = false
-        intervalMenu = false
-    }
+    LaunchedEffect(openModule?.id) { intervalMenu = false }
 
-    // The transport's card. Unkeyed, for the same reason as the chooser above, and left
-    // alone when a panel opens or closes: it floats over both, so neither of them owns it.
-    var transportOpen by remember { mutableStateOf(false) }
+    // The floating cards. Unkeyed, for the same reason as the chooser above, and left alone
+    // when a panel opens or closes: they float over both, so neither of them owns them.
+    var card by remember { mutableStateOf(FloatingCard.None) }
+    val scaleView = remember { ScaleCardView() }
     var transportBeat by remember { mutableDoubleStateOf(0.0) }
-    LaunchedEffect(transportOpen) {
-        if (!transportOpen) return@LaunchedEffect
+    LaunchedEffect(card) {
+        if (card != FloatingCard.Transport) return@LaunchedEffect
         while (true) {
             withFrameNanos { }
             transportBeat = AudioEngine.transportBeat()
         }
     }
+
+    // Which entry of the scale list is sounding, from the engine, so the grid cannot
+    // disagree with the sound about when a switch happened. Polled only while there is a
+    // list to move through; writing back an unchanged value recomposes nothing.
+    var playingEntry by remember { mutableIntStateOf(0) }
+    val cycling = patch.scales.size > 1
+    LaunchedEffect(cycling) {
+        if (!cycling) {
+            playingEntry = 0
+            return@LaunchedEffect
+        }
+        while (true) {
+            withFrameNanos { }
+            playingEntry = AudioEngine.scaleEntry()
+        }
+    }
+    // What the grid's rows and the tuning marks show: the scale sounding now.
+    val playing = patch.scales.getOrElse(playingEntry) { patch.scales.first() }.scale
     LaunchedEffect(openModule?.id, openModule?.type?.stepCount) {
         val id = openModule?.takeIf { it.type.stepCount > 0 }?.id
         if (id == null) {
@@ -1347,11 +1432,27 @@ fun PatchCanvas(
                     if (interaction !is Interaction.Menu) {
                         if (frame.transportChip().contains(down.position)) {
                             waitForUpRelease()
-                            transportOpen = !transportOpen
+                            card = if (card == FloatingCard.Transport) FloatingCard.None
+                                else FloatingCard.Transport
                             return@awaitEachGesture
                         }
-                        if (transportOpen && frame.transportCard().contains(down.position)) {
+                        if (frame.scaleChip().contains(down.position)) {
+                            waitForUpRelease()
+                            card = if (card == FloatingCard.Scales) FloatingCard.None
+                                else FloatingCard.Scales
+                            scaleView.pickingFor = -1
+                            return@awaitEachGesture
+                        }
+                        if (card == FloatingCard.Transport &&
+                            frame.transportCard().contains(down.position)
+                        ) {
                             transportCardGesture(frame, down.position, patch, controls.onResetTransport)
+                            return@awaitEachGesture
+                        }
+                        val scaleArea = if (scaleView.pickingFor >= 0) frame.scalePicker()
+                            else frame.scaleCard(patch.scales.size)
+                        if (card == FloatingCard.Scales && scaleArea.contains(down.position)) {
+                            scaleCardGesture(frame, down.position, patch, scales, scaleView, slop)
                             return@awaitEachGesture
                         }
                     }
@@ -1367,22 +1468,12 @@ fun PatchCanvas(
                         // otherwise be read as tapping away to close.
                         val onHistory = controls.overHistory(frame, down.position)
 
-                        // The chooser owns the panel while it is open: nothing behind it
-                        // is reachable, so a stray tap picks no scale and changes no knob.
-                        if (open.type.stepCount > 0 && scaleMenu) {
-                            val tiles = scaleTiles(panel, frame.density, scales.size)
-                            waitForUpRelease()
-                            val hit = tiles.indexOfFirst { it.contains(down.position) }
-                            if (hit >= 0) patch.scale = scales[hit]
-                            // Anywhere else dismisses, including the chip itself.
-                            scaleMenu = false
-                            return@awaitEachGesture
-                        }
-
-                        // The interval chooser, on exactly the terms of the scale's.
+                        // The interval chooser owns the panel while it is open: nothing
+                        // behind it is reachable, so a stray tap picks nothing and changes
+                        // no knob. Anywhere dismisses it, including the chip itself.
                         val intervalParam = open.type.intervalParam
                         if (intervalParam >= 0 && intervalMenu) {
-                            val tiles = scaleTiles(panel, frame.density, INTERVALS.size)
+                            val tiles = panelTiles(panel, frame.density, INTERVALS.size)
                             waitForUpRelease()
                             val hit = tiles.indexOfFirst { it.contains(down.position) }
                             if (hit >= 0) open.setParam(intervalParam, hit.toFloat())
@@ -1390,13 +1481,6 @@ fun PatchCanvas(
                             return@awaitEachGesture
                         }
 
-                        if (open.type.stepCount > 0 &&
-                            panelScaleChip(panel, frame.density).contains(down.position)
-                        ) {
-                            waitForUpRelease()
-                            scaleMenu = true
-                            return@awaitEachGesture
-                        }
                         if (intervalParam >= 0 &&
                             panelIntervalChip(panel, frame.density).contains(down.position)
                         ) {
@@ -1717,8 +1801,8 @@ fun PatchCanvas(
 
         patch.modules.firstOrNull { it.expanded }?.let { open ->
             drawPanel(
-                open, patch, panelRect(frame), d, screenMeasurer, patch.scale, playingStep,
-                scales, scaleMenu, intervalMenu,
+                open, patch, panelRect(frame), d, screenMeasurer, playing, playingStep,
+                intervalMenu,
             )
         }
 
@@ -1736,7 +1820,11 @@ fun PatchCanvas(
 
         // Over the panel for the same reason as the buttons, and before the context menu,
         // which is transient and should cover everything while it is up.
-        drawTransport(frame, d, patch, transportOpen, transportBeat, screenMeasurer)
+        drawTransport(frame, d, patch, card == FloatingCard.Transport, transportBeat, screenMeasurer)
+        drawScales(
+            frame, d, patch, scales, playingEntry, card == FloatingCard.Scales, scaleView,
+            screenMeasurer,
+        )
 
         (interaction as? Interaction.Menu)?.let { menu ->
             drawMenu(menuLayout(menuItems(menu.targetId), menu.anchor, d, size), d, screenMeasurer)
@@ -2316,6 +2404,215 @@ private suspend fun AwaitPointerEventScope.transportCardGesture(
     }
 }
 
+// ---------------------------------------------------------------- scales
+
+/** A small button: a box with a centred label, dimmed when it would do nothing. */
+private fun DrawScope.drawKey(
+    rect: Rect,
+    d: Float,
+    label: String,
+    measurer: TextMeasurer,
+    enabled: Boolean = true,
+) {
+    val corner = CornerRadius(7f * d, 7f * d)
+    val alpha = if (enabled) 1f else 0.35f
+    drawRoundRect(ChipFill, rect.topLeft, rect.size, corner, alpha = alpha)
+    drawRoundRect(ChipEdge, rect.topLeft, rect.size, corner, style = Stroke(width = 1.5f * d), alpha = alpha)
+    val text = measurer.measure(label, PanelValueStyle)
+    drawText(
+        text,
+        topLeft = Offset(rect.center.x - text.size.width / 2f, rect.center.y - text.size.height / 2f),
+        alpha = alpha,
+    )
+}
+
+/**
+ * The scale chip, and its card -- or its page of tiles -- while open.
+ *
+ * The chip names the scale sounding now and, while a list plays, which entry of how many:
+ * the one thing about a cycling scale that the grid, which only ever shows the current
+ * one, cannot tell you.
+ */
+private fun DrawScope.drawScales(
+    frame: Frame,
+    d: Float,
+    patch: Patch,
+    library: List<Scale>,
+    playingEntry: Int,
+    open: Boolean,
+    view: ScaleCardView,
+    measurer: TextMeasurer,
+) {
+    val entries = patch.scales
+    val playing = entries.getOrElse(playingEntry) { entries.first() }.scale
+    val suffix = if (entries.size == 1) "  ·  ${playing.size}"
+        else "  ·  ${playingEntry + 1} of ${entries.size}"
+    drawChip(frame.scaleChip(), d, playing.name, open, scaleAccent, measurer, suffix)
+    if (!open) return
+
+    val corner = CornerRadius(10f * d, 10f * d)
+    val picking = view.pickingFor
+    if (picking in entries.indices) {
+        val picker = frame.scalePicker()
+        drawRoundRect(Color(0xFF1B1F26), picker.topLeft, picker.size, corner)
+        drawRoundRect(ChipEdge, picker.topLeft, picker.size, corner, style = Stroke(width = 1.5f * d))
+        drawText(
+            measurer.measure("scale for entry ${picking + 1}", PanelParamStyle),
+            topLeft = Offset(picker.left + 14f * d, picker.top + 10f * d),
+        )
+        val chosen = entries[picking].scale.name
+        scalePickerTiles(picker, d, library.size).forEachIndexed { i, tile ->
+            drawTile(tile, d, library[i].name, scaleDetail(library[i]), library[i].name == chosen, measurer)
+        }
+        return
+    }
+
+    val card = frame.scaleCard(entries.size)
+    drawRoundRect(Color(0xFF1B1F26), card.topLeft, card.size, corner)
+    drawRoundRect(ChipEdge, card.topLeft, card.size, corner, style = Stroke(width = 1.5f * d))
+
+    val columns = scaleRowParts(scaleCardRow(card, d, 0), d)
+    val headTop = card.top + Frame.SCALE_CARD_PAD * d
+    fun heading(text: String, left: Float, right: Float, centred: Boolean) {
+        val t = measurer.measure(text, GridLabelStyle)
+        val x = if (centred) (left + right) / 2f - t.size.width / 2f else left
+        drawText(t, topLeft = Offset(x, headTop))
+    }
+    heading("scale", columns.name.left, columns.name.right, centred = false)
+    heading("bars", columns.barsLess.left, columns.barsMore.right, centred = true)
+    heading("beats", columns.beatsLess.left, columns.beatsMore.right, centred = true)
+
+    fun value(rect: Rect, text: String) {
+        val t = measurer.measure(text, PanelValueStyle)
+        drawText(t, topLeft = Offset(rect.center.x - t.size.width / 2f, rect.center.y - t.size.height / 2f))
+    }
+
+    val visible = frame.scaleRowsThatFit()
+    val scroll = view.scroll.coerceIn(0, maxOf(0, entries.size - visible))
+    for (slot in 0 until minOf(visible, entries.size - scroll)) {
+        val index = scroll + slot
+        val entry = entries[index]
+        val parts = scaleRowParts(scaleCardRow(card, d, slot), d)
+        // Lit while it is the one sounding, and only when there is a list to be in.
+        drawChip(
+            parts.name, d, entry.scale.name, entries.size > 1 && index == playingEntry,
+            scaleAccent, measurer,
+        )
+        drawKey(parts.barsLess, d, "−", measurer, entry.bars > 0)
+        value(parts.bars, entry.bars.toString())
+        drawKey(parts.barsMore, d, "+", measurer, entry.bars < MAX_ENTRY_BARS)
+        drawKey(parts.beatsLess, d, "−", measurer, entry.beats > 0)
+        value(parts.beats, entry.beats.toString())
+        drawKey(parts.beatsMore, d, "+", measurer, entry.beats < MAX_ENTRY_BEATS)
+        if (entries.size > 1) drawKey(parts.remove, d, "×", measurer)
+    }
+
+    // A mark where the list runs on past what is shown, so a scrolled list never looks
+    // like the whole of it.
+    val list = scaleCardList(card, d)
+    fun more(atTop: Boolean) {
+        val y = if (atTop) list.top else list.bottom
+        val point = if (atTop) y - 5f * d else y + 5f * d
+        val x = list.center.x
+        drawPath(
+            Path().apply {
+                moveTo(x, point)
+                lineTo(x - 7f * d, y)
+                lineTo(x + 7f * d, y)
+                close()
+            },
+            color = MarkTonic,
+        )
+    }
+    if (scroll > 0) more(atTop = true)
+    if (scroll + visible < entries.size) more(atTop = false)
+
+    drawKey(scaleCardAdd(card, d), d, "+ add", measurer, entries.size < MAX_SCALE_ENTRIES)
+}
+
+/**
+ * A touch that landed on the open scale card, or on its picker while an entry is choosing.
+ *
+ * Its own short loop, like the transport card's. A drag down the list scrolls it by
+ * whole rows; a tap does whatever is under it. Every edit replaces the list whole, so it
+ * saves, undoes and reaches the engine through the paths any patch edit takes.
+ */
+private suspend fun AwaitPointerEventScope.scaleCardGesture(
+    frame: Frame,
+    down: Offset,
+    patch: Patch,
+    library: List<Scale>,
+    view: ScaleCardView,
+    slop: Float,
+) {
+    val d = frame.density
+
+    if (view.pickingFor >= 0) {
+        waitForUpRelease()
+        val index = view.pickingFor
+        val hit = scalePickerTiles(frame.scalePicker(), d, library.size).indexOfFirst { it.contains(down) }
+        if (hit >= 0 && index in patch.scales.indices) {
+            patch.scales = patch.scales.toMutableList().also { it[index] = it[index].copy(scale = library[hit]) }
+        }
+        // Back to the list whatever was tapped: the picker asks one question, and a tap
+        // anywhere but a tile is declining to answer it.
+        view.pickingFor = -1
+        return
+    }
+
+    val card = frame.scaleCard(patch.scales.size)
+    val visible = frame.scaleRowsThatFit()
+    val list = scaleCardList(card, d)
+    val scrollFrom = view.scroll
+    var moved = false
+    while (true) {
+        val event = awaitPointerEvent()
+        val pressed = event.changes.filter { it.pressed }
+        if (pressed.isEmpty()) break
+        val change = pressed.first()
+        if ((change.position - down).getDistance() > slop) moved = true
+        if (moved && list.contains(down)) {
+            // Up the screen moves on down the list, as any list under a finger does.
+            val rows = ((down.y - change.position.y) / (Frame.SCALE_ROW * d)).roundToInt()
+            view.scroll = (scrollFrom + rows).coerceIn(0, maxOf(0, patch.scales.size - visible))
+        }
+        change.consume()
+    }
+    if (moved) return
+
+    val entries = patch.scales
+    val scroll = view.scroll.coerceIn(0, maxOf(0, entries.size - visible))
+    fun replace(index: Int, entry: ScaleEntry) {
+        patch.scales = entries.toMutableList().also { it[index] = entry }
+    }
+
+    for (slot in 0 until minOf(visible, entries.size - scroll)) {
+        val index = scroll + slot
+        val entry = entries[index]
+        val parts = scaleRowParts(scaleCardRow(card, d, slot), d)
+        when {
+            parts.name.contains(down) -> view.pickingFor = index
+            parts.barsLess.contains(down) -> replace(index, entry.copy(bars = (entry.bars - 1).coerceAtLeast(0)))
+            parts.barsMore.contains(down) -> replace(index, entry.copy(bars = (entry.bars + 1).coerceAtMost(MAX_ENTRY_BARS)))
+            parts.beatsLess.contains(down) -> replace(index, entry.copy(beats = (entry.beats - 1).coerceAtLeast(0)))
+            parts.beatsMore.contains(down) -> replace(index, entry.copy(beats = (entry.beats + 1).coerceAtMost(MAX_ENTRY_BEATS)))
+            parts.remove.contains(down) && entries.size > 1 -> {
+                patch.scales = entries.toMutableList().also { it.removeAt(index) }
+                view.scroll = view.scroll.coerceIn(0, maxOf(0, patch.scales.size - visible))
+            }
+            else -> continue
+        }
+        return
+    }
+
+    if (scaleCardAdd(card, d).contains(down) && entries.size < MAX_SCALE_ENTRIES) {
+        // A copy of the last entry, which is usually the next thing wanted -- the same
+        // scale for as long, ready to be changed -- and never an empty row to fill in.
+        patch.scales = entries + entries.last()
+        view.scroll = maxOf(0, patch.scales.size - visible)
+    }
+}
+
 // ---------------------------------------------------------------- tap logic
 
 private fun handleTap(
@@ -2720,10 +3017,9 @@ private fun DrawScope.drawPanel(
     panel: Rect,
     d: Float,
     measurer: TextMeasurer,
+    /** The scale sounding now: what the grid's rows and the tuning marks are read against. */
     scale: Scale,
     playingStep: Int,
-    scales: List<Scale>,
-    scaleMenu: Boolean,
     intervalMenu: Boolean,
 ) {
     val corner = CornerRadius(14f * d, 14f * d)
@@ -2777,10 +3073,6 @@ private fun DrawScope.drawPanel(
         }
     }
 
-    if (module.type.stepCount > 0) {
-        drawScaleChip(panelScaleChip(panel, d), d, scale, scaleMenu, measurer)
-    }
-
     val intervalParam = module.type.intervalParam
     val chosenInterval = if (intervalParam < 0) -1
         else module.params.getOrElse(intervalParam) { DEFAULT_INTERVAL.toFloat() }.roundToInt()
@@ -2794,22 +3086,9 @@ private fun DrawScope.drawPanel(
             topLeft = panelBody(panel, d).topLeft,
             size = panelBody(panel, d).size,
         )
-        scaleTiles(panel, d, INTERVALS.size).forEachIndexed { i, tile ->
+        panelTiles(panel, d, INTERVALS.size).forEachIndexed { i, tile ->
             drawTile(tile, d, INTERVALS[i].label, INTERVALS[i].detail, i == chosenInterval, measurer)
         }
-        return
-    }
-
-    if (module.type.stepCount > 0 && scaleMenu) {
-        // The tiles take the body, so the grid beneath them is not a distraction while
-        // you are choosing what its rows will mean.
-        drawRect(
-            color = PanelScrim,
-            topLeft = panelBody(panel, d).topLeft,
-            size = panelBody(panel, d).size,
-        )
-        val tiles = scaleTiles(panel, d, scales.size)
-        tiles.forEachIndexed { i, tile -> drawScaleTile(tile, d, scales[i], scale, measurer) }
         return
     }
 

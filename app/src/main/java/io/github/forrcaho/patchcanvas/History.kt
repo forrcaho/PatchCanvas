@@ -115,7 +115,7 @@ fun Patch.replaceWith(source: Patch): Set<Long> {
         // here until the tempo joined it, so undoing a change of tuning kept the new one --
         // and the byte-identical test could not see it, because both sides of it were in
         // the default tuning.
-        scale = source.scale
+        scales = source.scales
         tempo = source.tempo
         beatsPerBar = source.beatsPerBar
 

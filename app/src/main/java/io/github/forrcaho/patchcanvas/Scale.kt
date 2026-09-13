@@ -6,11 +6,11 @@ import kotlin.math.ln
 /**
  * A tuning, as a table of offsets in octaves.
  *
- * Pitch crosses into the engine as octaves -- `hz = root * 2^octaves` -- so a scale is
- * entirely a matter of what numbers the interface sends, and the engine never learns
- * what a semitone is. That is what makes an arbitrary tuning cost nothing: twelve-tone
- * equal temperament is one table among many rather than the assumption everything else
- * has to work around.
+ * The engine receives this table as it is, and resolves sequencer degrees against it at
+ * the beat each note starts -- `hz = root * 2^octaves` -- so a scale is entirely a
+ * matter of what numbers the file held, and the engine never learns what a semitone is.
+ * That is what makes an arbitrary tuning cost nothing: twelve-tone equal temperament is
+ * one table among many rather than the assumption everything else has to work around.
  *
  * **The steps are not required to be equal, and that is the point.** An equal division
  * is the easy case and the least musically interesting one; what earns the mechanism is
@@ -85,6 +85,27 @@ data class Scale(
          */
         val Chromatic = equal("12-TET", 12)
     }
+}
+
+/** Mirrors kMaxScaleEntries in scales.h: how long the patch's scale list can be. */
+const val MAX_SCALE_ENTRIES = 16
+
+const val MAX_ENTRY_BARS = 32
+const val MAX_ENTRY_BEATS = 15
+
+/**
+ * One entry of the patch's scale list: a scale, held for [bars] and [beats].
+ *
+ * Bars and beats rather than beats alone, because a switch almost always wants to land
+ * on a barline and counting that in beats is arithmetic nobody should have to do -- but
+ * with the beats there, it does not have to. The beat is not subdivided.
+ */
+data class ScaleEntry(val scale: Scale, val bars: Int = 4, val beats: Int = 0) {
+    /**
+     * Never zero. An entry lasting no time would be a scale nobody could hear, and would
+     * make the loop's arithmetic divide by nothing.
+     */
+    fun lengthInBeats(beatsPerBar: Int): Int = (bars * beatsPerBar + beats).coerceAtLeast(1)
 }
 
 /** log2(3): the tritave, which Bohlen-Pierce repeats at instead of the octave. */

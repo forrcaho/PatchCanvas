@@ -1,5 +1,7 @@
 #include <jni.h>
 
+#include <algorithm>
+
 #include "audio_engine.h"
 #include "nodes.h"
 
@@ -107,9 +109,60 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetParam(JNIEnv *, jobject
 JNIEXPORT jboolean JNICALL
 Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetStep(JNIEnv *, jobject,
                                                               jlong id, jint index,
-                                                              jfloat pitch, jboolean gate) {
-    return engine().graph().postSetStep(id, index, pitch, gate == JNI_TRUE) ? JNI_TRUE
-                                                                           : JNI_FALSE;
+                                                              jint degree, jboolean gate) {
+    return engine().graph().postSetStep(id, index, degree, gate == JNI_TRUE) ? JNI_TRUE
+                                                                            : JNI_FALSE;
+}
+
+/**
+ * The patch's scales, flattened: every entry's degrees end to end, and per entry its
+ * degree count, period and length in beats.
+ *
+ * Built into a ScaleList here, on the UI thread, like a node -- only the finished pointer
+ * crosses. Anything past the fixed limits is dropped rather than trusted, since a short
+ * degrees array would otherwise be read past its end.
+ */
+JNIEXPORT jboolean JNICALL
+Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetScales(JNIEnv *env, jobject,
+                                                                jfloatArray degrees,
+                                                                jintArray sizes,
+                                                                jfloatArray periods,
+                                                                jintArray beats) {
+    const int32_t available = env->GetArrayLength(degrees);
+    const int32_t entries = std::min(env->GetArrayLength(sizes),
+                                     std::min(env->GetArrayLength(periods),
+                                              env->GetArrayLength(beats)));
+
+    auto *list = new ScaleList();
+    jfloat *d = env->GetFloatArrayElements(degrees, nullptr);
+    jint *s = env->GetIntArrayElements(sizes, nullptr);
+    jfloat *p = env->GetFloatArrayElements(periods, nullptr);
+    jint *b = env->GetIntArrayElements(beats, nullptr);
+
+    list->count = std::min(entries, kMaxScaleEntries);
+    int32_t at = 0;
+    for (int32_t i = 0; i < list->count; ++i) {
+        const int32_t size = std::max(0, static_cast<int32_t>(s[i]));
+        ScaleTable &table = list->tables[i];
+        table.size = std::min(std::min(size, kMaxDegrees), std::max(0, available - at));
+        for (int32_t j = 0; j < table.size; ++j) table.octaves[j] = d[at + j];
+        table.period = p[i];
+        list->beats[i] = b[i];
+        at += size;
+    }
+    list->finish();
+
+    env->ReleaseFloatArrayElements(degrees, d, JNI_ABORT);
+    env->ReleaseIntArrayElements(sizes, s, JNI_ABORT);
+    env->ReleaseFloatArrayElements(periods, p, JNI_ABORT);
+    env->ReleaseIntArrayElements(beats, b, JNI_ABORT);
+
+    return engine().graph().postSetScales(list) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL
+Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeScaleEntry(JNIEnv *, jobject) {
+    return engine().graph().scaleEntry();
 }
 
 JNIEXPORT jint JNICALL

@@ -138,12 +138,15 @@ public:
     int32_t outputCount() const override { return 2; } // pitch, gate
     void process(int32_t frames) override;
     void setParam(int32_t index, float value) override;
-    void setStep(int32_t index, float pitch, bool gate) override;
+    void setStep(int32_t index, int32_t degree, bool gate) override;
     int32_t position() const override { return step_; }
     Interval interval() const override { return kIntervals[intervalIndex_]; }
     void tick(int32_t offset, int64_t count) override;
 
 private:
+    /** The sounding note's pitch: its degree, in the scale of the beat it started on. */
+    float voicedOctaves() const;
+
     /** More than one interval boundary per block would need an interval under a millisecond. */
     static constexpr int32_t kMaxPending = 4;
 
@@ -154,14 +157,19 @@ private:
     int32_t step_ = -1;
     /** The last step that actually sounded; what the pitch output holds through a rest. */
     int32_t voiced_ = 0;
+    /**
+     * The whole beat that note started on. Kept, not recomputed, so a note held through a
+     * scale change keeps the scale it started in.
+     */
+    int64_t voicedBeat_ = 0;
     int32_t length_ = 8;
     int32_t intervalIndex_ = kDefaultInterval;
     /** Frames of gate left on the note that last started. Counts only while the transport runs. */
     int64_t gateRemaining_ = 0;
     /** Cents. See OscNode::tuneCents_. */
     float transposeCents_ = 0.0f;
-    /** Octaves from the root, which is what every pitch on this boundary means. */
-    float pitch_[kSteps] = {};
+    /** Degrees of the patch's scale; which scale is decided when each note starts. */
+    int32_t degree_[kSteps] = {};
     bool gate_[kSteps] = {};
 };
 

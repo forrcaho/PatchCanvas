@@ -943,6 +943,36 @@ path as notes with a different payload.
 
 ### The scale, and changing it
 
+**Built and verified on the device.** 55 graph checks, 45 node checks, 157 JVM tests.
+
+- `scales.h` holds the tables. `Steps` sends degrees, and resolves each note against the
+  scale of the beat it starts on. The list crosses as one pointer built off the audio
+  thread, with the list it replaces handed back to be freed -- ASan's leak check at exit
+  is what makes that a test. The file format is 3; a format 2 file's scale becomes a
+  one-entry list, and the phone's own did.
+- **Which scale a note gets is decided in integers.** A note's beat is
+  floor(count * num / den) of the tick that started it, and a switch lands only on a whole
+  beat, so a note on the switch beat takes the new scale with no rounding anywhere. The
+  triplet on the switch beat is the case floating arithmetic could get wrong, and has its
+  own test. Mutation-checked: switching a beat late fails four checks. Recording the beat
+  on a rest as well as a note fails the held-note check -- but only once that test looked
+  a block later, because its first version read the one sample the bug could not reach.
+- **One degree limit, not two.** The `.scl` parser already refused scales over 128 degrees,
+  for the grid's sake. It is 64 now, mirroring `kMaxDegrees`, so a scale the engine would
+  have cut short at the top fails to load and says so instead.
+- On the device: a list of Harmonic minor and 12-TET, one bar each at 100bpm, captured and
+  pitch-tracked. Every note on beats 4-7 and 12-15 was in 12-TET and every other in
+  Harmonic minor, including the notes on the switch beats themselves. A first attempt
+  with Major proved nothing, because the patch's figure used only degrees Harmonic minor
+  and Major share. A burst of screenshots taken on the phone showed the chip alternating
+  between the two entries at the same rate.
+- The chip's label ran off both ends on the device -- "Harmonic minor · 1 of 2". The chip
+  is wider, and a long name now gives way to an ellipsis while which entry is playing
+  never does.
+
+Not yet looked at on the device: the sequencer grid reflowing as the list moves between
+scales with different numbers of degrees.
+
 **The scale belongs to the patch**, as Phase 5 already argued, and moves out of the
 sequencer's header into a chip of its own.
 
@@ -982,8 +1012,14 @@ closes only from its own chip, because a tap outside it is doing something else.
 The transport chip is built, top-left: it shows the tempo, and its card holds the tempo
 bar, beats per bar, the position as bar and beat, and reset. The position is polled only
 while the card is open, so a closed chip costs no repainting. The card covers the In rail
-and the top of an open panel while it is open, which is the price of not being modal. The
-scale chip has not moved out of the sequencer header yet.
+and the top of an open panel while it is open, which is the price of not being modal.
+
+The scale chip is built beside it. It names the scale sounding and, while a list plays,
+which entry of how many. Its card is the list: a row per entry with its scale and
+steppers for bars and beats, a page of tiles to choose each entry's scale from, and
+scrolling past the rows that fit -- about five on the reference device. The card hangs
+from the scale chip rather than the corner, which keeps it to the right of the undo
+buttons and lets it use the height down to the gesture bar.
 
 ### Modulation onto controls -- adopted, deferred
 

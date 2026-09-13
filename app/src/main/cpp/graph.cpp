@@ -55,14 +55,29 @@ int32_t Graph::stepOf(int64_t id) const {
     return -1;
 }
 
-bool Graph::postSetStep(int64_t id, int32_t index, float pitch, bool gate) {
+bool Graph::postSetStep(int64_t id, int32_t index, int32_t degree, bool gate) {
     Command cmd;
     cmd.type = CommandType::SetStep;
     cmd.id = id;
     cmd.paramIndex = index;
-    cmd.value = pitch;
+    cmd.degree = degree;
     cmd.gate = gate;
     return commands_.push(cmd);
+}
+
+bool Graph::postSetScales(ScaleList *list) {
+    Command cmd;
+    cmd.type = CommandType::SetScales;
+    cmd.scales = list;
+    if (!commands_.push(cmd)) {
+        delete list; // never made it across, so it is still ours to free
+        return false;
+    }
+    return true;
+}
+
+int32_t Graph::scaleEntry() const {
+    return scaleEntry_.load(std::memory_order_relaxed);
 }
 
 bool Graph::postSetParam(int64_t id, int32_t paramIndex, float value) {
@@ -96,6 +111,10 @@ void Graph::collectGarbage() {
     while (garbage_.pop(dead)) {
         delete dead;
     }
+    ScaleList *replaced = nullptr;
+    while (retiredScales_.pop(replaced)) {
+        delete replaced;
+    }
 }
 
 void Graph::reset() {
@@ -103,7 +122,11 @@ void Graph::reset() {
     Command cmd;
     while (commands_.pop(cmd)) {
         if (cmd.type == CommandType::Add) delete cmd.node;
+        if (cmd.type == CommandType::SetScales) delete cmd.scales;
     }
+    // Resent by the interface on the next start, like everything else the graph held.
+    delete scales_;
+    scales_ = nullptr;
     for (auto &record : nodes_) {
         delete record.node;
         record = Record{};
@@ -257,9 +280,16 @@ void Graph::applyCommands() {
                 if (slot < 0) break;
                 // The node bounds-checks the index itself, because how many steps a
                 // sequence has is the node's business and not the graph's.
-                nodes_[slot].node->setStep(cmd.paramIndex, cmd.value, cmd.gate);
+                nodes_[slot].node->setStep(cmd.paramIndex, cmd.degree, cmd.gate);
                 break;
             }
+            case CommandType::SetScales:
+                // Swapped whole, and the old list handed back to be freed off this thread.
+                // If the return queue is full it leaks, which is the same trade the nodes
+                // make against blocking.
+                if (scales_ != nullptr) retiredScales_.push(scales_);
+                scales_ = cmd.scales;
+                break;
             case CommandType::SetTempo:
                 transport_.setTempo(cmd.value);
                 break;
@@ -340,7 +370,7 @@ void Graph::process(int32_t frames) {
         if (!record.used || record.node == nullptr) continue;
         Node *node = record.node;
 
-        node->setTiming(beatsPerFrame, running);
+        node->setTiming(beatsPerFrame, running, scales_);
         const Interval interval = node->interval();
         if (!interval.none()) {
             const int32_t count = transport_.ticks(interval, frames, ticks.data(), kMaxTicks);
@@ -395,6 +425,10 @@ void Graph::process(int32_t frames) {
     // After every node, so all of them saw this block at the same position.
     transport_.advance(frames);
     beat_.store(transport_.beatAt(0), std::memory_order_relaxed);
+    if (scales_ != nullptr) {
+        const auto wholeBeat = static_cast<int64_t>(std::floor(transport_.beatAt(0)));
+        scaleEntry_.store(scales_->entryAt(wholeBeat), std::memory_order_relaxed);
+    }
 
     reapDying(frames);
 }

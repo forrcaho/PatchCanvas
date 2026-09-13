@@ -83,13 +83,19 @@ private fun parsePitch(line: String): Float? {
 }
 
 /**
- * A ceiling on degrees per period.
+ * A ceiling on degrees per period, mirrored by kMaxDegrees in scales.h.
  *
  * Not a format limit -- Scala files can be far larger -- but a grid row has to be big
  * enough for a finger, and a scale with hundreds of degrees would be unusable rather
  * than merely cramped. It also stops a corrupt count line from allocating wildly.
+ *
+ * 64 rather than the 128 it was, because the engine now holds every scale as a table of
+ * fixed size, so it can cross to the audio thread without allocating. One limit rather
+ * than a parser limit and a smaller engine one: a scale the engine would cut short at the
+ * top is a scale that should not load, and failing here is the one place already built to
+ * refuse a file and say so.
  */
-const val MAX_DEGREES = 128
+const val MAX_DEGREES = 64
 
 private const val LN_2 = 0.6931471805599453
 

@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 
+#include "scales.h"
 #include "transport.h"
 
 /** Frames processed per inner block. 96-frame bursts divide by this exactly. */
@@ -46,15 +47,15 @@ public:
      * One step of a sequence changed.
      *
      * Separate from setParam because a pattern is not a knob: kMaxParams is 4, which is
-     * the right size for the controls a panel shows and nowhere near a sequence. Pitch
-     * arrives in octaves, like every other pitch that crosses this boundary, so a scale
-     * is a table on the other side and nothing here needs to know about tuning.
+     * the right size for the controls a panel shows and nowhere near a sequence. The note
+     * arrives as a degree, and is resolved against whichever scale is sounding on the
+     * beat it starts -- which only the audio thread can know to the sample.
      *
      * Audio thread, same rules as setParam.
      */
-    virtual void setStep(int32_t index, float pitch, bool gate) {
+    virtual void setStep(int32_t index, int32_t degree, bool gate) {
         (void) index;
-        (void) pitch;
+        (void) degree;
         (void) gate;
     }
 
@@ -86,13 +87,15 @@ public:
     }
 
     /**
-     * Set by the graph before every block: how far one frame moves the transport, and
-     * whether it is moving at all. Zero beats per frame while stopped, so anything timed
-     * in beats holds still with it.
+     * Set by the graph before every block: how far one frame moves the transport, whether
+     * it is moving at all, and the patch's scales. Zero beats per frame while stopped, so
+     * anything timed in beats holds still with it. No scales yet reads as twelve equal
+     * steps.
      */
-    void setTiming(double beatsPerFrame, bool running) {
+    void setTiming(double beatsPerFrame, bool running, const ScaleList *scales = nullptr) {
         beatsPerFrame_ = beatsPerFrame;
         running_ = running;
+        scales_ = scales;
     }
 
     virtual void process(int32_t frames) = 0;
@@ -108,6 +111,8 @@ protected:
     /** See setTiming. */
     double beatsPerFrame_ = 0.0;
     bool running_ = false;
+    /** Owned by the graph, and valid for the block it was set for. */
+    const ScaleList *scales_ = nullptr;
 
 private:
     std::array<const float *, kMaxPorts> inputs_{};

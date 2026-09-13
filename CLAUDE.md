@@ -76,6 +76,7 @@ short loop rather than another outcome bolted into the canvas one.
 | `ScaleLibrary.kt` | seeds the bundled scales and reads the user's folder |
 | `graph.{h,cpp}` | command queue, topological sort, crossfades, node lifetime |
 | `transport.h` | musical time: one position every clocked node divides, header-only |
+| `scales.h` | scale tables and the looping scale list; where a degree becomes a pitch |
 | `nodes.{h,cpp}` | the module set, DaisySP-backed |
 | `audio_engine.{h,cpp}` | Oboe streams, ADPF, debug capture |
 
@@ -127,10 +128,15 @@ the undo buttons drew correctly and were simply not hittable, because the hit te
 still reading `canUndo == false` from launch. Callbacks are safe (they delegate); values
 are not.
 
-**Tuning lives on one side of the boundary.** Pitch crosses as octaves
-(`hz = root * 2^octaves`), so the engine never learns what a semitone is and an arbitrary
-scale costs nothing. Degrees become octaves in exactly one place — `GraphSync` — and
-everything downstream is tuning-agnostic by construction. Scales are `.scl` files seeded
+**The engine never learns what a semitone is.** Scales cross as tables of octave offsets
+(`hz = root * 2^octaves`) and sequencers send degrees, so an arbitrary scale costs
+nothing. Degrees become octaves in exactly one place — `ScaleTable::octavesOf` in
+`scales.h`, against the scale sounding on the beat a note starts — because only the audio
+thread knows that beat to the sample. Which scale is decided in integers from the tick's
+count, never from the transport's floating position. A scale list crosses whole, as a
+pointer built off the audio thread, like a node; both sides cap a scale at 64 degrees
+(`MAX_DEGREES` / `kMaxDegrees`), and a larger `.scl` fails to parse rather than being cut
+short in the engine. Scales are `.scl` files seeded
 into `getExternalFilesDir/scales`, where a user can add their own; `Scale.Chromatic` is
 the only one defined in code, and exists so the app still works when that folder is
 unreadable. Tuning controls are in **cents**, never semitones: a semitone is a fact about 12-TET and

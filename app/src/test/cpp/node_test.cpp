@@ -186,8 +186,9 @@ void vcaIsShutWithoutControl() {
 constexpr double kBeatsPerFrame = 120.0 / 60.0 / kRate;
 
 /** Delivers one tick the way the graph does -- timing, then the tick, then the block. */
-void tickAt(StepsNode &steps, int64_t count, int32_t offset = 0) {
-    steps.setTiming(kBeatsPerFrame, true);
+void tickAt(StepsNode &steps, int64_t count, int32_t offset = 0,
+            const ScaleList *scales = nullptr) {
+    steps.setTiming(kBeatsPerFrame, true, scales);
     steps.tick(offset, count);
     steps.process(kBlockSize);
 }
@@ -226,14 +227,14 @@ void stepsPlayTheirOwnPattern() {
     steps.prepare(kRate);
 
     // One octave up on step 1, which no default pattern contains.
-    steps.setStep(1, 1.0f, true);
+    steps.setStep(1, 12, true);
     tickAt(steps, 1);
     check(std::fabs(steps.output(0)[0] - 1.0f) < 0.0001f,
           "the pitch written to a step is the pitch it plays");
 
     // Out of range in both directions must be ignored rather than corrupt a neighbour.
-    steps.setStep(-1, 9.0f, true);
-    steps.setStep(StepsNode::kSteps, 9.0f, true);
+    steps.setStep(-1, 108, true);
+    steps.setStep(StepsNode::kSteps, 108, true);
     check(std::fabs(steps.output(0)[0] - 1.0f) < 0.0001f,
           "an out-of-range step changes nothing");
 }
@@ -242,9 +243,9 @@ void aClosedGateIsARestNotASkip() {
     std::printf("a closed gate is a rest, not a skip\n");
     StepsNode steps;
     steps.prepare(kRate);
-    steps.setStep(0, 0.5f, true);
-    steps.setStep(1, 0.25f, false);  // a rest, remembering a pitch of its own
-    steps.setStep(2, 0.75f, true);
+    steps.setStep(0, 6, true);
+    steps.setStep(1, 3, false);  // a rest, remembering a pitch of its own
+    steps.setStep(2, 9, true);
 
     tickAt(steps, 0);
     tickAt(steps, 1);                // the rest
@@ -270,14 +271,14 @@ void aRestKeepsTheNoteItRemembers() {
     StepsNode steps;
     steps.prepare(kRate);
     steps.setParam(0, 2.0f);          // a two-step loop, so step 1 comes round quickly
-    steps.setStep(0, 0.5f, true);
-    steps.setStep(1, 0.25f, false);
+    steps.setStep(0, 6, true);
+    steps.setStep(1, 3, false);
 
     tickAt(steps, 0);
     tickAt(steps, 1);                 // the rest
     check(std::fabs(steps.output(0)[0] - 0.5f) < 0.0001f, "held while it is a rest");
 
-    steps.setStep(1, 0.25f, true);    // switch it back on
+    steps.setStep(1, 3, true);        // switch it back on
     tickAt(steps, 2);                 // step 0
     tickAt(steps, 3);                 // step 1, now sounding
     check(steps.output(1)[0] == 1.0f, "it fires once it is open again");
@@ -289,7 +290,7 @@ void aNoteLastsHalfItsStep() {
     std::printf("a note lasts half its step\n");
     StepsNode steps;
     steps.prepare(kRate);
-    steps.setStep(0, 0.0f, true);
+    steps.setStep(0, 0, true);
 
     // The default 1/8 at 120bpm is 12000 frames, so the gate is open for frames 0-5999.
     tickAt(steps, 0);
@@ -309,7 +310,7 @@ void aStoppedTransportHoldsTheNote() {
     std::printf("a stopped transport holds the note\n");
     StepsNode steps;
     steps.prepare(kRate);
-    steps.setStep(0, 0.0f, true);
+    steps.setStep(0, 0, true);
 
     tickAt(steps, 0);
     idle(steps, 400, false);          // 12800 frames, twice the gate, stopped
@@ -322,8 +323,8 @@ void aTickLandsOnItsOwnSample() {
     std::printf("a tick lands on its own sample\n");
     StepsNode steps;
     steps.prepare(kRate);
-    steps.setStep(0, 0.0f, true);
-    steps.setStep(1, 1.0f, true);
+    steps.setStep(0, 0, true);
+    steps.setStep(1, 12, true);
 
     tickAt(steps, 0);
     idle(steps, 200);                 // well past the first note's gate
@@ -336,6 +337,87 @@ void aTickLandsOnItsOwnSample() {
     check(gate[9] == 0.0f && gate[10] == 1.0f, "the gate opens on the tick's sample");
     check(std::fabs(pitch[9]) < 0.0001f && std::fabs(pitch[10] - 1.0f) < 0.0001f,
           "and the pitch moves on the same sample");
+}
+
+/** Four beats of 12-TET, then four of diatonic major. Built as the JNI bridge builds one. */
+const ScaleList &chromaticThenMajor() {
+    static ScaleList list = [] {
+        ScaleList l;
+        l.count = 2;
+        l.tables[0].size = 12;
+        for (int32_t i = 0; i < 12; ++i) l.tables[0].octaves[i] = static_cast<float>(i) / 12.0f;
+        constexpr int32_t major[7] = {0, 2, 4, 5, 7, 9, 11};
+        l.tables[1].size = 7;
+        for (int32_t i = 0; i < 7; ++i) l.tables[1].octaves[i] = static_cast<float>(major[i]) / 12.0f;
+        l.beats[0] = 4;
+        l.beats[1] = 4;
+        l.finish();
+        return l;
+    }();
+    return list;
+}
+
+/**
+ * A note takes the scale of the beat it starts on. At the default 1/8, count 7 is beat
+ * 3.5 -- the last eighth in 12-TET -- and count 8 is beat 4, the first in major, where
+ * degree 2 is a whole tone rather than a semitone.
+ */
+void aNoteTakesTheScaleOfTheBeatItStartsOn() {
+    std::printf("a note takes the scale of the beat it starts on\n");
+    StepsNode steps;
+    steps.prepare(kRate);
+    steps.setParam(0, 16.0f);
+    steps.setStep(7, 2, true);
+    steps.setStep(8, 2, true);
+
+    tickAt(steps, 7, 0, &chromaticThenMajor());
+    check(std::fabs(steps.output(0)[0] - 2.0f / 12.0f) < 0.0001f, "the eighth before the switch is 12-TET");
+    tickAt(steps, 8, 0, &chromaticThenMajor());
+    check(std::fabs(steps.output(0)[0] - 4.0f / 12.0f) < 0.0001f, "the eighth on the switch beat is major");
+}
+
+/**
+ * A held note keeps the scale it started in. Step 8 is a rest in major; the pitch holds
+ * step 7's note, and must hold it as it was played -- in 12-TET -- not re-read in major.
+ */
+void aNoteHeldThroughASwitchKeepsItsPitch() {
+    std::printf("a note held through a switch keeps its pitch\n");
+    StepsNode steps;
+    steps.prepare(kRate);
+    steps.setParam(0, 16.0f);
+    steps.setStep(7, 2, true);
+    steps.setStep(8, 5, false);
+
+    tickAt(steps, 7, 0, &chromaticThenMajor());
+    tickAt(steps, 8, 0, &chromaticThenMajor());
+    check(std::fabs(steps.output(0)[0] - 2.0f / 12.0f) < 0.0001f,
+          "the held pitch is still the 12-TET one after the switch");
+    // And a block later, when the pitch is worked out afresh from what was stored at the
+    // tick -- a rest that overwrote the stored beat would only be heard from here on.
+    steps.setTiming(kBeatsPerFrame, true, &chromaticThenMajor());
+    steps.process(kBlockSize);
+    check(std::fabs(steps.output(0)[kBlockSize - 1] - 2.0f / 12.0f) < 0.0001f,
+          "and still the 12-TET one a block after that");
+}
+
+/**
+ * The case rounding would get wrong: an eighth-note triplet on the switch beat. Count 12
+ * of 1/3 is exactly beat 4, which floating arithmetic could leave a hair short of 4 --
+ * so it is worked out in integers, and must be major.
+ */
+void aTripletOnTheSwitchBeatTakesTheNewScale() {
+    std::printf("a triplet on the switch beat takes the new scale\n");
+    StepsNode steps;
+    steps.prepare(kRate);
+    steps.setParam(0, 16.0f);
+    steps.setParam(2, 7.0f); // 1/8 triplet
+    steps.setStep(11, 2, true);
+    steps.setStep(12, 2, true);
+
+    tickAt(steps, 11, 0, &chromaticThenMajor());
+    check(std::fabs(steps.output(0)[0] - 2.0f / 12.0f) < 0.0001f, "the triplet before beat 4 is 12-TET");
+    tickAt(steps, 12, 0, &chromaticThenMajor());
+    check(std::fabs(steps.output(0)[0] - 4.0f / 12.0f) < 0.0001f, "the triplet on beat 4 is major");
 }
 
 void theIntervalIsChosenByParameter() {
@@ -443,6 +525,9 @@ int main() {
     aStoppedTransportHoldsTheNote();
     aTickLandsOnItsOwnSample();
     theIntervalIsChosenByParameter();
+    aNoteTakesTheScaleOfTheBeatItStartsOn();
+    aNoteHeldThroughASwitchKeepsItsPitch();
+    aTripletOnTheSwitchBeatTakesTheNewScale();
     mixSumsRatherThanAverages();
     outPassesAudioAtLevel();
     outProtectsTheListener();

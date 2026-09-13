@@ -529,6 +529,79 @@ void aTempoChangeCarriesOnFromTheCurrentBeat() {
     check(transport.tempo() == Transport::kMaxTempo, "an absurd tempo is clamped");
 }
 
+// ---------------------------------------------------------------- scales
+
+ScaleList *listOfLengths(std::initializer_list<int32_t> beats) {
+    auto *list = new ScaleList();
+    for (int32_t length : beats) {
+        ScaleTable &table = list->tables[list->count];
+        table.size = 12;
+        for (int32_t i = 0; i < 12; ++i) table.octaves[i] = static_cast<float>(i) / 12.0f;
+        list->beats[list->count++] = length;
+    }
+    list->finish();
+    return list;
+}
+
+/** Mirrors ScaleTest's own wrapping cases, because this is now the table that sounds. */
+void aScaleTableWrapsByPeriod() {
+    std::printf("a scale table wraps by period\n");
+    ScaleTable pentatonic;
+    pentatonic.size = 5;
+    for (int32_t i = 0; i < 5; ++i) pentatonic.octaves[i] = static_cast<float>(i) * 0.2f;
+
+    check(std::fabs(pentatonic.octavesOf(6) - 1.2f) < 1e-5f, "degree 6 of five is degree 1 an octave up");
+    check(std::fabs(pentatonic.octavesOf(-1) - (-0.2f)) < 1e-5f, "degree -1 is the top degree an octave down");
+
+    ScaleTable tritave = pentatonic;
+    tritave.period = 1.5849625f;
+    check(std::fabs(tritave.octavesOf(5) - 1.5849625f) < 1e-5f, "a full turn travels the period, not an octave");
+
+    const ScaleTable unsent;
+    check(std::fabs(unsent.octavesOf(7) - 7.0f / 12.0f) < 1e-6f, "a table nobody sent is twelve equal steps");
+}
+
+void aScaleListSwitchesOnWholeBeatsAndLoops() {
+    std::printf("a scale list switches on whole beats and loops\n");
+    const ScaleList *list = listOfLengths({4, 2, 3});
+    check(list->totalBeats == 9, "the loop is the sum of its entries");
+    const int32_t expected[] = {0, 0, 0, 0, 1, 1, 2, 2, 2, 0};
+    bool right = true;
+    for (int32_t beat = 0; beat < 10; ++beat) {
+        if (list->entryAt(beat) != expected[beat]) right = false;
+    }
+    check(right, "each entry holds for its own beats, and the list starts again after the last");
+    check(list->entryAt(-1) == 2, "a negative beat wraps rather than indexing off the front");
+    delete list;
+
+    const ScaleList *single = listOfLengths({4});
+    check(single->entryAt(1000) == 0, "one entry is simply a fixed scale");
+    delete single;
+}
+
+/**
+ * A replaced list goes back to the interface to be freed, never deleted on the audio
+ * thread. ASan's leak check at exit is what makes this a test: a list swapped out and
+ * never collected fails the whole binary.
+ */
+void aReplacedScaleListIsHandedBackAndFreed() {
+    std::printf("a replaced scale list is handed back and freed\n");
+    Graph graph;
+    graph.setSampleRate(48000);
+    graph.postSetScales(listOfLengths({4, 4}));
+    graph.applyCommands();
+    graph.postSetScales(listOfLengths({2, 2}));
+    graph.postSetScales(listOfLengths({1, 1}));
+    graph.applyCommands();
+    graph.collectGarbage();
+
+    graph.setTransportRunning(true);
+    for (int i = 0; i < 1600; ++i) graph.process(kBlockSize); // 51200 frames, over two beats at 120
+    check(graph.scaleEntry() == 0, "two beats in, a list of one-beat entries is back on its first");
+    for (int i = 0; i < 751; ++i) graph.process(kBlockSize); // past beat three
+    check(graph.scaleEntry() == 1, "and on its second a beat later");
+}
+
 void resetStartsOnTheFirstFrameOfBarOne() {
     std::printf("reset starts on the first frame of bar one\n");
     Transport transport;
@@ -564,6 +637,9 @@ int main() {
     resumingNeitherRepeatsNorSkipsATick();
     aTempoChangeCarriesOnFromTheCurrentBeat();
     resetStartsOnTheFirstFrameOfBarOne();
+    aScaleTableWrapsByPeriod();
+    aScaleListSwitchesOnWholeBeatsAndLoops();
+    aReplacedScaleListIsHandedBackAndFreed();
 
     std::printf("\n%d checks, %d failed\n", checks, failures);
     std::fflush(stdout);

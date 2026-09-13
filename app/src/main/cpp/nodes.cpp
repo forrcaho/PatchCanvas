@@ -15,11 +15,6 @@ inline float clampf(float value, float low, float high) {
 inline bool gateHigh(float value) { return value > 0.5f; }
 
 /**
- * A pentatonic figure, in octaves. There is nowhere to edit a sequence until Phase 5
- * gives modules parameters, so this is what Steps plays until then -- chosen to be
- * obviously musical, so a wrong clock or a dead gate is audible rather than ambiguous.
- */
-/**
  * How far tuning controls reach, in cents.
  *
  * Two octaves either way, which is also enough for a full turn of a non-octave scale --
@@ -28,10 +23,8 @@ inline bool gateHigh(float value) { return value > 0.5f; }
  */
 constexpr float kTuneRange = 2400.0f;
 
-constexpr float kPattern[8] = {
-        0.0f, 3.0f / 12.0f, 7.0f / 12.0f, 10.0f / 12.0f,
-        12.0f / 12.0f, 10.0f / 12.0f, 7.0f / 12.0f, 3.0f / 12.0f,
-};
+/** A figure in degrees, mirroring DEFAULT_PATTERN in PatchCanvas.kt. */
+constexpr int32_t kPattern[8] = {0, 3, 7, 10, 12, 10, 7, 3};
 
 } // namespace
 
@@ -180,15 +173,21 @@ void VcaNode::setParam(int32_t index, float value) {
  */
 StepsNode::StepsNode() {
     for (int32_t i = 0; i < kSteps; ++i) {
-        pitch_[i] = kPattern[i % 8];
+        degree_[i] = kPattern[i % 8];
         gate_[i] = true;
     }
 }
 
-void StepsNode::setStep(int32_t index, float pitch, bool gate) {
+void StepsNode::setStep(int32_t index, int32_t degree, bool gate) {
     if (index < 0 || index >= kSteps) return;
-    pitch_[index] = pitch;
+    degree_[index] = degree;
     gate_[index] = gate;
+}
+
+float StepsNode::voicedOctaves() const {
+    const int32_t degree = degree_[voiced_];
+    return scales_ != nullptr ? scales_->tableAt(voicedBeat_).octavesOf(degree)
+                              : ScaleTable{}.octavesOf(degree);
 }
 
 void StepsNode::tick(int32_t offset, int64_t count) {
@@ -214,10 +213,16 @@ void StepsNode::process(int32_t frames) {
     float *gate = out(1);
     int32_t next = 0;
 
+    // Resolved per block and at each tick rather than per sample: a note's pitch only
+    // changes when a note starts or its step is edited, and an edit to the sounding note
+    // is still heard within the block rather than on the next lap.
+    float held = voicedOctaves();
+
     for (int32_t i = 0; i < frames; ++i) {
         while (next < pendingCount_ && pending_[next].offset <= i) {
             const int64_t length = length_ > 0 ? length_ : 1;
             const int64_t count = pending_[next].count;
+            const Interval step = interval();
             step_ = static_cast<int32_t>(((count % length) + length) % length);
             // Only a sounding step moves the pitch. A rest is the absence of a note, so
             // it has no pitch to offer -- it keeps the degree it remembers so that
@@ -225,21 +230,25 @@ void StepsNode::process(int32_t frames) {
             // nobody can see and emitting it makes the pitch jump for no visible reason.
             // Holding is also what a sequencer's pitch output does in hardware, where it
             // is a sample-and-hold and a rest simply never clocks it.
-            if (gate_[step_]) voiced_ = step_;
+            if (gate_[step_]) {
+                voiced_ = step_;
+                // The beat is the boundary's own, worked out from its count in integers,
+                // not the transport's floating position: the note belongs to the boundary
+                // it ticked for, so which scale it gets is never decided by rounding.
+                voicedBeat_ = floorDiv(count * step.num, step.den);
+                held = voicedOctaves();
+            }
 
             // In frames, worked out at the tick from the tempo it started at. Stopping
             // the transport freezes it rather than letting it run out, so a note held
             // when time stops is still the same note when it starts again.
-            const Interval step = interval();
             gateRemaining_ = beatsPerFrame_ > 0.0
                     ? static_cast<int64_t>(kGateFraction * step.num / (step.den * beatsPerFrame_))
                     : 0;
             ++next;
         }
 
-        // Read through voiced_ rather than copied at the tick, so editing the note that
-        // is currently sounding is heard immediately rather than on the next lap.
-        pitch[i] = pitch_[voiced_] + transposeCents_ / 1200.0f;
+        pitch[i] = held + transposeCents_ / 1200.0f;
         gate[i] = (step_ >= 0 && gate_[step_] && gateRemaining_ > 0) ? 1.0f : 0.0f;
         if (running_ && gateRemaining_ > 0) --gateRemaining_;
     }

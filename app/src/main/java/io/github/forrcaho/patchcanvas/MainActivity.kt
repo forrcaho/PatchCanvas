@@ -173,7 +173,8 @@ class MainActivity : ComponentActivity() {
                     patch.connections.toList(),
                     patch.modules.map { it.params.toList() },
                     patch.modules.map { it.steps.toList() },
-                    patch.scale,
+                    patch.scales,
+                    patch.beatsPerBar,
                     patch.tempo,
                 )
             }

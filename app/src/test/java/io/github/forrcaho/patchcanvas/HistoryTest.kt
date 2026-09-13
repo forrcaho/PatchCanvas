@@ -237,13 +237,16 @@ class ReplaceWithTest {
         val major = library.byName("Major")!!
         val minor = library.byName("Minor")!!
 
-        val live = demoPatch().apply { scale = major }
+        val live = demoPatch().apply { scales = listOf(ScaleEntry(major, 2, 1), ScaleEntry(minor)) }
         val snapshot = live.toJson()
-        live.scale = minor
+        live.scales = listOf(ScaleEntry(minor))
 
         live.replaceWith(patchFromJson(snapshot, library)!!)
 
-        assertEquals("Major", live.scale.name)
+        assertEquals(
+            listOf(Triple("Major", 2, 1), Triple("Minor", 4, 0)),
+            live.scales.map { Triple(it.scale.name, it.bars, it.beats) },
+        )
     }
 
     @Test
@@ -426,8 +429,8 @@ class ScaleChooserGeometryTest {
     private val panel = panelRect(frame)
 
     @Test
-    fun `the chip sits inside the panel header`() {
-        val chip = panelScaleChip(panel, frame.density)
+    fun `the interval chip sits inside the panel header`() {
+        val chip = panelIntervalChip(panel, frame.density)
         assertTrue("left of the panel", chip.left > panel.left)
         assertTrue("inside the right edge", chip.right <= panel.right)
         assertTrue("below the panel top", chip.top >= panel.top)
@@ -439,7 +442,7 @@ class ScaleChooserGeometryTest {
 
     @Test
     fun `tiles stay inside the panel and never overlap`() {
-        val tiles = scaleTiles(panel, frame.density, 24)
+        val tiles = panelTiles(panel, frame.density, 24)
         assertTrue("no tiles laid out", tiles.isNotEmpty())
         tiles.forEach { tile ->
             assertTrue("$tile escapes the panel", panel.contains(tile.topLeft))
@@ -453,26 +456,27 @@ class ScaleChooserGeometryTest {
         }
     }
 
-    /** The shipped library plus a few of the user's own must fit without paging. */
+    /** The shipped library plus a few of the user's own must fit the picker without paging. */
     @Test
-    fun `the whole shipped library fits on one page`() {
+    fun `the whole shipped library fits on one page of the picker`() {
         val shipped = File("src/main/assets/scales").listFiles()?.size ?: 0
         assertTrue("no scale assets found", shipped >= 10)
-        assertEquals(shipped + 6, scaleTiles(panel, frame.density, shipped + 6).size)
+        val picker = frame.scalePicker()
+        val tiles = scalePickerTiles(picker, frame.density, shipped + 6)
+        assertEquals(shipped + 6, tiles.size)
+        tiles.forEach { assertTrue("$it escapes the picker", it.right <= picker.right && it.bottom <= picker.bottom) }
     }
 
     @Test
     fun `a tile is big enough to hit`() {
-        val tile = scaleTiles(panel, frame.density, 4).first()
+        val tile = scalePickerTiles(frame.scalePicker(), frame.density, 4).first()
         assertTrue("too narrow: ${tile.width / frame.density}dp", tile.width / frame.density >= 120f)
         assertTrue("too short: ${tile.height / frame.density}dp", tile.height / frame.density >= 40f)
     }
 
     @Test
-    fun `the interval chip sits in the header, clear of the scale chip and the title`() {
+    fun `the interval chip sits in the header, clear of the title`() {
         val interval = panelIntervalChip(panel, frame.density)
-        val scale = panelScaleChip(panel, frame.density)
-        assertFalse("overlaps the scale chip", interval.overlaps(scale))
         assertTrue("spills past the header", interval.bottom <= panel.top + PatchModule.PANEL_HEADER * frame.density)
         // The title is centred; keeping the chips in the right-hand side keeps them off it.
         assertTrue("reaches the centred title", interval.left > panel.center.x + 60f * frame.density)
@@ -480,7 +484,7 @@ class ScaleChooserGeometryTest {
 
     @Test
     fun `every interval fits on one page of tiles`() {
-        assertEquals(INTERVALS.size, scaleTiles(panel, frame.density, INTERVALS.size).size)
+        assertEquals(INTERVALS.size, panelTiles(panel, frame.density, INTERVALS.size).size)
     }
 }
 
@@ -513,7 +517,6 @@ class TransportGeometryTest {
 
     @Test
     fun `the chip clears every panel control it floats over`() {
-        assertFalse(chip.overlaps(panelScaleChip(panel, d)))
         assertFalse(chip.overlaps(panelIntervalChip(panel, d)))
         assertFalse(chip.overlaps(panelGrid(panel, d)))
         Types.byName.values.forEach { type ->
@@ -546,6 +549,54 @@ class TransportGeometryTest {
         assertFalse(tempo.overlaps(beats))
         assertFalse(beats.overlaps(reset))
         assertTrue("reset too small to hit", reset.height / d >= 36f && reset.width / d >= 64f)
+    }
+
+    @Test
+    fun `the scale chip sits beside the transport chip, clear of the panel under it`() {
+        val scale = frame.scaleChip()
+        assertFalse(scale.overlaps(chip))
+        assertEquals(chip.top, scale.top, 0.001f)
+        assertTrue("reaches the centred panel title", scale.right < panel.center.x - 60f * d)
+        assertFalse(scale.overlaps(panelGrid(panel, d)))
+        assertFalse(scale.overlaps(panelIntervalChip(panel, d)))
+        Types.byName.values.forEach { type ->
+            type.rowParams.forEach { i ->
+                assertFalse("${type.name} row $i", scale.overlaps(panelRow(panel, d, type, i)))
+            }
+        }
+    }
+
+    @Test
+    fun `the scale card and its picker clear the history buttons and the gesture bar`() {
+        val buttons = listOf(frame.historyRect(false), frame.historyRect(true))
+        listOf(frame.scaleCard(1), frame.scaleCard(MAX_SCALE_ENTRIES), frame.scalePicker()).forEach { area ->
+            buttons.forEach { assertFalse("$area overlaps $it", area.overlaps(it)) }
+            assertTrue("$area runs under the gesture bar", area.bottom <= frame.canvas.height - frame.insetBottom)
+        }
+    }
+
+    @Test
+    fun `a long list scrolls rather than growing past the screen`() {
+        val fit = frame.scaleRowsThatFit()
+        assertTrue("at least four rows fit, got $fit", fit >= 4)
+        assertEquals(frame.scaleCard(fit).height, frame.scaleCard(MAX_SCALE_ENTRIES).height, 0.001f)
+    }
+
+    @Test
+    fun `an entry row's controls sit inside it, apart, and big enough to hit`() {
+        val card = frame.scaleCard(4)
+        val row = scaleCardRow(card, d, 0)
+        val parts = scaleRowParts(row, d).all
+        parts.forEach {
+            assertTrue("$it escapes its row", it.left >= row.left && it.right <= row.right &&
+                it.top >= row.top && it.bottom <= row.bottom)
+            assertTrue("${it.width / d}x${it.height / d}dp", it.width / d >= 36f && it.height / d >= 36f)
+        }
+        parts.forEachIndexed { i, a -> parts.drop(i + 1).forEach { b -> assertFalse("$a overlaps $b", a.overlaps(b)) } }
+
+        val add = scaleCardAdd(card, d)
+        assertTrue("add sits below the last row", add.top >= scaleCardRow(card, d, 3).bottom)
+        assertTrue("add escapes the card", add.bottom <= card.bottom)
     }
 
     /** Every beats-per-bar button wide enough for a finger. */

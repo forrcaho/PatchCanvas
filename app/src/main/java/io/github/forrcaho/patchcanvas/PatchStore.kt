@@ -21,8 +21,8 @@ import java.io.File
  * geometry being persisted.
  */
 
-/** 2: the Clock module became the patch's tempo. */
-private const val FORMAT_VERSION = 2
+/** 2: the Clock module became the patch's tempo. 3: one scale became a list of them. */
+private const val FORMAT_VERSION = 3
 private const val TAG = "PatchStore"
 
 fun Patch.toJson(): String {
@@ -59,6 +59,16 @@ fun Patch.toJson(): String {
         )
     }
 
+    val scaleList = JSONArray()
+    scales.forEach { entry ->
+        scaleList.put(
+            JSONObject()
+                .put("name", entry.scale.name)
+                .put("bars", entry.bars)
+                .put("beats", entry.beats)
+        )
+    }
+
     // inputEnabled is deliberately absent. Whether the microphone is listening is
     // runtime state, like the master output, not part of the document -- and persisting
     // it meant a force-stop or a crash with the mic on came back showing a live In rail
@@ -69,7 +79,7 @@ fun Patch.toJson(): String {
         .put("modules", modules)
         .put("rails", rails)
         .put("connections", cables)
-        .put("scale", scale.name)
+        .put("scales", scaleList)
         .put("tempo", tempo.toDouble())
         .put("beatsPerBar", beatsPerBar)
         .toString()
@@ -122,9 +132,18 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
         val root = upgrade(JSONObject(text)) ?: return null
 
         val patch = Patch()
-        // An unknown or absent name leaves the default, so a file naming a scale that
-        // has since been removed loads as a patch in 12-TET rather than not at all.
-        patch.scale = scales.byName(root.optString("scale")) ?: scales.default
+        val stored = root.optJSONArray("scales") ?: JSONArray()
+        val entries = (0 until minOf(stored.length(), MAX_SCALE_ENTRIES)).mapNotNull { i ->
+            val e = stored.optJSONObject(i) ?: return@mapNotNull null
+            ScaleEntry(
+                // An unknown name falls back rather than dropping the entry, so a list
+                // naming a scale that has since been removed keeps its shape and its timing.
+                scales.byName(e.optString("name")) ?: scales.default,
+                e.optInt("bars", 4).coerceIn(0, MAX_ENTRY_BARS),
+                e.optInt("beats", 0).coerceIn(0, MAX_ENTRY_BEATS),
+            )
+        }
+        patch.scales = entries.ifEmpty { listOf(ScaleEntry(scales.default)) }
         // Clamped because the file is untrusted: the engine would clamp an absurd tempo
         // too, but then the chip and the sound would disagree about what it is.
         patch.tempo = root.optDouble("tempo", TEMPO.default.toDouble()).toFloat()
@@ -202,6 +221,18 @@ private fun upgrade(root: JSONObject): JSONObject? {
             break
         }
         version = 2
+    }
+
+    if (version == 2) {
+        // One scale became a list of them. The scale there was becomes the only entry,
+        // whose length does not matter while it is the only one.
+        val name = root.optString("scale", Scale.Chromatic.name)
+        root.put(
+            "scales",
+            JSONArray().put(JSONObject().put("name", name).put("bars", 4).put("beats", 0)),
+        )
+        root.remove("scale")
+        version = 3
     }
 
     if (version != FORMAT_VERSION) {

@@ -44,8 +44,10 @@ interface GraphCommands {
     fun connect(srcId: Long, srcPort: Int, dstId: Long, dstPort: Int)
     fun disconnect(dstId: Long, dstPort: Int)
     fun setParam(id: Long, index: Int, value: Float)
-    /** One step of a sequence. Pitch in octaves from the root, not degrees. */
-    fun setStep(id: Long, index: Int, pitch: Float, gate: Boolean)
+    /** One step of a sequence, as a degree: the engine resolves it against the scale list. */
+    fun setStep(id: Long, index: Int, degree: Int, gate: Boolean)
+    /** The patch's scale list, whole, with each entry's length worked out in beats. */
+    fun setScales(entries: List<ScaleEntry>, beatsPerBar: Int)
     /** The transport's rate, in beats per minute. */
     fun setTempo(bpm: Float)
     fun collectGarbage()
@@ -90,9 +92,14 @@ object EngineCommands : GraphCommands {
         AudioEngine.setParam(id, index, value)
     }
 
-    override fun setStep(id: Long, index: Int, pitch: Float, gate: Boolean) {
-        trace { "step $id[$index] = $pitch ${if (gate) "on" else "rest"}" }
-        AudioEngine.setStep(id, index, pitch, gate)
+    override fun setStep(id: Long, index: Int, degree: Int, gate: Boolean) {
+        trace { "step $id[$index] = degree $degree ${if (gate) "on" else "rest"}" }
+        AudioEngine.setStep(id, index, degree, gate)
+    }
+
+    override fun setScales(entries: List<ScaleEntry>, beatsPerBar: Int) {
+        trace { "scales " + entries.joinToString { "${it.scale.name} for ${it.lengthInBeats(beatsPerBar)}" } }
+        AudioEngine.setScales(entries, beatsPerBar)
     }
 
     override fun setTempo(bpm: Float) {
@@ -120,8 +127,8 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
     private var syncedCables = emptySet<Connection>()
     private var syncedParams = emptyMap<Long, List<Float>>()
     private var syncedSteps = emptyMap<Long, List<Step>>()
-    /** Retuning is not an edit to any step, but every step's pitch changes with it. */
-    private var syncedScale: Scale? = null
+    private var syncedScales: List<ScaleEntry>? = null
+    private var syncedBeatsPerBar: Int? = null
     private var syncedTempo: Float? = null
 
     /** Forget what the engine has, so the next sync re-sends everything. */
@@ -130,7 +137,8 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
         syncedCables = emptySet()
         syncedParams = emptyMap()
         syncedSteps = emptyMap()
-        syncedScale = null
+        syncedScales = null
+        syncedBeatsPerBar = null
         syncedTempo = null
     }
 
@@ -179,19 +187,25 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
         }
 
         // Sequences, on the same terms as knobs: only what changed, and everything for
-        // a node that was just added. Degrees become octaves here and nowhere else --
-        // past this point the engine has no idea a scale was involved.
+        // a node that was just added. As degrees: the engine resolves each note against
+        // the scale sounding on the beat it starts, so a change of scale resends the list
+        // below and not a single step.
         val steps = patch.modules
             .filter { it.type.stepCount > 0 }
             .associate { it.id to it.steps.toList() }
-        val retuned = syncedScale != patch.scale
         steps.forEach { (id, sequence) ->
-            val previous = if (retuned) null else syncedSteps[id]
+            val previous = syncedSteps[id]
             sequence.forEachIndexed { index, step ->
                 if (previous == null || previous.getOrNull(index) != step) {
-                    commands.setStep(id, index, patch.scale.octavesOf(step.degree), step.on)
+                    commands.setStep(id, index, step.degree, step.on)
                 }
             }
+        }
+
+        // The scale list, whole, when it or the bar length changes: entries last bars and
+        // beats, and the engine counts only beats.
+        if (syncedScales != patch.scales || syncedBeatsPerBar != patch.beatsPerBar) {
+            commands.setScales(patch.scales, patch.beatsPerBar)
         }
 
         // The transport's rate, on a change of value alone. Not a node, so not part of the
@@ -203,7 +217,8 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
         syncedCables = cables
         syncedParams = params
         syncedSteps = steps
-        syncedScale = patch.scale
+        syncedScales = patch.scales
+        syncedBeatsPerBar = patch.beatsPerBar
         syncedTempo = patch.tempo
 
         // Whatever the audio thread retired during the last block is ours to free.
