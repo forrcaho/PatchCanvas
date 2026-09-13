@@ -602,17 +602,34 @@ private fun DrawScope.drawScaleMarks(
     for ((cents, tonic) in scaleMarks(param, scale)) {
         val x = row.left + row.width * param.positionOf(cents)
         val top = barTop + barHeight + 2f * d
+        // Zero outranks the other tonics: on every slider these marks sit under, it is the
+        // setting that changes nothing, and among a row of identical octave marks it was
+        // the one you could not find at a glance.
+        val zero = kotlin.math.abs(cents) < 0.01f
         drawLine(
-            color = if (tonic) MarkTonic else MarkDegree,
+            color = when {
+                zero -> MarkZero
+                tonic -> MarkTonic
+                else -> MarkDegree
+            },
             start = Offset(x, top),
-            end = Offset(x, top + if (tonic) 7f * d else 4f * d),
-            strokeWidth = if (tonic) 2f * d else 1.5f * d,
+            end = Offset(x, top + when {
+                zero -> 10f * d
+                tonic -> 7f * d
+                else -> 4f * d
+            }),
+            strokeWidth = when {
+                zero -> 3f * d
+                tonic -> 2f * d
+                else -> 1.5f * d
+            },
         )
     }
 }
 
 private val MarkDegree = Color(0xFF5A6675)
 private val MarkTonic = Color(0xFFAAB4C2)
+private val MarkZero = Color(0xFFE4E7EC)
 
 private val ChipFill = Color(0xFF1E232B)
 private val ChipEdge = Color(0xFF3A424E)
