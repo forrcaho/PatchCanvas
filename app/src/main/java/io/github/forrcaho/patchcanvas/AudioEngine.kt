@@ -80,6 +80,8 @@ object AudioEngine {
             kept.map { minOf(it.scale.size, MAX_DEGREES) }.toIntArray(),
             kept.map { it.scale.period }.toFloatArray(),
             kept.map { it.lengthInBeats(beatsPerBar) }.toIntArray(),
+            // Octaves, like every pitch that crosses this boundary.
+            kept.map { it.rootCents / 1200f }.toFloatArray(),
         )
     }
 
@@ -184,6 +186,7 @@ object AudioEngine {
         sizes: IntArray,
         periods: FloatArray,
         beats: IntArray,
+        roots: FloatArray,
     ): Boolean
     private external fun nativeScaleEntry(): Int
     private external fun nativeStepOf(id: Long): Int

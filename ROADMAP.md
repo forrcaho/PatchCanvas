@@ -973,6 +973,38 @@ path as notes with a different payload.
 Not yet looked at on the device: the sequencer grid reflowing as the list moves between
 scales with different numbers of degrees.
 
+**Keys change the same way.** A `.scl` file holds degrees and no reference pitch, and
+degree 0 had been middle C, hard-coded, with nothing but per-module transposes to move
+it. Each entry now carries a root, in cents above middle C, added where a degree becomes
+a pitch -- so a key change every few bars is a list of entries, lands on its beat, and a
+held note keeps the key it started in, all without a mechanism of its own. Stored as
+`root` in each entry; files without one were in C, so no format change.
+
+The card steps a root by 100 cents, which reaches every key a twelve-note scale is written
+in. Tapping the value opens a page with a slider ticked at the entry's degrees, where a
+tap within 8dp of a mark lands on it exactly and a drag never snaps -- the user's design,
+so a degree like 19-TET's 189.5 cents is exact without making the cents between marks
+unreachable. The reading gives the frequency and the nearest twelve-tone letter, marked
+"≈" when the root is not on that grid. `.kbm` keyboard mappings, Scala's own answer, were
+not needed for this.
+
+Built and passing on the host -- 58 graph checks, 48 node checks, 165 JVM tests --
+mutation-checked by ignoring the root in the table, never snapping, and not saving the
+root.
+
+**Verified on the device.** A list of 12-TET in C and 12-TET in G, a bar each at 122bpm,
+pitch-tracked from a capture of a five-step quarter-note figure: every change landed
+exactly four beats apart, every note in the G bars sat seven semitones above its C
+counterpart -- and the one rest that fell on the first beat of a G bar held the C note
+before it rather than jumping to G, which is the held-note rule for keys seen in sound.
+On the root page, a tap 3dp from the 500-cent mark set exactly 500, a drag set 844 and
+did not snap, and -1 cent made it 843. The page reads "+844¢ · 426.0 Hz · ≈A♭".
+
+A wrong turn worth recording, since it looked like a bug and was not: the first scripted
+run of these taps assumed a one-entry list, and the list on the phone had grown to two.
+A tap meant for "add" opened the second entry's picker, and the next tap chose Meantone.
+Drive the device from what a screenshot shows, not from what the last session left.
+
 **The scale belongs to the patch**, as Phase 5 already argued, and moves out of the
 sequencer's header into a chip of its own.
 

@@ -131,8 +131,9 @@ are not.
 **The engine never learns what a semitone is.** Scales cross as tables of octave offsets
 (`hz = root * 2^octaves`) and sequencers send degrees, so an arbitrary scale costs
 nothing. Degrees become octaves in exactly one place — `ScaleTable::octavesOf` in
-`scales.h`, against the scale sounding on the beat a note starts — because only the audio
-thread knows that beat to the sample. Which scale is decided in integers from the tick's
+`scales.h`, against the scale sounding on the beat a note starts, with that entry's root
+(the key, in octaves from middle C) added — because only the audio thread knows that beat
+to the sample. Which scale is decided in integers from the tick's
 count, never from the transport's floating position. A scale list crosses whole, as a
 pointer built off the audio thread, like a node; both sides cap a scale at 64 degrees
 (`MAX_DEGREES` / `kMaxDegrees`), and a larger `.scl` fails to parse rather than being cut

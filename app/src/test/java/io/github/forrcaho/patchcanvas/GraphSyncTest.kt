@@ -14,8 +14,8 @@ private sealed interface Cmd {
     data class Disconnect(val dst: Long, val dstPort: Int) : Cmd
     data class SetParam(val id: Long, val index: Int, val value: Float) : Cmd
     data class SetStep(val id: Long, val index: Int, val degree: Int, val gate: Boolean) : Cmd
-    /** Each entry's scale name and its length in beats, which is what the engine gets. */
-    data class SetScales(val entries: List<Pair<String, Int>>) : Cmd
+    /** Each entry's scale name and its length in beats, which is what the engine gets, and each root. */
+    data class SetScales(val entries: List<Pair<String, Int>>, val roots: List<Float>) : Cmd
     data class SetTempo(val bpm: Float) : Cmd
 }
 
@@ -36,7 +36,10 @@ private class Recorder : GraphCommands {
         log += Cmd.SetStep(id, index, degree, gate)
     }
     override fun setScales(entries: List<ScaleEntry>, beatsPerBar: Int) {
-        log += Cmd.SetScales(entries.map { it.scale.name to it.lengthInBeats(beatsPerBar) })
+        log += Cmd.SetScales(
+            entries.map { it.scale.name to it.lengthInBeats(beatsPerBar) },
+            entries.map { it.rootCents },
+        )
     }
     override fun setTempo(bpm: Float) { log += Cmd.SetTempo(bpm) }
     override fun collectGarbage() { collected++ }
@@ -547,7 +550,10 @@ class SequenceTest {
         sync.sync(patch)
 
         assertTrue(recorder.log.filterIsInstance<Cmd.SetStep>().isEmpty())
-        assertEquals(listOf(Cmd.SetScales(listOf("Major" to 16))), recorder.log.filterIsInstance<Cmd.SetScales>())
+        assertEquals(
+            listOf(Cmd.SetScales(listOf("Major" to 16), listOf(0f))),
+            recorder.log.filterIsInstance<Cmd.SetScales>(),
+        )
     }
 
     /** Entries last bars and beats and the engine counts beats, so a new bar length is a new list. */
@@ -566,12 +572,27 @@ class SequenceTest {
         patch.beatsPerBar = 3
         sync.sync(patch)
 
-        assertEquals(listOf(Cmd.SetScales(listOf("12-TET" to 7, "19-TET" to 12))), recorder.log)
+        assertEquals(listOf(Cmd.SetScales(listOf("12-TET" to 7, "19-TET" to 12), listOf(0f, 0f))), recorder.log)
     }
 
     @Test
     fun `an entry never lasts zero beats`() {
         assertEquals(1, ScaleEntry(Scale.Chromatic, bars = 0, beats = 0).lengthInBeats(4))
+    }
+
+    /** A change of key alone is a change to the list, and goes to the engine like any other. */
+    @Test
+    fun `a change of key alone resends the list`() {
+        val recorder = Recorder()
+        val (patch, _) = withSteps()
+        val sync = GraphSync(recorder)
+        sync.sync(patch)
+        recorder.clear()
+
+        patch.scales = listOf(patch.scales.single().copy(rootCents = 700f))
+        sync.sync(patch)
+
+        assertEquals(listOf(Cmd.SetScales(listOf("12-TET" to 16), listOf(700f))), recorder.log)
     }
 
     @Test
@@ -625,8 +646,8 @@ class SequenceTest {
         val library = ScaleLibrary.of(File("src/main/assets/scales"))
         val (patch, _) = withSteps()
         patch.scales = listOf(
-            ScaleEntry(library.byName("Major")!!, 4, 0),
-            ScaleEntry(library.byName("Minor pentatonic")!!, 2, 3),
+            ScaleEntry(library.byName("Major")!!, 4, 0, rootCents = 700f),
+            ScaleEntry(library.byName("Minor pentatonic")!!, 2, 3, rootCents = -63.2f),
         )
         assertEquals(patch.scales, patchFromJson(patch.toJson(), library)!!.scales)
     }

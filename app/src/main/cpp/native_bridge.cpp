@@ -127,17 +127,20 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetScales(JNIEnv *env, job
                                                                 jfloatArray degrees,
                                                                 jintArray sizes,
                                                                 jfloatArray periods,
-                                                                jintArray beats) {
+                                                                jintArray beats,
+                                                                jfloatArray roots) {
     const int32_t available = env->GetArrayLength(degrees);
-    const int32_t entries = std::min(env->GetArrayLength(sizes),
-                                     std::min(env->GetArrayLength(periods),
-                                              env->GetArrayLength(beats)));
+    const int32_t entries = std::min(std::min(env->GetArrayLength(sizes),
+                                              env->GetArrayLength(periods)),
+                                     std::min(env->GetArrayLength(beats),
+                                              env->GetArrayLength(roots)));
 
     auto *list = new ScaleList();
     jfloat *d = env->GetFloatArrayElements(degrees, nullptr);
     jint *s = env->GetIntArrayElements(sizes, nullptr);
     jfloat *p = env->GetFloatArrayElements(periods, nullptr);
     jint *b = env->GetIntArrayElements(beats, nullptr);
+    jfloat *r = env->GetFloatArrayElements(roots, nullptr);
 
     list->count = std::min(entries, kMaxScaleEntries);
     int32_t at = 0;
@@ -147,6 +150,7 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetScales(JNIEnv *env, job
         table.size = std::min(std::min(size, kMaxDegrees), std::max(0, available - at));
         for (int32_t j = 0; j < table.size; ++j) table.octaves[j] = d[at + j];
         table.period = p[i];
+        table.root = r[i];
         list->beats[i] = b[i];
         at += size;
     }
@@ -156,6 +160,7 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetScales(JNIEnv *env, job
     env->ReleaseIntArrayElements(sizes, s, JNI_ABORT);
     env->ReleaseFloatArrayElements(periods, p, JNI_ABORT);
     env->ReleaseIntArrayElements(beats, b, JNI_ABORT);
+    env->ReleaseFloatArrayElements(roots, r, JNI_ABORT);
 
     return engine().graph().postSetScales(list) ? JNI_TRUE : JNI_FALSE;
 }

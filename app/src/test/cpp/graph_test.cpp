@@ -557,6 +557,18 @@ void aScaleTableWrapsByPeriod() {
     tritave.period = 1.5849625f;
     check(std::fabs(tritave.octavesOf(5) - 1.5849625f) < 1e-5f, "a full turn travels the period, not an octave");
 
+    ScaleTable inG = pentatonic;
+    inG.root = 7.0f / 12.0f;
+    check(std::fabs(inG.octavesOf(0) - 7.0f / 12.0f) < 1e-5f, "a root moves degree 0 off middle C");
+    check(std::fabs(inG.octavesOf(6) - (7.0f / 12.0f + 1.2f)) < 1e-5f, "and every other degree with it");
+
+    const ScaleList *far = listOfLengths({4});
+    ScaleList clamped = *far;
+    clamped.tables[0].root = 9.0f;
+    clamped.finish();
+    check(clamped.tables[0].root == kMaxRoot, "an absurd root is clamped to two octaves");
+    delete far;
+
     const ScaleTable unsent;
     check(std::fabs(unsent.octavesOf(7) - 7.0f / 12.0f) < 1e-6f, "a table nobody sent is twelve equal steps");
 }

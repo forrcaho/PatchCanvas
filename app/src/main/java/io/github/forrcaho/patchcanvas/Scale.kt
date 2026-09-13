@@ -100,7 +100,18 @@ const val MAX_ENTRY_BEATS = 15
  * on a barline and counting that in beats is arithmetic nobody should have to do -- but
  * with the beats there, it does not have to. The beat is not subdivided.
  */
-data class ScaleEntry(val scale: Scale, val bars: Int = 4, val beats: Int = 0) {
+data class ScaleEntry(
+    val scale: Scale,
+    val bars: Int = 4,
+    val beats: Int = 0,
+    /**
+     * Where degree 0 sits, in cents above middle C: the key. On the entry rather than the
+     * patch, so a key change every few bars is a list of entries, exactly as a scale change
+     * is. Cents, like every tuning control, because a semitone means nothing in most of the
+     * tunings this has to work in.
+     */
+    val rootCents: Float = 0f,
+) {
     /**
      * Never zero. An entry lasting no time would be a scale nobody could hear, and would
      * make the loop's arithmetic divide by nothing.

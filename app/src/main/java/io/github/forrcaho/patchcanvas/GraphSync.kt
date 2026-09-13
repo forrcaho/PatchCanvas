@@ -98,7 +98,11 @@ object EngineCommands : GraphCommands {
     }
 
     override fun setScales(entries: List<ScaleEntry>, beatsPerBar: Int) {
-        trace { "scales " + entries.joinToString { "${it.scale.name} for ${it.lengthInBeats(beatsPerBar)}" } }
+        trace {
+            "scales " + entries.joinToString {
+                "${it.scale.name} at ${it.rootCents}c for ${it.lengthInBeats(beatsPerBar)}"
+            }
+        }
         AudioEngine.setScales(entries, beatsPerBar)
     }
 

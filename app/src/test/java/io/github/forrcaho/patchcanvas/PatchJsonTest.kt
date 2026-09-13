@@ -174,6 +174,18 @@ class PatchJsonTest {
         assertEquals(sample().free.size, restored.free.size)
     }
 
+    /** Files from before keys existed carry no root, and were all in C. */
+    @Test
+    fun `an entry with no root is in C, and an absurd one is clamped`() {
+        val root = JSONObject(sample().toJson())
+        val entries = root.getJSONArray("scales")
+        entries.getJSONObject(0).remove("root")
+        entries.put(JSONObject().put("name", "12-TET").put("bars", 1).put("beats", 0).put("root", 99999.0))
+
+        val restored = patchFromJson(root.toString())!!
+        assertEquals(listOf(0f, TUNE_RANGE), restored.scales.map { it.rootCents })
+    }
+
     /** Format 2 had one scale where format 3 has a list; the scale there was becomes the only entry. */
     @Test
     fun `a format 2 file's scale becomes a list of one`() {

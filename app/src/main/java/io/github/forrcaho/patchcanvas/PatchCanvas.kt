@@ -599,18 +599,7 @@ private fun DrawScope.drawScaleMarks(
     param: Param,
     scale: Scale,
 ) {
-    // Degrees far enough either side to cover the range whatever the period is. One
-    // extra turn of the scale past it, then filtered by value, so a scale that repeats
-    // at a tritave is not cut short.
-    val turns = (param.max / (scale.period * 1200f)).toInt() + 2
-    val from = -turns * scale.size
-    val to = turns * scale.size
-
-    for (degree in from..to) {
-        val cents = scale.octavesOf(degree) * 1200f
-        if (cents < param.min || cents > param.max) continue
-
-        val tonic = degree.mod(scale.size) == 0
+    for ((cents, tonic) in scaleMarks(param, scale)) {
         val x = row.left + row.width * param.positionOf(cents)
         val top = barTop + barHeight + 2f * d
         drawLine(
@@ -1110,6 +1099,9 @@ internal class Frame(
         )
     }
 
+    /** The page one entry's root is set on, in the same place as the picker. */
+    fun scaleRootPage(): Rect = scalePicker()
+
     companion object {
         const val RAIL_MARGIN = 8f
         const val HISTORY_SIDE = 44f
@@ -1119,7 +1111,7 @@ internal class Frame(
         const val TRANSPORT_CARD_W = 300f
         const val TRANSPORT_CARD_H = 204f
         const val SCALE_CHIP_W = 230f
-        const val SCALE_CARD_W = 520f
+        const val SCALE_CARD_W = 676f
         const val SCALE_CARD_PAD = 14f
         const val SCALE_CARD_HEAD = 26f
         const val SCALE_CARD_FOOT = 54f
@@ -1209,7 +1201,7 @@ internal fun scaleCardRow(card: Rect, d: Float, slot: Int): Rect {
     return Rect(list.left, top, list.right, top + Frame.SCALE_ROW * d)
 }
 
-/** One entry's controls: its scale, bars and beats each with a pair of steppers, and remove. */
+/** One entry's controls: its scale; bars, beats and root each with a pair of steppers; and remove. */
 internal class ScaleRowParts(
     val name: Rect,
     val barsLess: Rect,
@@ -1218,9 +1210,15 @@ internal class ScaleRowParts(
     val beatsLess: Rect,
     val beats: Rect,
     val beatsMore: Rect,
+    val rootLess: Rect,
+    val root: Rect,
+    val rootMore: Rect,
     val remove: Rect,
 ) {
-    val all: List<Rect> get() = listOf(name, barsLess, bars, barsMore, beatsLess, beats, beatsMore, remove)
+    val all: List<Rect>
+        get() = listOf(
+            name, barsLess, bars, barsMore, beatsLess, beats, beatsMore, rootLess, root, rootMore, remove,
+        )
 }
 
 /**
@@ -1239,8 +1237,88 @@ internal fun scaleRowParts(row: Rect, d: Float): ScaleRowParts {
         beatsLess = box(332f, 36f),
         beats = box(368f, 40f),
         beatsMore = box(408f, 36f),
-        remove = box(456f, 36f),
+        rootLess = box(456f, 36f),
+        root = box(492f, 72f),
+        rootMore = box(564f, 36f),
+        remove = box(612f, 36f),
     )
+}
+
+// ---------------------------------------------------------------- the root page
+
+/**
+ * The key: where degree 0 sits, in cents above middle C. Two octaves either way, like the
+ * transpose it resembles, which also reaches a full turn of a tritave scale.
+ */
+internal val ROOT = Param("root", -TUNE_RANGE, TUNE_RANGE, 0f, "¢", ParamCurve.LINEAR, marks = true)
+
+/** Mirrors kMiddleC in nodes.h: the pitch a root of zero is. */
+internal const val MIDDLE_C_HZ = 261.6256f
+
+/** How close to a degree mark a tap has to land to be taken as meaning it, in dp. */
+internal const val ROOT_SNAP = 8f
+
+/** The slider, with room beneath its bar for the degree marks. */
+internal fun rootSlider(page: Rect, d: Float) =
+    Rect(page.left + 14f * d, page.top + 84f * d, page.right - 14f * d, page.top + 144f * d)
+
+internal fun rootFineLess(page: Rect, d: Float) =
+    Rect(Offset(page.left + 14f * d, page.top + 160f * d), Size(72f * d, 40f * d))
+
+internal fun rootFineMore(page: Rect, d: Float) =
+    Rect(Offset(page.left + 94f * d, page.top + 160f * d), Size(72f * d, 40f * d))
+
+/**
+ * Where a scale's degrees fall across [param]'s range, in cents, and whether each is a
+ * tonic. Shared by the marks drawn under a slider and the snapping on the root page, so
+ * what you see and what a tap lands on cannot disagree.
+ */
+internal fun scaleMarks(param: Param, scale: Scale): List<Pair<Float, Boolean>> {
+    // Degrees far enough either side to cover the range whatever the period is. One
+    // extra turn of the scale past it, then filtered by value, so a scale that repeats
+    // at a tritave is not cut short.
+    val turns = (param.max / (scale.period * 1200f)).toInt() + 2
+    return (-turns * scale.size..turns * scale.size).mapNotNull { degree ->
+        val cents = scale.octavesOf(degree) * 1200f
+        if (cents < param.min || cents > param.max) null else cents to (degree.mod(scale.size) == 0)
+    }
+}
+
+/**
+ * The root a tap at [x] on the slider chooses: the degree mark under the finger when one
+ * is within [ROOT_SNAP], and otherwise the whole cent where it landed.
+ *
+ * Only a tap snaps. A drag reads the slider continuously and never calls this, because
+ * snapping while sliding would make every cent between the marks unreachable -- and those
+ * cents are the reason the unit is cents at all.
+ */
+internal fun rootAtTap(x: Float, slider: Rect, d: Float, scale: Scale): Float {
+    fun xOf(cents: Float) = slider.left + slider.width * ROOT.positionOf(cents)
+    val free = ROOT.valueAt((x - slider.left) / slider.width).roundToInt().toFloat()
+    val nearest = scaleMarks(ROOT, scale).minByOrNull { (cents, _) -> kotlin.math.abs(xOf(cents) - x) }
+        ?: return free
+    return if (kotlin.math.abs(xOf(nearest.first) - x) <= ROOT_SNAP * d) nearest.first else free
+}
+
+/** A root as it is read: signed whole cents, or a tenth where a degree is not whole. */
+internal fun formatCents(cents: Float): String {
+    val tenths = (cents * 10f).roundToInt()
+    if (tenths == 0) return "0¢"
+    val sign = if (tenths > 0) "+" else "−"
+    val magnitude = kotlin.math.abs(tenths)
+    return if (magnitude % 10 == 0) "$sign${magnitude / 10}¢" else "$sign${magnitude / 10}.${magnitude % 10}¢"
+}
+
+private val NOTE_NAMES = listOf("C", "C♯", "D", "E♭", "E", "F", "F♯", "G", "A♭", "A", "B♭", "B")
+
+/**
+ * The nearest twelve-tone note name, as a reading and never as the unit -- marked "≈" when
+ * the root is not on that grid, so a 19-TET degree does not pretend to be a letter.
+ */
+internal fun nearestNoteName(cents: Float): String {
+    val semitones = (cents / 100f).roundToInt()
+    val name = NOTE_NAMES[semitones.mod(12)]
+    return if (kotlin.math.abs(cents - semitones * 100f) < 0.5f) name else "≈$name"
 }
 
 internal fun scaleCardAdd(card: Rect, d: Float) = Rect(
@@ -1255,10 +1333,14 @@ internal fun scalePickerTiles(picker: Rect, d: Float, count: Int): List<Rect> =
 /** Which floating card is open. One at a time, because both hang from the top-left corner. */
 internal enum class FloatingCard { None, Transport, Scales }
 
-/** The scale card's view state: which entry is choosing a scale, and how far the list is scrolled. */
+/** The scale card's view state: which entry is choosing a scale or a root, and how far the list is scrolled. */
 internal class ScaleCardView {
     var pickingFor by mutableIntStateOf(-1)
+    var rootFor by mutableIntStateOf(-1)
     var scroll by mutableIntStateOf(0)
+
+    /** Whether a page -- the picker or the root -- is showing in place of the list. */
+    val onPage: Boolean get() = pickingFor >= 0 || rootFor >= 0
 }
 
 /** Screen position of any port, whether its module is pinned or free. */
@@ -1441,6 +1523,7 @@ fun PatchCanvas(
                             card = if (card == FloatingCard.Scales) FloatingCard.None
                                 else FloatingCard.Scales
                             scaleView.pickingFor = -1
+                            scaleView.rootFor = -1
                             return@awaitEachGesture
                         }
                         if (card == FloatingCard.Transport &&
@@ -1449,7 +1532,7 @@ fun PatchCanvas(
                             transportCardGesture(frame, down.position, patch, controls.onResetTransport)
                             return@awaitEachGesture
                         }
-                        val scaleArea = if (scaleView.pickingFor >= 0) frame.scalePicker()
+                        val scaleArea = if (scaleView.onPage) frame.scalePicker()
                             else frame.scaleCard(patch.scales.size)
                         if (card == FloatingCard.Scales && scaleArea.contains(down.position)) {
                             scaleCardGesture(frame, down.position, patch, scales, scaleView, slop)
@@ -2467,6 +2550,44 @@ private fun DrawScope.drawScales(
         return
     }
 
+    val rooting = view.rootFor
+    if (rooting in entries.indices) {
+        val page = frame.scaleRootPage()
+        drawRoundRect(Color(0xFF1B1F26), page.topLeft, page.size, corner)
+        drawRoundRect(ChipEdge, page.topLeft, page.size, corner, style = Stroke(width = 1.5f * d))
+        val entry = entries[rooting]
+        drawText(
+            measurer.measure("root for entry ${rooting + 1}  ·  ${entry.scale.name}", PanelParamStyle),
+            topLeft = Offset(page.left + 14f * d, page.top + 10f * d),
+        )
+        // Cents are the unit; the frequency and the nearest letter are readings of it.
+        val hz = MIDDLE_C_HZ * Math.pow(2.0, entry.rootCents / 1200.0).toFloat()
+        drawText(
+            measurer.measure(
+                "${formatCents(entry.rootCents)}  ·  ${"%.1f".format(hz)} Hz  ·  ${nearestNoteName(entry.rootCents)}",
+                PanelValueStyle,
+            ),
+            topLeft = Offset(page.left + 14f * d, page.top + 40f * d),
+        )
+
+        val slider = rootSlider(page, d)
+        val barHeight = PatchModule.PANEL_BAR * d
+        val barTop = slider.top + 16f * d
+        drawRoundRect(
+            Color(0xFF12151A), Offset(slider.left, barTop), Size(slider.width, barHeight),
+            CornerRadius(barHeight / 2f, barHeight / 2f),
+        )
+        drawScaleMarks(slider, barTop, barHeight, d, ROOT, entry.scale)
+        drawCircle(
+            color = scaleAccent,
+            radius = 11f * d,
+            center = Offset(slider.left + slider.width * ROOT.positionOf(entry.rootCents), barTop + barHeight / 2f),
+        )
+        drawKey(rootFineLess(page, d), d, "−1¢", measurer, entry.rootCents > ROOT.min)
+        drawKey(rootFineMore(page, d), d, "+1¢", measurer, entry.rootCents < ROOT.max)
+        return
+    }
+
     val card = frame.scaleCard(entries.size)
     drawRoundRect(Color(0xFF1B1F26), card.topLeft, card.size, corner)
     drawRoundRect(ChipEdge, card.topLeft, card.size, corner, style = Stroke(width = 1.5f * d))
@@ -2481,6 +2602,7 @@ private fun DrawScope.drawScales(
     heading("scale", columns.name.left, columns.name.right, centred = false)
     heading("bars", columns.barsLess.left, columns.barsMore.right, centred = true)
     heading("beats", columns.beatsLess.left, columns.beatsMore.right, centred = true)
+    heading("root", columns.rootLess.left, columns.rootMore.right, centred = true)
 
     fun value(rect: Rect, text: String) {
         val t = measurer.measure(text, PanelValueStyle)
@@ -2504,6 +2626,11 @@ private fun DrawScope.drawScales(
         drawKey(parts.beatsLess, d, "−", measurer, entry.beats > 0)
         value(parts.beats, entry.beats.toString())
         drawKey(parts.beatsMore, d, "+", measurer, entry.beats < MAX_ENTRY_BEATS)
+        // A hundred cents a step, which reaches every key a twelve-note scale is written
+        // in. The value is itself a button, into the page that reaches everything else.
+        drawKey(parts.rootLess, d, "−", measurer, entry.rootCents > ROOT.min)
+        drawKey(parts.root, d, formatCents(entry.rootCents), measurer)
+        drawKey(parts.rootMore, d, "+", measurer, entry.rootCents < ROOT.max)
         if (entries.size > 1) drawKey(parts.remove, d, "×", measurer)
     }
 
@@ -2560,6 +2687,49 @@ private suspend fun AwaitPointerEventScope.scaleCardGesture(
         return
     }
 
+    if (view.rootFor >= 0) {
+        val index = view.rootFor
+        val page = frame.scaleRootPage()
+        val slider = rootSlider(page, d)
+        val entry = patch.scales.getOrNull(index)
+        if (entry == null) {
+            view.rootFor = -1
+            waitForUpRelease()
+            return
+        }
+        fun setRoot(cents: Float) {
+            patch.scales = patch.scales.toMutableList()
+                .also { it[index] = it[index].copy(rootCents = cents.coerceIn(ROOT.min, ROOT.max)) }
+        }
+
+        if (slider.contains(down)) {
+            var sliding = false
+            while (true) {
+                val event = awaitPointerEvent()
+                val pressed = event.changes.filter { it.pressed }
+                if (pressed.isEmpty()) break
+                val change = pressed.first()
+                if ((change.position - down).getDistance() > slop) sliding = true
+                if (sliding) {
+                    // Continuous, never snapping: see rootAtTap.
+                    setRoot(ROOT.valueAt((change.position.x - slider.left) / slider.width).roundToInt().toFloat())
+                }
+                change.consume()
+            }
+            if (!sliding) setRoot(rootAtTap(down.x, slider, d, entry.scale))
+            return
+        }
+
+        waitForUpRelease()
+        when {
+            rootFineLess(page, d).contains(down) -> setRoot(entry.rootCents - 1f)
+            rootFineMore(page, d).contains(down) -> setRoot(entry.rootCents + 1f)
+            // Anywhere else on the page goes back to the list, like the picker.
+            else -> view.rootFor = -1
+        }
+        return
+    }
+
     val card = frame.scaleCard(patch.scales.size)
     val visible = frame.scaleRowsThatFit()
     val list = scaleCardList(card, d)
@@ -2596,6 +2766,9 @@ private suspend fun AwaitPointerEventScope.scaleCardGesture(
             parts.barsMore.contains(down) -> replace(index, entry.copy(bars = (entry.bars + 1).coerceAtMost(MAX_ENTRY_BARS)))
             parts.beatsLess.contains(down) -> replace(index, entry.copy(beats = (entry.beats - 1).coerceAtLeast(0)))
             parts.beatsMore.contains(down) -> replace(index, entry.copy(beats = (entry.beats + 1).coerceAtMost(MAX_ENTRY_BEATS)))
+            parts.rootLess.contains(down) -> replace(index, entry.copy(rootCents = (entry.rootCents - 100f).coerceAtLeast(ROOT.min)))
+            parts.rootMore.contains(down) -> replace(index, entry.copy(rootCents = (entry.rootCents + 100f).coerceAtMost(ROOT.max)))
+            parts.root.contains(down) -> view.rootFor = index
             parts.remove.contains(down) && entries.size > 1 -> {
                 patch.scales = entries.toMutableList().also { it.removeAt(index) }
                 view.scroll = view.scroll.coerceIn(0, maxOf(0, patch.scales.size - visible))

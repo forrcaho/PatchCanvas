@@ -270,6 +270,57 @@ class ReplaceWithTest {
 
 
 /**
+ * The root page: a tap near a degree means that degree, exactly; anywhere else means the
+ * cent under the finger. The degrees are where keys are, and hard to land on by eye.
+ */
+class RootControlTest {
+
+    private val frame = Frame(
+        canvas = Size(2404f, 1080f),
+        density = 2.4375f,
+        insetLeft = 160f,
+        insetTop = 54f,
+        insetRight = 0f,
+        insetBottom = 58f,
+    )
+    private val d = frame.density
+    private val slider = rootSlider(frame.scaleRootPage(), d)
+    private val major = Scale.steps("Major", 12, listOf(2, 2, 1, 2, 2, 2, 1))
+
+    private fun xOf(cents: Float) = slider.left + slider.width * ROOT.positionOf(cents)
+
+    @Test
+    fun `a tap near a degree lands exactly on it`() {
+        assertEquals(700f, rootAtTap(xOf(700f) + 5f * d, slider, d, major), 0f)
+        assertEquals(700f, rootAtTap(xOf(700f) - 5f * d, slider, d, major), 0f)
+    }
+
+    /** In Major, 600 cents is a gap between two degrees -- far enough from both not to snap. */
+    @Test
+    fun `a tap between degrees lands where it touched`() {
+        assertEquals(600f, rootAtTap(xOf(600f), slider, d, major), 0.5f)
+    }
+
+    /** The point of the snap: a degree that is not a whole number of cents is still exact. */
+    @Test
+    fun `a nineteen-tone degree is reachable exactly`() {
+        val nineteen = Scale.equal("19-TET", 19)
+        val degree = nineteen.octavesOf(3) * 1200f
+        assertEquals(degree, rootAtTap(xOf(degree) + 1f * d, slider, d, nineteen), 0f)
+    }
+
+    @Test
+    fun `the reading names the nearest note, and admits when it is only near`() {
+        assertEquals("G", nearestNoteName(700f))
+        assertEquals("B♭", nearestNoteName(-200f))
+        assertEquals("≈G", nearestNoteName(694.7f))
+        assertEquals("+700¢", formatCents(700f))
+        assertEquals("−63.2¢", formatCents(-63.16f))
+        assertEquals("0¢", formatCents(0.01f))
+    }
+}
+
+/**
  * The history buttons float over an open panel, so they have to sit somewhere the panel
  * is not using. This is the assertion behind that: the panel's knob rows are inset by
  * PANEL_SIDE and the buttons live in the corner outside it.
@@ -597,6 +648,26 @@ class TransportGeometryTest {
         val add = scaleCardAdd(card, d)
         assertTrue("add sits below the last row", add.top >= scaleCardRow(card, d, 3).bottom)
         assertTrue("add escapes the card", add.bottom <= card.bottom)
+    }
+
+    @Test
+    fun `the widened scale card still fits the screen`() {
+        val card = frame.scaleCard(MAX_SCALE_ENTRIES)
+        assertTrue("runs off the right: ${card.right} of ${frame.canvas.width}", card.right <= frame.canvas.width - frame.insetRight)
+    }
+
+    @Test
+    fun `the root page's controls sit inside it, apart, and big enough to hit`() {
+        val page = frame.scaleRootPage()
+        val slider = rootSlider(page, d)
+        val less = rootFineLess(page, d)
+        val more = rootFineMore(page, d)
+        listOf(slider, less, more).forEach {
+            assertTrue("$it escapes the page", it.left >= page.left && it.right <= page.right && it.bottom <= page.bottom)
+        }
+        assertFalse(slider.overlaps(less))
+        assertFalse(less.overlaps(more))
+        assertTrue("slider too short to aim along: ${slider.width / d}dp", slider.width / d >= 500f)
     }
 
     /** Every beats-per-bar button wide enough for a finger. */

@@ -66,6 +66,7 @@ fun Patch.toJson(): String {
                 .put("name", entry.scale.name)
                 .put("bars", entry.bars)
                 .put("beats", entry.beats)
+                .put("root", entry.rootCents.toDouble())
         )
     }
 
@@ -141,6 +142,8 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
                 scales.byName(e.optString("name")) ?: scales.default,
                 e.optInt("bars", 4).coerceIn(0, MAX_ENTRY_BARS),
                 e.optInt("beats", 0).coerceIn(0, MAX_ENTRY_BEATS),
+                // Absent in files saved before keys existed, which were all in C.
+                e.optDouble("root", 0.0).toFloat().coerceIn(-TUNE_RANGE, TUNE_RANGE),
             )
         }
         patch.scales = entries.ifEmpty { listOf(ScaleEntry(scales.default)) }

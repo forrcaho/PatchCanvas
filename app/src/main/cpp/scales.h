@@ -26,16 +26,25 @@ struct ScaleTable {
     float octaves[kMaxDegrees] = {};
     int32_t size = 0;
     float period = 1.0f;
+    /**
+     * Where degree 0 sits, in octaves from middle C: the key. Per table rather than per
+     * patch, so a change of key is an entry in the list like a change of scale, and lands
+     * on its beat the same way.
+     */
+    float root = 0.0f;
 
-    /** Octaves from the root. Degrees past the end run into the next period, and below zero into the one beneath. */
+    /** Octaves from middle C. Degrees past the end run into the next period, and below zero into the one beneath. */
     float octavesOf(int32_t degree) const {
         // A table nobody has sent is twelve equal steps, so a sequencer is never silent,
         // or dividing by zero, for want of one.
-        if (size <= 0) return static_cast<float>(degree) / 12.0f;
+        if (size <= 0) return root + static_cast<float>(degree) / 12.0f;
         const int64_t turn = floorDiv(degree, size);
-        return static_cast<float>(turn) * period + octaves[degree - turn * size];
+        return root + static_cast<float>(turn) * period + octaves[degree - turn * size];
     }
 };
+
+/** How far a root may sit from middle C, in octaves. Mirrors TUNE_RANGE in PatchCanvas.kt. */
+constexpr float kMaxRoot = 2.0f;
 
 /**
  * The patch's scales, in the order they loop, each held for a whole number of beats.
@@ -58,6 +67,8 @@ struct ScaleList {
         for (int32_t i = 0; i < count; ++i) {
             if (beats[i] < 1) beats[i] = 1;
             totalBeats += beats[i];
+            if (tables[i].root < -kMaxRoot) tables[i].root = -kMaxRoot;
+            if (tables[i].root > kMaxRoot) tables[i].root = kMaxRoot;
         }
     }
 

@@ -420,6 +420,50 @@ void aTripletOnTheSwitchBeatTakesTheNewScale() {
     check(std::fabs(steps.output(0)[0] - 4.0f / 12.0f) < 0.0001f, "the triplet on beat 4 is major");
 }
 
+/** Four beats of 12-TET in C, then four in G. A change of key is a change of entry. */
+const ScaleList &cThenG() {
+    static ScaleList list = [] {
+        ScaleList l;
+        l.count = 2;
+        for (int32_t t = 0; t < 2; ++t) {
+            l.tables[t].size = 12;
+            for (int32_t i = 0; i < 12; ++i) l.tables[t].octaves[i] = static_cast<float>(i) / 12.0f;
+            l.beats[t] = 4;
+        }
+        l.tables[1].root = 7.0f / 12.0f;
+        l.finish();
+        return l;
+    }();
+    return list;
+}
+
+/** The key changes on its beat, and a note held across it keeps the key it started in. */
+void aKeyChangeLandsOnItsBeat() {
+    std::printf("a key change lands on its beat\n");
+    StepsNode steps;
+    steps.prepare(kRate);
+    steps.setParam(0, 16.0f);
+    steps.setStep(7, 0, true);
+    steps.setStep(8, 0, true);
+
+    tickAt(steps, 7, 0, &cThenG());
+    check(std::fabs(steps.output(0)[0]) < 0.0001f, "degree 0 before the change is C");
+    tickAt(steps, 8, 0, &cThenG());
+    check(std::fabs(steps.output(0)[0] - 7.0f / 12.0f) < 0.0001f, "and on the change beat is G");
+
+    StepsNode held;
+    held.prepare(kRate);
+    held.setParam(0, 16.0f);
+    held.setStep(7, 0, true);
+    held.setStep(8, 0, false);
+    tickAt(held, 7, 0, &cThenG());
+    tickAt(held, 8, 0, &cThenG());
+    held.setTiming(kBeatsPerFrame, true, &cThenG());
+    held.process(kBlockSize);
+    check(std::fabs(held.output(0)[kBlockSize - 1]) < 0.0001f,
+          "a note held through the change stays in C");
+}
+
 void theIntervalIsChosenByParameter() {
     std::printf("the interval is chosen by parameter\n");
     StepsNode steps;
@@ -528,6 +572,7 @@ int main() {
     aNoteTakesTheScaleOfTheBeatItStartsOn();
     aNoteHeldThroughASwitchKeepsItsPitch();
     aTripletOnTheSwitchBeatTakesTheNewScale();
+    aKeyChangeLandsOnItsBeat();
     mixSumsRatherThanAverages();
     outPassesAudioAtLevel();
     outProtectsTheListener();
