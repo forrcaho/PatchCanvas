@@ -794,7 +794,9 @@ patch is twelve nodes" came from.
 
 ### Notes are events
 
-**A second kind of connection, carrying events rather than samples.** Audio and control
+**Built. Verified on an emulator, and not yet heard on the phone** -- 69 graph checks, 77
+node checks, 171 JVM tests. Everything below the horizontal rule was written before any
+code and has held; what follows the rule is what building it changed. Audio and control
 signals stay exactly as they are, advisory typing included. Notes are typed, because an
 event is not a voltage -- this is where "it is all voltage" stops applying.
 
@@ -854,6 +856,80 @@ note id. Where the voices come from is the open part: a curated synth module wit
 voices built in, as Bespoke does, or a patched voice from Phase 7 stamped out N times --
 SuperCollider's "a note is an instance", with the instances made in advance because the
 audio thread cannot make them. Notes are the first step either way.
+
+---
+
+**What a note carries that the design did not say.** Two fields, both because of decisions
+taken here rather than second thoughts:
+
+- **The whole beat it starts on.** Which scale a note sounds in is decided in integers from
+  a tick's count and never from the transport's floating position -- and only the clocked
+  node that emitted the event knows that count. Resolving it again in the voice would mean
+  asking the transport where it is, in floating point, which is exactly the arithmetic the
+  scale section exists to avoid. So the decision travels with the note.
+- **Which source it came from**, stamped by the graph as it merges. A note input takes
+  several sources and each picks its ids as though it were alone, so two sequencers into
+  one voice collide on every id without it. It is a source's *slot* and not its position
+  in the list, so unpatching one does not renumber the notes another still has sounding.
+  A voice keys what it is playing on the pair, and `notesCut(port, source)` ends exactly
+  one source's notes.
+
+**A note input takes several sources, and merges them.** The open question is answered:
+single source exists to stop signals summing where nobody asked, and merging event streams
+hides nothing -- every note stays itself and arrives when it arrived. Bespoke allows it and
+a voice fed by two sequencers is the obvious patch. The interface follows: a second note
+cable adds rather than replacing, and patching a pair that is already patched removes that
+one cable, which is the only way a finger has to take back one of several. `GraphSync`'s
+rule that a connect supersedes a disconnect is now limited to signal inputs -- on a note
+input nothing was replaced, so the cable that left still has to be said.
+
+**Note ports share the port index space with signal ports.** A cable is a cable to
+everything that routes one, so the command queue, the topological sort, the file format
+and the interface's model needed no second notion of a port. What differs is the buffer
+type, that there is no crossfade, and that the ports are typed: a mask per node says which
+indices carry notes, and the one place a patch is refused for what it carries is
+`Patch.connect`. Refusing leaves the port armed rather than disarming silently -- a tap
+that did nothing and forgot itself would look like a tap that was never seen. **Whether
+that reads as a refusal or as a bug is a judgement for the phone.**
+
+**Voices come from a curated module.** `Voice` is eight voices of oscillator and envelope,
+allocated by note id and source, summed like Mix -- a chord is louder than a note, which is
+true of every instrument. The other candidate, a patched voice from Phase 7 stamped out N
+times, is not ruled out and can coexist; this one can exist now. A note takes a free voice,
+then the oldest already released, and only then steals one still held, softly. The name is
+the collision the naming pass already knows about.
+
+`kMaxParams` is five, because an envelope needs all of A, D, S and R and the waveform is a
+fifth control. Nothing is stored per parameter, so it bounds a command index and nothing
+else; the panel divides its body by the rows it has, so they get shorter rather than
+overlapping. A sequencer is where that runs out, its grid already taking two thirds.
+
+**A test found a bug for once, which is worth recording because the pattern here is the
+opposite.** Every note of a chord starts on the same sample, and a voice was only counted
+as taken once its envelope had processed a sample -- so three notes at one offset all took
+voice zero, each overwriting the last, and a chord sounded like one note. Caught by the
+test asserting three notes sound, before any of it reached a device. The fix is a flag set
+when the voice is claimed rather than a question asked of the envelope.
+
+**What the emulator can and cannot settle.** A Pixel 8 AVD runs the app and opens AAudio in
+*shared* mode with no MMAP, a 960-frame burst and 86-115ms of stream latency -- so it says
+nothing about latency, clicks or xruns, and the reference device remains the only place
+those are real. What it does settle is behaviour. On it:
+
+- The same sequence, said twice: `Steps` into `Osc`/`Env`/`VCA` on the right channel and the
+  same `Steps` into a `Voice` over a note cable on the left. Pitch-tracked from a capture,
+  the two channels agree note for note and onset for onset -- 523, 466, 392, 311, 262 and
+  back -- which is the note path and the CV path reaching the same pitches by entirely
+  different means.
+- Two sequencers merged into one voice, one of them shortened to five steps so they run out
+  of phase: every one of seventeen windows across ten seconds has two independent notes
+  sounding at once, in the degrees the figure is made of.
+- A note output tapped onto a CV input sends no command at all and leaves the port armed.
+- Five parameters reach the engine, so the mirrored constant holds across JNI.
+
+Still to do on the phone: hear it. Also worth knowing, since it cost a confusing minute --
+the emulator runs the app in landscape, and its gesture bar swallows a tap near the bottom
+of the screen, which reads exactly like a tap the app ignored.
 
 ### The transport
 
@@ -970,8 +1046,10 @@ path as notes with a different payload.
   is wider, and a long name now gives way to an ellipsis while which entry is playing
   never does.
 
-Not yet looked at on the device: the sequencer grid reflowing as the list moves between
-scales with different numbers of degrees.
+**The grid does not reflow, and that is the answer.** Looked at on the device while a
+list cycled between scales of different sizes: nothing visibly changes. The grid shows
+the scale being edited rather than the one playing, which settles the question the section
+below left open -- by use, not by argument, which is what it was arranged for.
 
 **Keys change the same way.** A `.scl` file holds degrees and no reference pitch, and
 degree 0 had been middle C, hard-coded, with nothing but per-module transposes to move

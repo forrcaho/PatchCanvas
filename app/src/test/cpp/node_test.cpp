@@ -555,6 +555,254 @@ void outProtectsTheListener() {
 
 } // namespace
 
+// ---------------------------------------------------------------- notes
+
+/** The events one block left behind, for reading what a sequencer said. */
+const NoteBuffer &notesOf(const StepsNode &steps) { return *steps.noteOutput(2); }
+
+void theNotesOutputSaysWhatTheGateSays() {
+    std::printf("the notes output says what the gate says\n");
+    StepsNode steps;
+    steps.prepare(kRate);
+    steps.setStep(0, 5, true);
+
+    tickAt(steps, 0);
+    check(notesOf(steps).count == 1, "one event on the tick");
+    const NoteEvent on = notesOf(steps).events[0];
+    check(on.kind == NoteKind::On, "and it is a note starting");
+    check(on.offset == 0, "on the tick's own sample");
+    check(on.degree == 5, "carrying the step's degree");
+    check(on.beat == 0, "and the beat that decides its scale");
+    check(on.id != 0, "an id an off can be matched against");
+
+    // The gate is open for frames 0-5999 at the default 1/8 and 120bpm, so nothing more
+    // is said until it runs out -- a note is two events, not a stream of them.
+    idle(steps, 186); // through frame 5983
+    check(notesOf(steps).count == 0, "nothing said while the note is held");
+
+    idle(steps, 1); // frames 5984-6015, where the gate runs out
+    check(notesOf(steps).count == 1, "one event as it ends");
+    check(notesOf(steps).events[0].kind == NoteKind::Off, "and it is the note ending");
+    check(notesOf(steps).events[0].id == on.id, "the same note that started");
+
+    // A beat that is not zero, because zero is also what carrying no beat at all would
+    // look like. At the default 1/8 the eighth tick is beat four, worked out in integers
+    // from the count -- which is the whole reason the note carries it rather than the
+    // voice asking the transport where it is.
+    tickAt(steps, 8); // a length of 8 brings this back to step 0, which sounds
+
+    check(notesOf(steps).count == 1, "the ninth eighth starts a note");
+    check(notesOf(steps).events[0].beat == 4, "on beat four, counted rather than measured");
+}
+
+void aRestStartsNothing() {
+    std::printf("a rest starts nothing\n");
+    StepsNode steps;
+    steps.prepare(kRate);
+    steps.setParam(0, 2.0f); // two steps, so the rest comes round quickly
+    steps.setStep(0, 0, true);
+    steps.setStep(1, 0, false);
+
+    tickAt(steps, 0);
+    check(notesOf(steps).count == 1, "the sounding step starts a note");
+    idle(steps, 187); // past the gate, which ends it
+    tickAt(steps, 1);
+    check(notesOf(steps).count == 0, "and the rest says nothing at all");
+}
+
+void aTransposeRidesOnTheNote() {
+    std::printf("a transpose rides on the note\n");
+    StepsNode steps;
+    steps.prepare(kRate);
+    steps.setStep(0, 0, true);
+    steps.setParam(1, 700.0f);
+
+    tickAt(steps, 0);
+    check(notesOf(steps).count == 1, "the note is there");
+    // As cents against the degree rather than folded into it: the degree is a step in a
+    // scale, and 700 cents is not a number of steps in any tuning but one.
+    check(std::fabs(notesOf(steps).events[0].cents - 700.0f) < 0.01f, "and carries the cents");
+    check(notesOf(steps).events[0].degree == 0, "leaving the degree alone");
+}
+
+/** Builds a note on, ready to hand to a voice. */
+NoteEvent noteOn(uint32_t id, int32_t degree, int32_t source = 0, int64_t beat = 0) {
+    NoteEvent event;
+    event.id = id;
+    event.kind = NoteKind::On;
+    event.degree = degree;
+    event.source = static_cast<uint8_t>(source);
+    event.beat = beat;
+    return event;
+}
+
+NoteEvent noteOff(uint32_t id, int32_t source = 0) {
+    NoteEvent event;
+    event.id = id;
+    event.kind = NoteKind::Off;
+    event.source = static_cast<uint8_t>(source);
+    return event;
+}
+
+/** Runs the voice for some blocks with nothing new arriving. */
+std::vector<float> voiceIdle(VoiceNode &voice, int blocks, const ScaleList *scales = nullptr) {
+    static const NoteBuffer empty{};
+    voice.setNoteInput(0, &empty);
+    voice.setTiming(0.0, false, scales);
+    return run(voice, blocks);
+}
+
+/**
+ * What is left after [blocks], rather than everything that happened during them.
+ *
+ * A release starts at full amplitude and ends at nothing, so the peak of a window that
+ * contains the whole of one says only that the note was once loud. The question is always
+ * what is still sounding at the end.
+ *
+ * Sixteen blocks is 512 frames, which is nearly three cycles of middle C. A shorter tail
+ * measures the peak of whatever part of the waveform it happened to land on -- the same
+ * held note read 0.65 and 0.14 four blocks apart.
+ */
+std::vector<float> voiceAfter(VoiceNode &voice, int blocks, const ScaleList *scales = nullptr) {
+    voiceIdle(voice, blocks, scales);
+    return voiceIdle(voice, 16, scales);
+}
+
+void aVoiceSoundsAChordAndLetsItGo() {
+    std::printf("a voice sounds a chord and lets it go\n");
+    VoiceNode voice;
+    voice.prepare(kRate);
+
+    NoteBuffer chord;
+    chord.push(noteOn(1, 0));
+    chord.push(noteOn(2, 4));
+    chord.push(noteOn(3, 7));
+    voice.setNoteInput(0, &chord);
+    voice.setTiming(0.0, false, nullptr);
+    const auto sounding = run(voice, 1);
+    check(peak(sounding) > 0.0f, "three notes down one cable sound");
+
+    // Held, because nothing has said otherwise. A sustain that decayed on its own would
+    // be a sequencer's note length leaking into the voice.
+    check(peak(voiceAfter(voice, 200)) > 0.1f, "and hold until they are told to stop");
+
+    NoteBuffer release;
+    release.push(noteOff(1));
+    release.push(noteOff(2));
+    release.push(noteOff(3));
+    voice.setNoteInput(0, &release);
+    voice.setTiming(0.0, false, nullptr);
+    run(voice, 1);
+    // 2000 blocks is 1.3 seconds. A 0.25s release is a time constant rather than a
+    // duration -- DaisySP's decays towards -0.01 and stops when it crosses zero, which
+    // takes about four of them -- so "past the release" is a second, not a quarter of one.
+    check(peak(voiceAfter(voice, 2000)) < 0.001f, "then the chord ends");
+}
+
+void anIdBelongsToTheSourceThatChoseIt() {
+    std::printf("an id belongs to the source that chose it\n");
+    VoiceNode voice;
+    voice.prepare(kRate);
+
+    // Two sources, both counting from one, which is what every source does: it has no
+    // idea it is one of several.
+    NoteBuffer both;
+    both.push(noteOn(1, 0, 0));
+    both.push(noteOn(1, 7, 1));
+    voice.setNoteInput(0, &both);
+    voice.setTiming(0.0, false, nullptr);
+    run(voice, 1);
+    check(peak(voiceAfter(voice, 100)) > 0.1f, "both sound");
+
+    NoteBuffer one;
+    one.push(noteOff(1, 0));
+    voice.setNoteInput(0, &one);
+    voice.setTiming(0.0, false, nullptr);
+    run(voice, 1);
+    check(peak(voiceAfter(voice, 600)) > 0.1f, "and one source's off leaves the other's note alone");
+
+    NoteBuffer other;
+    other.push(noteOff(1, 1));
+    voice.setNoteInput(0, &other);
+    voice.setTiming(0.0, false, nullptr);
+    run(voice, 1);
+    check(peak(voiceAfter(voice, 2000)) < 0.001f, "while its own off ends it");
+}
+
+void unpatchingASourceEndsItsNotes() {
+    std::printf("unpatching a source ends its notes\n");
+    VoiceNode voice;
+    voice.prepare(kRate);
+
+    NoteBuffer both;
+    both.push(noteOn(1, 0, 0));
+    both.push(noteOn(2, 7, 1));
+    voice.setNoteInput(0, &both);
+    voice.setTiming(0.0, false, nullptr);
+    run(voice, 1);
+
+    // There is no crossfade to make on a note cable, so this is the whole mechanism: the
+    // voice ends what that source started, because nothing else knows it is sounding.
+    voice.notesCut(0, 1);
+    check(peak(voiceAfter(voice, 600)) > 0.1f, "the source still patched plays on");
+    voice.notesCut(0, 0);
+    check(peak(voiceAfter(voice, 2000)) < 0.001f, "and the one that left is silent");
+}
+
+void aVoiceResolvesANoteAgainstItsOwnBeat() {
+    std::printf("a voice resolves a note against its own beat\n");
+    const ScaleList &scales = chromaticThenMajor();
+
+    // The same degree, twice, either side of the switch: degree 2 is two semitones up in
+    // 12-TET and four in major. The beat travels on the event because only the node that
+    // ticked knows it in integers -- the voice never works it out for itself.
+    const float expected[2] = {2.0f / 12.0f, 4.0f / 12.0f};
+    const int64_t beats[2] = {0, 4};
+    for (int i = 0; i < 2; ++i) {
+        VoiceNode voice;
+        voice.prepare(kRate);
+        voice.setParam(0, 3.0f); // a sine, which crosses zero once a cycle and no more
+
+        NoteBuffer note;
+        note.push(noteOn(1, 2, 0, beats[i]));
+        voice.setNoteInput(0, &note);
+        voice.setTiming(0.0, false, &scales);
+        run(voice, 1);
+
+        const auto sounding = voiceIdle(voice, kRate / kBlockSize, &scales); // one second
+        const int cycles = countCycles(sounding);
+        const int wanted = static_cast<int>(kMiddleC * std::exp2(expected[i]) + 0.5f);
+        check(std::abs(cycles - wanted) <= 3,
+              "degree 2 on beat " + std::to_string(beats[i]) + " is " +
+                      std::to_string(wanted) + "Hz, got " + std::to_string(cycles));
+    }
+}
+
+void aNinthNoteStealsAVoice() {
+    std::printf("a ninth note steals a voice\n");
+    VoiceNode voice;
+    voice.prepare(kRate);
+
+    NoteBuffer all;
+    for (uint32_t i = 0; i < VoiceNode::kVoices + 1; ++i) {
+        all.push(noteOn(i + 1, static_cast<int32_t>(i)));
+    }
+    voice.setNoteInput(0, &all);
+    voice.setTiming(0.0, false, nullptr);
+    run(voice, 1);
+    check(peak(voiceAfter(voice, 100)) > 0.1f, "nine notes into eight voices still sounds");
+
+    // The ninth took the first one's voice, so ending the first ends nothing: what is
+    // sounding under that voice is the ninth note now.
+    NoteBuffer off;
+    off.push(noteOff(1));
+    voice.setNoteInput(0, &off);
+    voice.setTiming(0.0, false, nullptr);
+    run(voice, 1);
+    check(peak(voiceAfter(voice, 600)) > 0.1f,
+          "and the note that stole it is not ended by the old one's off");
+}
+
 int main() {
     oscPlaysTheRequestedPitch();
     oscStaysBandLimited();
@@ -576,5 +824,13 @@ int main() {
     mixSumsRatherThanAverages();
     outPassesAudioAtLevel();
     outProtectsTheListener();
+    theNotesOutputSaysWhatTheGateSays();
+    aRestStartsNothing();
+    aTransposeRidesOnTheNote();
+    aVoiceSoundsAChordAndLetsItGo();
+    anIdBelongsToTheSourceThatChoseIt();
+    unpatchingASourceEndsItsNotes();
+    aVoiceResolvesANoteAgainstItsOwnBeat();
+    aNinthNoteStealsAVoice();
     return testing::report("nodes");
 }

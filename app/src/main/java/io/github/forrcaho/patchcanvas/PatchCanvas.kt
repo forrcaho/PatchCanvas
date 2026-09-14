@@ -97,16 +97,25 @@ enum class Edge { LEFT, RIGHT }
 /**
  * What a port carries.
  *
- * Advisory, not enforced: any output may patch to any input. In hardware modular it is
- * all just voltage, and patching audio into a CV input is a technique rather than a
- * mistake -- audio-rate modulation lives there. Blocking it would make this less modular
- * than the thing it is modelled on. The colour says what to expect; the cable decides
- * what happens.
+ * Advisory among the signals, and not enforced: any signal output may patch to any signal
+ * input. In hardware modular it is all just voltage, and patching audio into a CV input
+ * is a technique rather than a mistake -- audio-rate modulation lives there. Blocking it
+ * would make this less modular than the thing it is modelled on. The colour says what to
+ * expect; the cable decides what happens.
+ *
+ * [NOTE] is the exception, and the only one. An event is not a voltage: a note starts and
+ * ends and something has to match the two, where a sample is only ever a number. Patching
+ * a note output into a signal input would be silence with no visible cause, so it is
+ * refused rather than coloured -- see [Patch.connect].
  */
 enum class SignalKind(val cable: Color, val idle: Color) {
     AUDIO(Color(0xFF8A93A3), Color(0xFF6E7684)),
     CV(Color(0xFFB98FE0), Color(0xFF8A6FA8)),
     GATE(Color(0xFFE0A24B), Color(0xFFA8793A)),
+    NOTE(Color(0xFF7FD18A), Color(0xFF5E9A68));
+
+    /** Whether a cable may run from a port of this kind to one of [other]. */
+    fun patchesTo(other: SignalKind): Boolean = (this == NOTE) == (other == NOTE)
 }
 
 data class Port(val name: String, val kind: SignalKind)
@@ -249,6 +258,7 @@ object Types {
     private val A = SignalKind.AUDIO
     private val C = SignalKind.CV
     private val G = SignalKind.GATE
+    private val N = SignalKind.NOTE
 
     private val LIN = ParamCurve.LINEAR
     private val EXP = ParamCurve.EXPONENTIAL
@@ -298,7 +308,7 @@ object Types {
      * mirrors StepsNode::setParam -- length, transpose, interval.
      */
     val Steps = ModuleType(
-        "Steps", emptyList(), listOf(Port("pitch", C), Port("gate", G)),
+        "Steps", emptyList(), listOf(Port("pitch", C), Port("gate", G), Port("notes", N)),
         Color(0xFF6FA8E5),
         params = listOf(
             Param("len", 1f, STEP_COUNT.toFloat(), 8f, "", STEP),
@@ -309,6 +319,27 @@ object Types {
             ),
         ),
         stepCount = STEP_COUNT,
+    )
+    /**
+     * Notes in, sound out, with the voices inside it.
+     *
+     * The name is provisional and known to be the worst of the collisions the roadmap's
+     * naming pass has to settle: "voice" is both this and one of the eight copies within
+     * it. It is still the word a finger at the picker reaches for.
+     */
+    val Voice = ModuleType(
+        "Voice", listOf(Port("notes", N)), listOf(Port("out", A)),
+        Color(0xFF8FD48A),
+        // Order mirrors VoiceNode::setParam. Five, where every other module has at most
+        // four: an envelope needs all of A, D, S and R for a note to have a shape, and
+        // the waveform is the fifth. The panel divides its body by the rows it has.
+        params = listOf(
+            Param("wave", 0f, 3f, 0f, "", STEP, Choice.WAVE),
+            Param("A", 0.001f, 5f, 0.005f, "s", EXP),
+            Param("D", 0.001f, 5f, 0.12f, "s", EXP),
+            Param("S", 0f, 1f, 0.6f, "", LIN),
+            Param("R", 0.001f, 10f, 0.25f, "s", EXP),
+        ),
     )
     val Mix = ModuleType(
         "Mix",
@@ -346,7 +377,7 @@ object Types {
      * inputs as you like, since each input stores its own source. Only summing ever
      * needed a module, and that is Mix.
      */
-    val palette = listOf(Osc, Filter, Env, Vca, Steps, Mix)
+    val palette = listOf(Osc, Filter, Env, Vca, Steps, Voice, Mix)
 
     val byName: Map<String, ModuleType> =
         (palette + listOf(Out, In)).associateBy { it.name }
@@ -909,16 +940,38 @@ class Patch {
     fun portUsable(ref: PortRef): Boolean =
         !(ref.moduleId == IN_ID && !inputEnabled)
 
-    /** Inputs take one source. Re-patching an occupied input replaces the old cable. */
-    fun connect(a: PortRef, b: PortRef) {
+    /**
+     * Patches two ports, and says whether it did.
+     *
+     * A signal input takes one source, so re-patching an occupied one replaces the cable
+     * that was there. A note input takes several and merges them: a voice fed by two
+     * sequencers is the obvious patch, and merging event streams hides nothing -- every
+     * event stays itself and arrives when it arrived, which is not true of two signals
+     * summing into one input. So a second note cable adds rather than replaces, and
+     * patching a pair that is already patched removes that one cable, which is the only
+     * way a finger has to take back one of several.
+     *
+     * Returns false for a patch that cannot be made -- notes to a signal input, or the
+     * reverse -- so the caller can leave the port armed rather than silently dropping the
+     * tap. This is the one place a cable is refused for what it carries.
+     */
+    fun connect(a: PortRef, b: PortRef): Boolean {
         val (out, inp) = when {
             a.dir == PortDirection.OUTPUT && b.dir == PortDirection.INPUT -> a to b
             b.dir == PortDirection.OUTPUT && a.dir == PortDirection.INPUT -> b to a
-            else -> return
+            else -> return false
         }
-        if (out.moduleId == inp.moduleId) return // no self-patching for now
+        if (out.moduleId == inp.moduleId) return false // no self-patching for now
+        if (!kindOf(out).patchesTo(kindOf(inp))) return false
+
+        if (kindOf(inp) == SignalKind.NOTE) {
+            val cable = Connection(out, inp)
+            if (!connections.remove(cable)) connections.add(cable)
+            return true
+        }
         connections.removeAll { it.to == inp }
         connections.add(Connection(out, inp))
+        return true
     }
 
     fun disconnect(ref: PortRef) {
@@ -2880,10 +2933,11 @@ private fun handleTap(
                 patch.disconnect(port)
                 Interaction.Idle
             }
-            port.dir != current.source.dir -> {                    // valid partner
-                patch.connect(current.source, port)
-                Interaction.Idle
-            }
+            port.dir != current.source.dir ->                      // opposite side
+                // Refused rather than made when the two do not patch -- notes and signals
+                // do not. The port stays armed, because a tap that did nothing and
+                // disarmed as well would look like the tap was never seen at all.
+                if (patch.connect(current.source, port)) Interaction.Idle else current
             else -> Interaction.Connecting(port)                   // same side: re-arm
         }
     }
@@ -2897,8 +2951,8 @@ private fun handleTap(
  */
 internal const val MAX_PORTS = 4
 
-/** Mirrors kMaxParams in node.h. A fifth knob would simply never reach the engine. */
-internal const val MAX_PARAMS = 4
+/** Mirrors kMaxParams in node.h. A sixth knob would simply never reach the engine. */
+internal const val MAX_PARAMS = 5
 
 /**
  * Mirrors StepsNode::kSteps in nodes.h. A seventeenth step would be written here, saved

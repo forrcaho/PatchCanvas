@@ -26,6 +26,7 @@ enum class NodeType : int32_t {
     // 8 was Clock, retired when the transport replaced it. Left unused rather than
     // reassigned, so nothing can mistake an old id for a new module.
     Mix = 9,
+    Voice = 10,
 };
 
 /**
@@ -135,7 +136,16 @@ public:
     StepsNode();
 
     int32_t inputCount() const override { return 0; }
-    int32_t outputCount() const override { return 2; } // pitch, gate
+    int32_t outputCount() const override { return 3; } // pitch, gate, notes
+    /**
+     * The same sequence, said twice.
+     *
+     * Pitch and gate stay: they are what an Osc and an Env take, and a patch built before
+     * notes existed is still a patch. The notes output says the same thing as an event,
+     * which is the only one of the two a polyphonic voice can use -- and the only one
+     * that can ever carry a chord, which is where this is going.
+     */
+    uint32_t noteOutputs() const override { return 1u << 2; }
     void process(int32_t frames) override;
     void setParam(int32_t index, float value) override;
     void setStep(int32_t index, int32_t degree, bool gate) override;
@@ -166,11 +176,81 @@ private:
     int32_t intervalIndex_ = kDefaultInterval;
     /** Frames of gate left on the note that last started. Counts only while the transport runs. */
     int64_t gateRemaining_ = 0;
+    /**
+     * The note now sounding on the notes output, or 0 for none.
+     *
+     * Ids are this node's own and start again at 1 whenever it is rebuilt, which is all
+     * they have to be: an Off is matched against the source that sent the On, and the
+     * graph tags every event with which source that was.
+     */
+    uint32_t soundingId_ = 0;
+    uint32_t nextNoteId_ = 1;
     /** Cents. See OscNode::tuneCents_. */
     float transposeCents_ = 0.0f;
     /** Degrees of the patch's scale; which scale is decided when each note starts. */
     int32_t degree_[kSteps] = {};
     bool gate_[kSteps] = {};
+};
+
+/**
+ * Notes in, sound out: a small polyphonic synth with its voices built in.
+ *
+ * This is Bespoke's shape rather than Eurorack's. A Eurorack cable carries one signal, so
+ * polyphony there means building a voice and copying it -- which is where the roadmap's
+ * "a three-voice patch is twelve nodes" came from. Here a chord arrives down one cable
+ * and whatever sounds it allocates the voices, so a chord costs one module.
+ *
+ * The voices are made when the node is, because the audio thread cannot make anything.
+ * Patched voices, stamped out N times, are the other way to do this and are Phase 7's;
+ * the two can coexist, and notes are the first step either way.
+ */
+class VoiceNode : public Node {
+public:
+    /**
+     * Eight. A sixteen-note column would be a chord nobody plays, and every voice costs
+     * an oscillator and an envelope whether it is sounding or not.
+     */
+    static constexpr int32_t kVoices = 8;
+
+    int32_t inputCount() const override { return 1; }  // notes
+    int32_t outputCount() const override { return 1; }
+    uint32_t noteInputs() const override { return 1u << 0; }
+    void prepare(int32_t sampleRate) override;
+    void process(int32_t frames) override;
+    void setParam(int32_t index, float value) override;
+    void notesCut(int32_t port, int32_t source) override;
+
+private:
+    struct Voice {
+        daisysp::Oscillator osc;
+        daisysp::Adsr env;
+        /** Who it belongs to: the id its On carried, and the input slot that sent it. */
+        uint32_t id = 0;
+        int32_t source = -1;
+        bool gate = false;
+        /**
+         * Taken, whether or not it is making a sound yet.
+         *
+         * Separate from the envelope's own idea of running, because that only becomes true
+         * once a sample has been processed -- and every note of a chord starts on the same
+         * sample, before any of them has. Asking the envelope instead handed the whole
+         * chord to voice zero, one note overwriting the next, which sounded exactly like a
+         * monophonic sequencer and was found by a test asserting three notes sound.
+         */
+        bool active = false;
+        /** When it started, for choosing which to steal. */
+        int64_t age = 0;
+    };
+
+    void start(const NoteEvent &event);
+    void release(uint32_t id, int32_t source);
+
+    Voice voices_[kVoices];
+    int64_t age_ = 0;
+    float attack_ = 0.005f;
+    float decay_ = 0.12f;
+    float sustain_ = 0.6f;
+    float release_ = 0.25f;
 };
 
 /** Sums its inputs. Necessary because an input takes exactly one source. */

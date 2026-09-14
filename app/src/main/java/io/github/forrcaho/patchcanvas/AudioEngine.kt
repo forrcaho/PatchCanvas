@@ -55,8 +55,9 @@ object AudioEngine {
     fun connect(srcId: Long, srcPort: Int, dstId: Long, dstPort: Int): Boolean =
         available && started && nativeConnect(srcId, srcPort, dstId, dstPort)
 
-    fun disconnect(dstId: Long, dstPort: Int): Boolean =
-        available && started && nativeDisconnect(dstId, dstPort)
+    /** Both ends, because a note input takes several sources and only one is going. */
+    fun disconnect(srcId: Long, srcPort: Int, dstId: Long, dstPort: Int): Boolean =
+        available && started && nativeDisconnect(srcId, srcPort, dstId, dstPort)
 
     /** A knob moved. Real units, not normalised -- the node owns no mapping. */
     fun setParam(id: Long, index: Int, value: Float): Boolean =
@@ -178,7 +179,9 @@ object AudioEngine {
     private external fun nativeAddNode(id: Long, type: Int): Boolean
     private external fun nativeRemoveNode(id: Long): Boolean
     private external fun nativeConnect(srcId: Long, srcPort: Int, dstId: Long, dstPort: Int): Boolean
-    private external fun nativeDisconnect(dstId: Long, dstPort: Int): Boolean
+    private external fun nativeDisconnect(
+        srcId: Long, srcPort: Int, dstId: Long, dstPort: Int,
+    ): Boolean
     private external fun nativeSetParam(id: Long, index: Int, value: Float): Boolean
     private external fun nativeSetStep(id: Long, index: Int, degree: Int, gate: Boolean): Boolean
     private external fun nativeSetScales(

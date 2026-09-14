@@ -3,13 +3,21 @@
 #include <array>
 #include <cstdint>
 
+#include "notes.h"
 #include "scales.h"
 #include "transport.h"
 
 /** Frames processed per inner block. 96-frame bursts divide by this exactly. */
 constexpr int32_t kBlockSize = 32;
 constexpr int32_t kMaxPorts = 4;
-constexpr int32_t kMaxParams = 4;
+/**
+ * Five, not four, since a polyphonic voice's envelope wants all of A, D, S and R and its
+ * waveform is a fifth control that a panel row can hold. Nothing is stored per parameter,
+ * so this bounds a command's index and nothing else; the panel divides its body by the
+ * number of rows, so the rows get shorter rather than overlapping. A sequencer is where
+ * that runs out, because its grid already takes two thirds of the body.
+ */
+constexpr int32_t kMaxParams = 5;
 
 /**
  * A graph node.
@@ -28,6 +36,17 @@ public:
 
     virtual int32_t inputCount() const = 0;
     virtual int32_t outputCount() const = 0;
+
+    /**
+     * Which ports carry notes rather than samples, one bit per port index.
+     *
+     * Note ports share the index space with signal ports deliberately: a cable is a
+     * cable to everything that routes one, so the command queue, the topological sort
+     * and the interface's own model needed no second notion of a port to learn about.
+     * Only what travels down it differs, and these two masks are where that is said.
+     */
+    virtual uint32_t noteInputs() const { return 0; }
+    virtual uint32_t noteOutputs() const { return 0; }
 
     virtual void prepare(int32_t sampleRate) { sampleRate_ = sampleRate; }
 
@@ -98,14 +117,43 @@ public:
         scales_ = scales;
     }
 
+    /**
+     * A source was unpatched from note input [port], or deleted out from under it.
+     *
+     * Repatching a note cable cannot crossfade: there is no signal to fade between. What
+     * it must do instead is end what it started, or every voice that source was holding
+     * hangs on forever. [source] is the slot the events carried, so only that source's
+     * notes end and anything else merged into the same input plays on.
+     *
+     * Released rather than cut, so a voice ends the way it would have anyway.
+     *
+     * Audio thread, from applyCommands, same rules as setParam.
+     */
+    virtual void notesCut(int32_t port, int32_t source) {
+        (void) port;
+        (void) source;
+    }
+
     virtual void process(int32_t frames) = 0;
 
     void setInput(int32_t port, const float *buffer) { inputs_[port] = buffer; }
     const float *output(int32_t port) const { return outputs_[port].data(); }
 
+    /** Borrowed for the block, like a sample input. Null reads as no events. */
+    void setNoteInput(int32_t port, const NoteBuffer *buffer) { noteInputs_[port] = buffer; }
+    const NoteBuffer *noteOutput(int32_t port) const { return &noteOutputs_[port]; }
+
 protected:
     const float *input(int32_t port) const { return inputs_[port]; }
     float *out(int32_t port) { return outputs_[port].data(); }
+
+    /** The events arriving at a note input this block, already merged and in offset order. */
+    const NoteBuffer &notesIn(int32_t port) const {
+        static const NoteBuffer empty{};
+        return noteInputs_[port] != nullptr ? *noteInputs_[port] : empty;
+    }
+    /** Clear it at the top of process() -- see NoteBuffer. */
+    NoteBuffer &notesOut(int32_t port) { return noteOutputs_[port]; }
 
     int32_t sampleRate_ = 48000;
     /** See setTiming. */
@@ -117,4 +165,6 @@ protected:
 private:
     std::array<const float *, kMaxPorts> inputs_{};
     std::array<std::array<float, kBlockSize>, kMaxPorts> outputs_{};
+    std::array<const NoteBuffer *, kMaxPorts> noteInputs_{};
+    std::array<NoteBuffer, kMaxPorts> noteOutputs_{};
 };

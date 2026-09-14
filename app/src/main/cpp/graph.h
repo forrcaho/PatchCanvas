@@ -64,7 +64,15 @@ public:
     bool postAdd(int64_t id, NodeType type);
     bool postRemove(int64_t id);
     bool postConnect(int64_t srcId, int32_t srcPort, int64_t dstId, int32_t dstPort);
-    bool postDisconnect(int64_t dstId, int32_t dstPort);
+    /**
+     * Drops one cable, named by both ends.
+     *
+     * The source is named because a note input takes several: dropping the port's
+     * sources wholesale would silence the two sequencers you meant to keep. A signal
+     * input has exactly one source, so for those it is checked and nothing more; an
+     * srcId of 0 means every source, whatever the port carries.
+     */
+    bool postDisconnect(int64_t srcId, int32_t srcPort, int64_t dstId, int32_t dstPort);
     bool postSetParam(int64_t id, int32_t paramIndex, float value);
     /** One step of a sequence, as a degree of the patch's scales. */
     bool postSetStep(int64_t id, int32_t index, int32_t degree, bool gate);
@@ -162,12 +170,32 @@ private:
         int32_t rampLength = 1;
     };
 
+    /**
+     * One source of a note input.
+     *
+     * A note input takes several, where a signal input takes one. The reason single
+     * source exists at all is to stop signals summing where nobody asked -- merging two
+     * event streams hides nothing, since every event stays itself and arrives when it
+     * arrived. Bespoke allows it, and a voice fed by two sequencers is the obvious patch.
+     *
+     * Held in fixed slots that are never compacted: an event carries the slot it came
+     * from, so a voice keys what it is sounding by it, and shuffling the list up on a
+     * disconnect would hand one source's slot to another with notes still running in it.
+     */
+    struct NoteSource {
+        int32_t index = -1;
+        int32_t port = 0;
+    };
+    static constexpr int32_t kMaxNoteSources = 4;
+
     struct Record {
         bool used = false;
         int64_t id = 0;
         NodeType type = NodeType::Unknown;
         Node *node = nullptr;
         std::array<InputRef, kMaxPorts> inputs{};
+        /** Only the ports the node declares as note inputs use these. */
+        std::array<std::array<NoteSource, kMaxNoteSources>, kMaxPorts> noteSources{};
         /**
          * Samples left before a removed node is actually handed back.
          *
@@ -180,6 +208,20 @@ private:
 
     /** Points a port at a new source, ramping rather than cutting. */
     void repatch(InputRef &ref, int32_t sourceIndex, int32_t sourcePort);
+    /** Whether port [port] of the node in [slot] carries notes rather than samples. */
+    bool isNoteInput(int32_t slot, int32_t port) const;
+    /** Adds a source to a note input, if it is not already there and there is room. */
+    void addNoteSource(int32_t dst, int32_t port, int32_t src, int32_t srcPort);
+    /**
+     * Drops sources of a note input, and tells the node so it can end their notes.
+     *
+     * [src] of -1 drops every source of the port; otherwise only the ones reading that
+     * node. There is no crossfade to make here -- nothing is fading, the notes simply
+     * have to be ended by whatever is sounding them.
+     */
+    void dropNoteSources(int32_t dst, int32_t port, int32_t src, int32_t srcPort);
+    /** Gathers a note input's sources into one buffer, in offset order, tagged by slot. */
+    const NoteBuffer &mergeNotes(const Record &record, int32_t port);
     /** Frees nodes whose fade-out has run. Audio thread, end of each block. */
     void reapDying(int32_t frames);
 
@@ -227,6 +269,9 @@ private:
     // One per port index, not per node: only one node is processing at a time, so the
     // scratch a ramp renders into can be reused across the whole graph.
     std::array<std::array<float, kBlockSize>, kMaxPorts> ramp_{};
+    // Likewise one per port index: a note input's sources are merged into this and the
+    // node reads it during its own process(), which is the only time it is valid.
+    std::array<NoteBuffer, kMaxPorts> merged_{};
 
     SpscQueue<Command, kCommandCapacity> commands_;
     SpscQueue<Node *, kCommandCapacity> garbage_;

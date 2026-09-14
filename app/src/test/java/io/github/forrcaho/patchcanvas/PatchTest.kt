@@ -37,6 +37,73 @@ class PatchModelTest {
     }
 
     @Test
+    fun `a note input merges its sources rather than replacing them`() {
+        val p = Patch()
+        val a = p.add(Types.Steps, Offset.Zero)!!
+        val b = p.add(Types.Steps, Offset.Zero)!!
+        val voice = p.add(Types.Voice, Offset.Zero)!!
+        val target = PortRef(voice.id, PortDirection.INPUT, 0)
+
+        // Single source exists to stop signals summing where nobody asked for it. Merging
+        // event streams hides nothing -- every note stays itself and arrives when it
+        // arrived -- and a voice fed by two sequencers is the obvious patch.
+        assertTrue(p.connect(PortRef(a.id, PortDirection.OUTPUT, 2), target))
+        assertTrue(p.connect(PortRef(b.id, PortDirection.OUTPUT, 2), target))
+
+        assertEquals(2, p.connections.size)
+        assertEquals(setOf(a.id, b.id), p.connections.map { it.from.moduleId }.toSet())
+    }
+
+    @Test
+    fun `patching a note cable that is already there takes it back`() {
+        val p = Patch()
+        val steps = p.add(Types.Steps, Offset.Zero)!!
+        val voice = p.add(Types.Voice, Offset.Zero)!!
+        val src = PortRef(steps.id, PortDirection.OUTPUT, 2)
+        val target = PortRef(voice.id, PortDirection.INPUT, 0)
+
+        p.connect(src, target)
+        // Nothing replaces a note cable, so this is the only way a finger has to remove
+        // one of several: unpatching the port removes all of them.
+        assertTrue(p.connect(src, target))
+        assertTrue(p.connections.isEmpty())
+    }
+
+    @Test
+    fun `notes and signals do not patch to each other`() {
+        val p = Patch()
+        val steps = p.add(Types.Steps, Offset.Zero)!!
+        val voice = p.add(Types.Voice, Offset.Zero)!!
+        val osc = p.add(Types.Osc, Offset.Zero)!!
+
+        // The one place a cable is refused for what it carries. Signals stay advisory:
+        // an event is not a voltage, and a note cable into an audio input would be
+        // silence with no visible cause.
+        assertFalse(
+            "a pitch CV is not a note",
+            p.connect(PortRef(steps.id, PortDirection.OUTPUT, 0), PortRef(voice.id, PortDirection.INPUT, 0)),
+        )
+        assertFalse(
+            "and neither is audio",
+            p.connect(PortRef(osc.id, PortDirection.OUTPUT, 0), PortRef(voice.id, PortDirection.INPUT, 0)),
+        )
+        assertFalse(
+            "nor do notes go into an audio input",
+            p.connect(PortRef(steps.id, PortDirection.OUTPUT, 2), PortRef(OUT_ID, PortDirection.INPUT, 0)),
+        )
+        assertTrue(p.connections.isEmpty())
+
+        assertTrue(
+            "while the ports that agree still patch",
+            p.connect(PortRef(steps.id, PortDirection.OUTPUT, 2), PortRef(voice.id, PortDirection.INPUT, 0)),
+        )
+        assertTrue(
+            "as do two signals that do not agree, which stays advisory",
+            p.connect(PortRef(steps.id, PortDirection.OUTPUT, 1), PortRef(osc.id, PortDirection.INPUT, 0)),
+        )
+    }
+
+    @Test
     fun `an output may fan out to several inputs`() {
         val p = Patch()
         val osc = p.add(Types.Osc, Offset.Zero)!!

@@ -16,7 +16,8 @@ enum class NodeType(val id: Int) {
     In(6),
     Vca(7),
     // 8 was Clock, retired when the transport replaced it, and deliberately not reused.
-    Mix(9);
+    Mix(9),
+    Voice(10);
 
     companion object {
         fun of(type: ModuleType): NodeType = when (type.name) {
@@ -28,6 +29,7 @@ enum class NodeType(val id: Int) {
             "In" -> In
             "VCA" -> Vca
             "Mix" -> Mix
+            "Voice" -> Voice
             else -> Unknown
         }
     }
@@ -42,7 +44,13 @@ interface GraphCommands {
     fun addNode(id: Long, type: NodeType)
     fun removeNode(id: Long)
     fun connect(srcId: Long, srcPort: Int, dstId: Long, dstPort: Int)
-    fun disconnect(dstId: Long, dstPort: Int)
+    /**
+     * One cable, named at both ends.
+     *
+     * The source is named because a note input takes several of them: a disconnect that
+     * only said which port would take the other sequencer with it.
+     */
+    fun disconnect(srcId: Long, srcPort: Int, dstId: Long, dstPort: Int)
     fun setParam(id: Long, index: Int, value: Float)
     /** One step of a sequence, as a degree: the engine resolves it against the scale list. */
     fun setStep(id: Long, index: Int, degree: Int, gate: Boolean)
@@ -82,9 +90,9 @@ object EngineCommands : GraphCommands {
         AudioEngine.connect(srcId, srcPort, dstId, dstPort)
     }
 
-    override fun disconnect(dstId: Long, dstPort: Int) {
-        trace { "disconnect $dstId[$dstPort]" }
-        AudioEngine.disconnect(dstId, dstPort)
+    override fun disconnect(srcId: Long, srcPort: Int, dstId: Long, dstPort: Int) {
+        trace { "disconnect $srcId[$srcPort] -> $dstId[$dstPort]" }
+        AudioEngine.disconnect(srcId, srcPort, dstId, dstPort)
     }
 
     override fun setParam(id: Long, index: Int, value: Float) {
@@ -150,16 +158,23 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
         val nodes = patch.modules.associate { it.id to NodeType.of(it.type) }
         val cables = patch.connections.toSet()
 
-        val replaced = (cables - syncedCables).map { it.to }.toSet()
+        // Note inputs are excluded: they merge rather than replace, so a new cable into
+        // one supersedes nothing and the cable that left still has to be sent.
+        val replaced = (cables - syncedCables)
+            .map { it.to }
+            .filter { patch.kindOf(it) != SignalKind.NOTE }
+            .toSet()
 
         (syncedCables - cables).forEach {
-            // A connect to the same input supersedes a disconnect, because inputs are
-            // single-source. Sending both makes the engine fade the old source out to
+            // A connect to the same input supersedes a disconnect, because signal inputs
+            // are single-source. Sending both makes the engine fade the old source out to
             // silence and then fade the new one in from silence -- and since they arrive
             // in the same drain, the second fade starts from silence rather than from
             // what was playing, which steps. Letting the connect stand on its own is
             // what makes replacing a cable an actual crossfade.
-            if (it.to !in replaced) commands.disconnect(it.to.moduleId, it.to.index)
+            if (it.to !in replaced) {
+                commands.disconnect(it.from.moduleId, it.from.index, it.to.moduleId, it.to.index)
+            }
         }
 
         (syncedNodes.keys - nodes.keys).forEach { commands.removeNode(it) }

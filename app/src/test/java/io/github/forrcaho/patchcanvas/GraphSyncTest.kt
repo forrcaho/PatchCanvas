@@ -11,7 +11,7 @@ private sealed interface Cmd {
     data class Add(val id: Long, val type: NodeType) : Cmd
     data class Remove(val id: Long) : Cmd
     data class Connect(val src: Long, val srcPort: Int, val dst: Long, val dstPort: Int) : Cmd
-    data class Disconnect(val dst: Long, val dstPort: Int) : Cmd
+    data class Disconnect(val src: Long, val srcPort: Int, val dst: Long, val dstPort: Int) : Cmd
     data class SetParam(val id: Long, val index: Int, val value: Float) : Cmd
     data class SetStep(val id: Long, val index: Int, val degree: Int, val gate: Boolean) : Cmd
     /** Each entry's scale name and its length in beats, which is what the engine gets, and each root. */
@@ -28,7 +28,9 @@ private class Recorder : GraphCommands {
     override fun connect(srcId: Long, srcPort: Int, dstId: Long, dstPort: Int) {
         log += Cmd.Connect(srcId, srcPort, dstId, dstPort)
     }
-    override fun disconnect(dstId: Long, dstPort: Int) { log += Cmd.Disconnect(dstId, dstPort) }
+    override fun disconnect(srcId: Long, srcPort: Int, dstId: Long, dstPort: Int) {
+        log += Cmd.Disconnect(srcId, srcPort, dstId, dstPort)
+    }
     override fun setParam(id: Long, index: Int, value: Float) {
         log += Cmd.SetParam(id, index, value)
     }
@@ -144,7 +146,7 @@ class GraphSyncTest {
         // Letting the connect stand alone is what makes this an actual crossfade.
         assertTrue(
             "a replacement must not disconnect first",
-            rec.log.none { it == Cmd.Disconnect(OUT_ID, 0) },
+            rec.log.none { it is Cmd.Disconnect && it.dst == OUT_ID && it.dstPort == 0 },
         )
         assertTrue(rec.log.contains(Cmd.Connect(b.id, 0, OUT_ID, 0)))
     }
@@ -161,7 +163,9 @@ class GraphSyncTest {
 
         assertTrue(
             "nothing replaced it, so the disconnect must still be sent",
-            rec.log.contains(Cmd.Disconnect(cable.to.moduleId, cable.to.index)),
+            rec.log.contains(
+                Cmd.Disconnect(cable.from.moduleId, cable.from.index, cable.to.moduleId, cable.to.index)
+            ),
         )
     }
 
@@ -246,6 +250,91 @@ class GraphSyncTest {
         sync.sync(patch)
         assertEquals(2, rec.collected)
     }
+
+    // ---------------------------------------------------------------- notes
+
+    /** A sequencer's notes output into a voice, which is the patch this all exists for. */
+    private fun withVoice(): Triple<Patch, PatchModule, PatchModule> {
+        val patch = demoPatch()
+        val steps = patch.free.first { it.type.stepCount > 0 }
+        val voice = patch.add(Types.Voice, Offset.Zero)!!
+        patch.connect(notesOut(steps), notesIn(voice))
+        return Triple(patch, steps, voice)
+    }
+
+    private fun notesOut(module: PatchModule) = PortRef(
+        module.id, PortDirection.OUTPUT,
+        module.type.outputs.indexOfFirst { it.kind == SignalKind.NOTE },
+    )
+
+    private fun notesIn(module: PatchModule) = PortRef(
+        module.id, PortDirection.INPUT,
+        module.type.inputs.indexOfFirst { it.kind == SignalKind.NOTE },
+    )
+
+    @Test
+    fun `a second source on a note input adds rather than replacing`() {
+        val (patch, _, voice) = withVoice()
+        sync.sync(patch)
+        rec.clear()
+
+        val second = patch.add(Types.Steps, Offset.Zero)!!
+        patch.connect(notesOut(second), notesIn(voice))
+        sync.sync(patch)
+
+        // The rule that suppresses a disconnect before a replacement is about signal
+        // inputs, which take one source. A note input merges, so nothing was replaced and
+        // nothing should be dropped.
+        assertTrue(
+            "merging supersedes nothing",
+            rec.log.none { it is Cmd.Disconnect },
+        )
+        assertTrue(rec.log.contains(Cmd.Connect(second.id, 2, voice.id, 0)))
+    }
+
+    @Test
+    fun `swapping one note source for another still drops the one that left`() {
+        val (patch, steps, voice) = withVoice()
+        sync.sync(patch)
+        rec.clear()
+
+        // Both in one sync, which is the case the suppression rule has to get right: for
+        // a signal input the arriving cable replaces the one leaving and the disconnect
+        // would step the crossfade, but a note input merges -- so the cable that left has
+        // to be said, or the engine goes on playing a sequencer nothing is patched to.
+        val second = patch.add(Types.Steps, Offset.Zero)!!
+        patch.connections.removeAll { it.from.moduleId == steps.id && it.to.moduleId == voice.id }
+        patch.connect(notesOut(second), notesIn(voice))
+        sync.sync(patch)
+
+        assertEquals(
+            listOf(Cmd.Disconnect(steps.id, 2, voice.id, 0)),
+            rec.log.filterIsInstance<Cmd.Disconnect>(),
+        )
+        assertTrue(rec.log.contains(Cmd.Connect(second.id, 2, voice.id, 0)))
+    }
+
+    @Test
+    fun `unpatching one of several note sources names the one that went`() {
+        val (patch, steps, voice) = withVoice()
+        val second = patch.add(Types.Steps, Offset.Zero)!!
+        patch.connect(notesOut(second), notesIn(voice))
+        sync.sync(patch)
+        rec.clear()
+
+        patch.connections.removeAll { it.from.moduleId == steps.id && it.to.moduleId == voice.id }
+        sync.sync(patch)
+
+        // Both ends, because the port still has the other sequencer on it: a disconnect
+        // that named only the port would take that one with it.
+        assertEquals(
+            listOf(Cmd.Disconnect(steps.id, 2, voice.id, 0)),
+            rec.log.filterIsInstance<Cmd.Disconnect>(),
+        )
+        assertTrue(
+            "and the source that stayed is not resent",
+            rec.log.none { it is Cmd.Connect },
+        )
 }
 
 /**
@@ -786,4 +875,6 @@ class ScaleLimitTest {
             dir.deleteRecursively()
         }
     }
+    }
+
 }

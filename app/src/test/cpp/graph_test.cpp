@@ -97,7 +97,7 @@ void unpatchingFadesTheSignalNotADcLevel() {
     graph.applyCommands();
     render(graph, 16);
 
-    graph.postDisconnect(2, 0);
+    graph.postDisconnect(1, 0, 2, 0);
     graph.applyCommands();
     const auto tail = render(graph, 48);
 
@@ -127,7 +127,7 @@ void replacingASourceCrossfades() {
 
     // Both orderings, because the UI may coalesce a replacement into a bare connect or
     // may still send the redundant disconnect first.
-    graph.postDisconnect(3, 0);
+    graph.postDisconnect(1, 0, 3, 0);
     graph.postConnect(2, 0, 3, 0);
     graph.applyCommands();
     const auto swapped = render(graph, 64);
@@ -166,7 +166,7 @@ void disconnectingSilencesTheOutput() {
     graph.process(kBlockSize);
     check(energy(graph.outputL(), kBlockSize) > 0.0f, "sounding before the cut");
 
-    graph.postDisconnect(2, 0);
+    graph.postDisconnect(1, 0, 2, 0);
     graph.applyCommands();
     // Silence arrives after the declick ramp, not on the next sample. That delay is the
     // feature; asserting immediate silence would be asserting the click back.
@@ -193,7 +193,7 @@ void patchingDoesNotStep() {
     const float baseline = maxStep(steady);
     check(baseline > 0.0f, "the source actually moves");
 
-    graph.postDisconnect(2, 0);
+    graph.postDisconnect(1, 0, 2, 0);
     graph.applyCommands();
     const auto onDisconnect = render(graph, 64);
 
@@ -630,6 +630,183 @@ void resetStartsOnTheFirstFrameOfBarOne() {
 
 } // namespace
 
+// ---------------------------------------------------------------- notes
+
+/** A sequencer and a voice, patched by their note ports, with the transport running. */
+void aNoteCableSoundsAndOrdersTheGraph() {
+    std::printf("a note cable sounds, and orders the graph\n");
+    Graph graph;
+    graph.setSampleRate(48000);
+
+    // The voice is added first, and so takes a lower slot than the sequencer feeding it.
+    // That is the whole point: with nothing ordering them, the sweep that builds the
+    // evaluation order emits them in slot order and the voice would run first. Adding
+    // them the other way round would pass whether note cables order the graph or not.
+    graph.postAdd(1, NodeType::Voice);
+    graph.postAdd(2, NodeType::Steps);
+    graph.postAdd(3, NodeType::Out);
+    graph.postConnect(2, 2, 1, 0); // notes out -> notes in
+    graph.postConnect(1, 0, 3, 0);
+    graph.postSetTempo(300.0f);
+    graph.applyCommands();
+    graph.setTransportRunning(true);
+
+    // A voice evaluated before its sequencer reads the previous block's events, which on
+    // the very first block are none at all. Sound here means the note cable ordered them.
+    graph.process(kBlockSize);
+    check(energy(graph.outputL(), kBlockSize) > 0.0f, "the first tick is heard in its own block");
+
+    const auto sustained = render(graph, 64);
+    check(energy(sustained.data(), static_cast<int32_t>(sustained.size())) > 0.0f,
+          "and it keeps sounding");
+}
+
+void notesAndSignalsDoNotPatchToEachOther() {
+    std::printf("notes and signals do not patch to each other\n");
+    Graph graph;
+    graph.setSampleRate(48000);
+
+    graph.postAdd(1, NodeType::Steps);
+    graph.postAdd(2, NodeType::Voice);
+    graph.postAdd(3, NodeType::Out);
+    graph.postAdd(4, NodeType::Osc);
+    // Every wrong way round: the sequencer's pitch CV into the voice's note input, an
+    // oscillator into the same, and the note output into the sink's audio input.
+    graph.postConnect(1, 0, 2, 0);
+    graph.postConnect(4, 0, 2, 0);
+    graph.postConnect(1, 2, 3, 0);
+    graph.postConnect(2, 0, 3, 1);
+    graph.postSetTempo(300.0f);
+    graph.applyCommands();
+    graph.setTransportRunning(true);
+
+    // What is asserted is the outcome, not the mechanism: refused or merely ignored, a
+    // signal in a note input makes no sound, because nothing reads a float buffer as
+    // events or the reverse. The engine refuses it anyway, so the boundary says no
+    // explicitly rather than by accident -- and the refusal a finger meets is in
+    // Patch.connect, where it can leave the port armed and say so.
+    const auto rendered = render(graph, 64);
+    check(nearSilent(graph.outputL(), kBlockSize), "a signal in a note input sounds nothing");
+    check(energy(rendered.data(), static_cast<int32_t>(rendered.size())) < 0.03f * 64,
+          "and a note cable carries nothing into an audio input");
+    // The right way round still works on the same graph, so the refusal is about the
+    // kinds and not about the patch having been poisoned.
+    graph.postConnect(1, 2, 2, 0);
+    graph.applyCommands();
+    // Past the next tick. A 1/8 at 300bpm is 4800 frames, and nothing sounds until one:
+    // patching mid-note joins at the next note rather than the one already playing, since
+    // the voice never heard that one start.
+    render(graph, 200);
+    check(energy(graph.outputR(), kBlockSize) > 0.0f, "while the note port itself patches");
+}
+
+void aRemovedSourceEndsTheNotesItStarted() {
+    std::printf("a removed source ends the notes it started\n");
+    Graph graph;
+    graph.setSampleRate(48000);
+
+    graph.postAdd(1, NodeType::Steps);
+    graph.postAdd(2, NodeType::Voice);
+    graph.postAdd(3, NodeType::Out);
+    graph.postConnect(1, 2, 2, 0);
+    graph.postConnect(2, 0, 3, 0);
+    // Whole notes at 60bpm: four seconds a step, so the note under test is still held
+    // rather than having ended on its own while the test was looking away.
+    graph.postSetParam(1, 2, 0.0f);
+    graph.postSetTempo(60.0f);
+    graph.applyCommands();
+    graph.setTransportRunning(true);
+    render(graph, 64);
+    check(energy(graph.outputL(), kBlockSize) > 0.0f, "a note is held");
+
+    graph.postRemove(1);
+    graph.applyCommands();
+    // Past the release and the declick both. There is no crossfade to make here: the
+    // note has to be ended by the voice, because nothing else knows it is sounding.
+    render(graph, 2000);
+    check(nearSilent(graph.outputL(), kBlockSize), "and deleting the sequencer ends it");
+}
+
+void twoSequencersMergeIntoOneVoice() {
+    std::printf("two sequencers merge into one voice\n");
+    Graph graph;
+    graph.setSampleRate(48000);
+
+    graph.postAdd(1, NodeType::Steps);
+    graph.postAdd(2, NodeType::Steps);
+    graph.postAdd(3, NodeType::Voice);
+    graph.postAdd(4, NodeType::Out);
+    graph.postConnect(1, 2, 3, 0);
+    graph.postConnect(2, 2, 3, 0); // the same input: a note input merges rather than replaces
+    graph.postConnect(3, 0, 4, 0);
+    graph.postSetParam(2, 1, 700.0f); // a fifth up, so the two are not the same note
+    graph.postSetTempo(300.0f);       // and fast, so both keep starting notes throughout
+    graph.applyCommands();
+    graph.setTransportRunning(true);
+
+    render(graph, 64);
+    const auto both = render(graph, 256);
+    const float withBoth = energy(both.data(), static_cast<int32_t>(both.size()));
+    check(withBoth > 0.0f, "both sequencers reach the voice");
+
+    // One cable, named at both ends. The other sequencer is patched to the same port and
+    // must play on -- which is the whole reason a disconnect names its source.
+    graph.postDisconnect(1, 2, 3, 0);
+    graph.applyCommands();
+    // Past the releases of everything the unpatched one left sounding, so what is
+    // measured is the other sequencer still starting notes rather than the first one
+    // fading out. A disconnect that took both sources with it reads as silence here.
+    render(graph, 2000);
+    const auto remaining = render(graph, 256);
+    const float withOne = energy(remaining.data(), static_cast<int32_t>(remaining.size()));
+
+    check(withOne > 0.25f * withBoth, "unpatching one leaves the other sounding");
+    check(withOne < withBoth, "and takes only its own notes with it");
+}
+
+void anIdIsOnlyUniqueToItsOwnSource() {
+    std::printf("an id is only unique to its own source\n");
+    Graph graph;
+    graph.setSampleRate(48000);
+
+    // Two sequencers into one voice, both counting their note ids from one: the second
+    // sequencer's first Off must not end the first sequencer's first note. They are set
+    // to different intervals so their events interleave rather than landing together.
+    graph.postAdd(1, NodeType::Steps);
+    graph.postAdd(2, NodeType::Steps);
+    graph.postAdd(3, NodeType::Voice);
+    graph.postAdd(4, NodeType::Out);
+    graph.postConnect(1, 2, 3, 0);
+    graph.postConnect(2, 2, 3, 0);
+    graph.postConnect(3, 0, 4, 0);
+    graph.postSetParam(1, 2, 1.0f); // half notes: one long note held across many short ones
+    graph.postSetParam(2, 2, 5.0f); // 1/32, starting and ending inside it over and over
+    graph.postSetParam(2, 1, 700.0f);
+    // An envelope with no tail, so the short notes really do leave gaps rather than
+    // filling them with a release. Without this the test cannot fail: a 0.25s release is
+    // longer than the gaps it would have to show through.
+    graph.postSetParam(3, 1, 0.001f); // A
+    graph.postSetParam(3, 2, 0.001f); // D
+    graph.postSetParam(3, 3, 1.0f);   // S
+    graph.postSetParam(3, 4, 0.001f); // R
+    graph.postSetTempo(240.0f);
+    graph.applyCommands();
+    graph.setTransportRunning(true);
+
+    // Into the half note, past its first 1/32 companion.
+    render(graph, 100);
+    // Every block from here is inside the long note, and many 1/32 gaps fall in it. If
+    // the short sequencer's Off had ended the long note -- both are counting their ids
+    // from one, and only the source they are tagged with tells them apart -- those gaps
+    // would be silent.
+    bool everSilent = false;
+    for (int i = 0; i < 150; ++i) {
+        graph.process(kBlockSize);
+        if (nearSilent(graph.outputL(), kBlockSize)) everSilent = true;
+    }
+    check(!everSilent, "the long note survives the short one's offs");
+}
+
 int main() {
     signalReachesTheOutputWithinOneBlock();
     patchingDoesNotStep();
@@ -652,6 +829,11 @@ int main() {
     aScaleTableWrapsByPeriod();
     aScaleListSwitchesOnWholeBeatsAndLoops();
     aReplacedScaleListIsHandedBackAndFreed();
+    aNoteCableSoundsAndOrdersTheGraph();
+    notesAndSignalsDoNotPatchToEachOther();
+    aRemovedSourceEndsTheNotesItStarted();
+    twoSequencersMergeIntoOneVoice();
+    anIdIsOnlyUniqueToItsOwnSource();
 
     std::printf("\n%d checks, %d failed\n", checks, failures);
     std::fflush(stdout);

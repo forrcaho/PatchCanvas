@@ -95,8 +95,9 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeConnect(JNIEnv *, jobject,
 
 JNIEXPORT jboolean JNICALL
 Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeDisconnect(JNIEnv *, jobject,
+                                                                 jlong srcId, jint srcPort,
                                                                  jlong dstId, jint dstPort) {
-    return engine().graph().postDisconnect(dstId, dstPort) ? JNI_TRUE : JNI_FALSE;
+    return engine().graph().postDisconnect(srcId, srcPort, dstId, dstPort) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL

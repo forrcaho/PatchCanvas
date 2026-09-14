@@ -211,6 +211,9 @@ constexpr double kGateFraction = 0.5;
 void StepsNode::process(int32_t frames) {
     float *pitch = out(0);
     float *gate = out(1);
+    NoteBuffer &notes = notesOut(2);
+    // Events do not persist the way sample buffers do -- see NoteBuffer.
+    notes.clear();
     int32_t next = 0;
 
     // Resolved per block and at each tick rather than per sample: a note's pitch only
@@ -230,6 +233,18 @@ void StepsNode::process(int32_t frames) {
             // nobody can see and emitting it makes the pitch jump for no visible reason.
             // Holding is also what a sequencer's pitch output does in hardware, where it
             // is a sample-and-hold and a rest simply never clocks it.
+            // Whatever is still sounding ends before anything else starts. At half a step
+            // a note has always run out by the next tick, but a tempo or an interval
+            // changed mid-note can leave one running, and a note with no Off hangs.
+            if (soundingId_ != 0) {
+                NoteEvent off;
+                off.id = soundingId_;
+                off.kind = NoteKind::Off;
+                off.offset = static_cast<uint16_t>(i);
+                notes.push(off);
+                soundingId_ = 0;
+            }
+
             if (gate_[step_]) {
                 voiced_ = step_;
                 // The beat is the boundary's own, worked out from its count in integers,
@@ -237,6 +252,19 @@ void StepsNode::process(int32_t frames) {
                 // it ticked for, so which scale it gets is never decided by rounding.
                 voicedBeat_ = floorDiv(count * step.num, step.den);
                 held = voicedOctaves();
+
+                // The same note the pitch and gate outputs are about to describe, said
+                // once instead of continuously: a degree, the beat that decides its
+                // scale, and the transpose as cents against it.
+                NoteEvent on;
+                on.id = nextNoteId_++;
+                on.kind = NoteKind::On;
+                on.offset = static_cast<uint16_t>(i);
+                on.degree = degree_[voiced_];
+                on.beat = voicedBeat_;
+                on.cents = transposeCents_;
+                on.velocity = 1.0f;
+                if (notes.push(on)) soundingId_ = on.id;
             }
 
             // In frames, worked out at the tick from the tempo it started at. Stopping
@@ -250,7 +278,20 @@ void StepsNode::process(int32_t frames) {
 
         pitch[i] = held + transposeCents_ / 1200.0f;
         gate[i] = (step_ >= 0 && gate_[step_] && gateRemaining_ > 0) ? 1.0f : 0.0f;
-        if (running_ && gateRemaining_ > 0) --gateRemaining_;
+        if (running_ && gateRemaining_ > 0) {
+            --gateRemaining_;
+            // The gate falls on the next sample; the Off goes out on this one. A sample
+            // early rather than a sample late, because late would need an offset past the
+            // end of the block on the frame the gate happens to run out on.
+            if (gateRemaining_ == 0 && soundingId_ != 0) {
+                NoteEvent off;
+                off.id = soundingId_;
+                off.kind = NoteKind::Off;
+                off.offset = static_cast<uint16_t>(i);
+                notes.push(off);
+                soundingId_ = 0;
+            }
+        }
     }
     pendingCount_ = 0;
 }
@@ -269,6 +310,158 @@ void StepsNode::setParam(int32_t index, float value) {
         case 2:
             intervalIndex_ = static_cast<int32_t>(
                     clampf(value, 0.0f, static_cast<float>(kIntervalCount - 1)) + 0.5f);
+            break;
+        default: break;
+    }
+}
+
+// ---------------------------------------------------------------- Voice
+
+void VoiceNode::prepare(int32_t sampleRate) {
+    Node::prepare(sampleRate);
+    for (auto &voice : voices_) {
+        voice.osc.Init(static_cast<float>(sampleRate));
+        voice.osc.SetWaveform(daisysp::Oscillator::WAVE_POLYBLEP_SAW);
+        voice.osc.SetAmp(1.0f);
+        voice.env.Init(static_cast<float>(sampleRate));
+        voice.env.SetAttackTime(attack_);
+        voice.env.SetDecayTime(decay_);
+        voice.env.SetSustainLevel(sustain_);
+        voice.env.SetReleaseTime(release_);
+    }
+}
+
+void VoiceNode::start(const NoteEvent &event) {
+    // A note takes an idle voice, then the oldest one already released, and only then
+    // steals one that is still held. Stealing a held voice restarts an oscillator
+    // mid-cycle, which is a click -- so it is the last resort rather than the rule, and
+    // by the time eight notes are held a ninth was going to cost something regardless.
+    Voice *chosen = nullptr;
+    for (auto &voice : voices_) {
+        if (!voice.active) { chosen = &voice; break; }
+    }
+    if (chosen == nullptr) {
+        for (auto &voice : voices_) {
+            if (voice.gate) continue;
+            if (chosen == nullptr || voice.age < chosen->age) chosen = &voice;
+        }
+    }
+    if (chosen == nullptr) {
+        for (auto &voice : voices_) {
+            if (chosen == nullptr || voice.age < chosen->age) chosen = &voice;
+        }
+    }
+    // Taking a voice that is still held restarts its envelope from where it is, because
+    // the gate never fell and the envelope has no edge to see. Softly: from the level it
+    // reached rather than from zero, which would be a step in the middle of a note.
+    const bool stolen = chosen->active && chosen->gate;
+
+    // Resolved once, here, and never again: a held note keeps the pitch it started on.
+    // Retuning a sounding voice was considered and rejected -- a major third dropping to
+    // a minor third mid-note is a step with no ramp, which is the transient every
+    // crossfade in this engine exists to prevent.
+    //
+    // Against the scale of the beat the note started on, which travelled with it. The
+    // engine still never learns what a semitone is: this is a table lookup and an exp2.
+    const float octaves = scales_ != nullptr
+            ? scales_->tableAt(event.beat).octavesOf(event.degree)
+            : ScaleTable{}.octavesOf(event.degree);
+    chosen->osc.SetFreq(kMiddleC * std::exp2(octaves + event.cents / 1200.0f));
+    chosen->osc.SetAmp(clampf(event.velocity, 0.0f, 1.0f));
+    chosen->id = event.id;
+    chosen->source = event.source;
+    chosen->gate = true;
+    chosen->active = true;
+    chosen->age = age_++;
+    if (stolen) chosen->env.Retrigger(false);
+}
+
+void VoiceNode::release(uint32_t id, int32_t source) {
+    for (auto &voice : voices_) {
+        // Both, because ids belong to the source that chose them: two sequencers patched
+        // to the same input are each counting from one.
+        if (voice.gate && voice.id == id && voice.source == source) voice.gate = false;
+    }
+}
+
+void VoiceNode::notesCut(int32_t port, int32_t source) {
+    (void) port; // one note input, so there is nothing to tell apart
+    for (auto &voice : voices_) {
+        if (voice.source == source) voice.gate = false;
+    }
+}
+
+void VoiceNode::process(int32_t frames) {
+    float *o = out(0);
+    const NoteBuffer &notes = notesIn(0);
+    int32_t next = 0;
+
+    for (int32_t i = 0; i < frames; ++i) {
+        // Events land on their own sample, the way a tick does. Already in offset order,
+        // merged that way by the graph.
+        while (next < notes.count && notes.events[next].offset <= i) {
+            const NoteEvent &event = notes.events[next];
+            if (event.kind == NoteKind::On) start(event);
+            if (event.kind == NoteKind::Off) release(event.id, event.source);
+            // Change is reserved and does nothing yet.
+            ++next;
+        }
+
+        // Summed, not averaged, like Mix: a chord is louder than one note, which is true
+        // of every instrument, and Out's limiter catches what that costs at the top.
+        float sum = 0.0f;
+        for (auto &voice : voices_) {
+            // A free voice is stepped by nothing: an oscillator that is not accumulating
+            // phase is one that starts its next note from zero.
+            if (!voice.active) continue;
+
+            const float amplitude = voice.env.Process(voice.gate);
+            if (!voice.gate && !voice.env.IsRunning()) {
+                // Finished its release, so it is free rather than merely quiet. Said here
+                // rather than by looking at the amplitude, which passes through zero on
+                // its way up as well.
+                voice.active = false;
+                voice.source = -1;
+                voice.id = 0;
+                continue;
+            }
+            sum += voice.osc.Process() * amplitude;
+        }
+        o[i] = sum;
+    }
+}
+
+void VoiceNode::setParam(int32_t index, float value) {
+    switch (index) {
+        case 0: {
+            // Order mirrors kWaves in OscNode::setParam.
+            const auto wave = static_cast<uint8_t>(clampf(value, 0.0f, 3.0f) + 0.5f);
+            static const uint8_t kWaves[4] = {
+                    daisysp::Oscillator::WAVE_POLYBLEP_SAW,
+                    daisysp::Oscillator::WAVE_POLYBLEP_SQUARE,
+                    daisysp::Oscillator::WAVE_POLYBLEP_TRI,
+                    daisysp::Oscillator::WAVE_SIN,
+            };
+            // Every voice, including any sounding: one module is one instrument, and half
+            // a chord changing shape underneath you is not what the control says.
+            for (auto &voice : voices_) voice.osc.SetWaveform(kWaves[wave]);
+            break;
+        }
+        case 1:
+            attack_ = clampf(value, 0.001f, 5.0f);
+            for (auto &voice : voices_) voice.env.SetAttackTime(attack_);
+            break;
+        case 2:
+            decay_ = clampf(value, 0.001f, 5.0f);
+            for (auto &voice : voices_) voice.env.SetDecayTime(decay_);
+            break;
+        case 3:
+            sustain_ = clampf(value, 0.0f, 1.0f);
+            for (auto &voice : voices_) voice.env.SetSustainLevel(sustain_);
+            break;
+        case 4:
+            release_ = clampf(value, 0.001f, 10.0f);
+            for (auto &voice : voices_) voice.env.SetReleaseTime(release_);
             break;
         default: break;
     }
@@ -365,6 +558,7 @@ Node *makeNode(NodeType type) {
         case NodeType::Vca: return new VcaNode();
         case NodeType::Steps: return new StepsNode();
         case NodeType::Mix: return new MixNode();
+        case NodeType::Voice: return new VoiceNode();
         case NodeType::Out: return new OutNode();
         case NodeType::In: return new InNode();
         default: return new NullNode(1, 1);
