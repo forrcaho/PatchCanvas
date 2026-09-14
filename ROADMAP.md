@@ -794,8 +794,8 @@ patch is twelve nodes" came from.
 
 ### Notes are events
 
-**Built. Verified on an emulator, and not yet heard on the phone** -- 69 graph checks, 77
-node checks, 171 JVM tests. Everything below the horizontal rule was written before any
+**Built and verified on the device** -- 69 graph checks, 77 node checks, 171 JVM tests.
+Measured, not heard: nobody has yet listened to it. Everything below the horizontal rule was written before any
 code and has held; what follows the rule is what building it changed. Audio and control
 signals stay exactly as they are, advisory typing included. Notes are typed, because an
 event is not a voltage -- this is where "it is all voltage" stops applying.
@@ -911,25 +911,41 @@ voice zero, each overwriting the last, and a chord sounded like one note. Caught
 test asserting three notes sound, before any of it reached a device. The fix is a flag set
 when the voice is claimed rather than a question asked of the envelope.
 
-**What the emulator can and cannot settle.** A Pixel 8 AVD runs the app and opens AAudio in
-*shared* mode with no MMAP, a 960-frame burst and 86-115ms of stream latency -- so it says
-nothing about latency, clicks or xruns, and the reference device remains the only place
-those are real. What it does settle is behaviour. On it:
+**On the reference device**, against the patch that was already on the phone -- two
+sequencers at 136bpm through a two-entry scale list with a key change in it:
 
-- The same sequence, said twice: `Steps` into `Osc`/`Env`/`VCA` on the right channel and the
-  same `Steps` into a `Voice` over a note cable on the left. Pitch-tracked from a capture,
-  the two channels agree note for note and onset for onset -- 523, 466, 392, 311, 262 and
-  back -- which is the note path and the CV path reaching the same pitches by entirely
-  different means.
-- Two sequencers merged into one voice, one of them shortened to five steps so they run out
-  of phase: every one of seventeen windows across ten seconds has two independent notes
-  sounding at once, in the degrees the figure is made of.
-- A note output tapped onto a CV input sends no command at all and leaves the port armed.
-- Five parameters reach the engine, so the mirrored constant holds across JNI.
+- **The same sequence, said twice.** One `Steps` into an `Osc` on the left channel and the
+  same `Steps` into a `Voice` over a note cable on the right. Of 37 windows sampled across
+  ten seconds, 30 agree to *exactly* 0.0 cents. The other seven are the measurement rather
+  than the signal: five are the autocorrelation locking an octave down, one is a window
+  straddling a note boundary, one a rest -- which the two paths render differently on
+  purpose, since a rest holds the pitch on a CV output and starts no note at all on a note
+  output.
+- **The key change lands on the note path too.** The capture happens to contain a switch:
+  everything before 3.7s is the same figure exactly 500 cents below what follows, which is
+  the second entry's root. The two paths agree across it, so the beat carried on the event
+  picks the same table entry as the sequencer's own arithmetic.
+- **No clicks.** With the voice on a sine, where every step is a real discontinuity rather
+  than a waveform's own edge, `find_clicks.py` reports **zero** over ten seconds of notes
+  starting, ending and stealing voices. With two sequencers merged it reports one, at a
+  sample on no boundary at all -- and the samples either side are a clean sine through its
+  steepest point, flagged only because a note had just raised the amplitude past a
+  threshold derived from the quieter passage.
+- **Polyphony, on hardware.** Two merged sequencers at different intervals and lengths, into
+  one voice: up to four notes at once, and two or more in eighteen of nineteen windows.
+- Exclusive MMAP throughout, 96-frame burst, 4.1-5.7ms, **0 xruns** with the voice running.
+- The five-row panel fits, and the first row's label clears its buttons -- by one pixel at
+  this density, which is tight enough to be worth knowing before a sixth row is considered.
 
-Still to do on the phone: hear it. Also worth knowing, since it cost a confusing minute --
-the emulator runs the app in landscape, and its gesture bar swallows a tap near the bottom
-of the screen, which reads exactly like a tap the app ignored.
+**Not done: hearing it.** Everything above is measured from captures and screenshots. The
+defects that have mattered in this project were all found by a person playing it, and
+nobody has played this yet.
+
+An emulator settles the rest cheaply. A Pixel 8 AVD opens AAudio *shared* with no MMAP, a
+960-frame burst and 86-115ms, so it says nothing about latency, clicks or timing -- but it
+runs the app, and the same two captures on it agreed the same way. Worth knowing, since it
+cost a confusing minute: it runs landscape, and its gesture bar swallows a tap near the
+bottom of the screen, which reads exactly like a tap the app ignored.
 
 ### The transport
 
