@@ -1408,6 +1408,32 @@ and `Add` clearing parameter routes, which `retire()` and `record = Record{}` al
 and which stay as the same belt and braces the signal inputs have; and a straight-line fade in
 place of smoothstep, which windowed peaks cannot tell apart.
 
+**The gesture, built the same night and checked on the emulator, not the phone.** 204 JVM
+tests; the seven new ones pin the panel's geometry at the reference device's measurements. On
+the Pixel 8 AVD, with a patch written for the purpose: the band drew with its fixed slots -- a
+`Voice`'s attack mid-way along the first row and its release along the second with an empty
+row between, a `Filter`'s `cut` and `res` side by side, and `cut` unmoved when `res` appeared
+beside it. The `[ ]` chip exposed resonance at a fifth of its travel either side of the knob.
+Dragging cutoff's `]` sent only the high end, frame by frame and geometrically, and the knob
+under it never moved. An audio output tapped onto a parameter's jack sent nothing and stayed
+armed; an LFO sent one `modulate`; undo sent one `unmodulate` and left the parameter exposed.
+Every range reached the engine before any cable that used it, which is the one path no JVM
+test can reach.
+
+**What the gesture decided.** The chip sits in the panel's right gutter, level with its row's
+control, so it costs the bar no travel and stays clear of the output jacks' labels. A bracket
+within 22dp of the finger is taken before the knob is, so a drag that starts on `[` moves the
+range and not the knob. On a row of buttons the brackets go around the options rather than
+through them, so a range of a single option still shows two. On the open panel the jacks are
+spread along its bottom edge in row order and labelled *below* the edge -- a panel of four or
+five rows fills its body, and above the edge would be on the last bar. A cable into a
+parameter's jack arrives from below, rather than crossing the module it feeds.
+
+**Not done.** Not on the phone and not heard: the emulator runs shared AAudio at a 960-frame
+burst, which says nothing about how a sweep sounds. The chip's `[ ]` renders with its space
+squeezed to `[]`. The rails expose nothing -- a rail has no bottom edge to spare, and nothing
+has yet wanted the output level modulated.
+
 ### Choosing from a library
 
 A flat grid of 5 columns by 6 rows is about 404x279dp on the reference device -- a

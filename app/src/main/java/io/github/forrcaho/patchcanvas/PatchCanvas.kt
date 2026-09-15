@@ -572,6 +572,12 @@ class PatchModule(
         const val PANEL_CHOICE = 34f
         const val GRID_ROW = 26f
         const val PANEL_STUB = 26f
+        /** The [ ] chip beside each row of an open panel, and its distance from the row. */
+        const val PANEL_MOD_CHIP_W = 40f
+        const val PANEL_MOD_CHIP_H = 30f
+        const val PANEL_MOD_GAP = 14f
+        /** How far either side of a bracket a finger still takes hold of it: a 44dp target. */
+        const val BRACKET_REACH = 22f
 
         /**
          * The ports' share of the box. Height follows port count at a fixed pitch rather
@@ -720,6 +726,89 @@ internal fun panelRow(panel: Rect, d: Float, type: ModuleType, index: Int): Rect
     val block = rowHeight * count
     val top = area.top + (area.height - block) / 2f + slot * rowHeight
     return Rect(panel.left + side, top, panel.right - side, top + rowHeight)
+}
+
+/**
+ * The [ ] chip that gives a row's parameter a jack, in the panel's right-hand gutter.
+ *
+ * In the gutter rather than on the row, so it costs the bar none of its travel; and at the
+ * gutter's inner edge, clear of the output jacks' labels on the panel's outer one. Level with
+ * the row's control rather than its label, since that is what it is about.
+ */
+internal fun panelModChip(panel: Rect, d: Float, type: ModuleType, index: Int): Rect {
+    val row = panelRow(panel, d, type, index)
+    val height = minOf(PatchModule.PANEL_MOD_CHIP_H * d, row.height - 4f * d)
+    val centre = minOf(row.bottom - 20f * d, row.bottom - height / 2f - 2f * d)
+    return Rect(
+        Offset(row.right + PatchModule.PANEL_MOD_GAP * d, centre - height / 2f),
+        Size(PatchModule.PANEL_MOD_CHIP_W * d, height),
+    )
+}
+
+/**
+ * Where an exposed parameter's jack sits on the open panel: its bottom edge, spread in the
+ * order of the rows, as the same jacks are spread along a closed module's bottom band.
+ */
+internal fun panelModPort(panel: Rect, d: Float, type: ModuleType, index: Int): Offset {
+    val side = PatchModule.PANEL_SIDE * d
+    val slots = maxOf(type.rowParams.size, 1)
+    val slot = PatchModule.modSlot(type, index).coerceAtLeast(0)
+    val span = panel.width - 2f * side
+    return Offset(panel.left + side + (slot + 0.5f) * span / slots, panel.bottom)
+}
+
+/**
+ * Where option [i] of a stepped row's buttons is drawn. Shared by the buttons and by the
+ * brackets that sit around them, so the two cannot disagree about where an option is.
+ */
+internal fun choiceBox(row: Rect, d: Float, param: Param, i: Int): Rect {
+    val n = param.steps
+    val gap = 5f * d
+    val height = PatchModule.PANEL_CHOICE * d
+    val width = (row.width - gap * (n - 1)) / n
+    val top = row.bottom - height - 6f * d
+    return Rect(Offset(row.left + i * (width + gap), top), Size(width, height))
+}
+
+/**
+ * Where a bracket sits on a row: `[` at the low end, `]` at the high.
+ *
+ * On a bar, exactly at the value. On a row of buttons, around them -- `[` against the left
+ * of the low option and `]` against the right of the high one -- so a range of a single
+ * option still reads as a range, not as two marks drawn over each other.
+ */
+internal fun panelBracketX(row: Rect, d: Float, param: Param, value: Float, closing: Boolean): Float =
+    if (param.curve == ParamCurve.STEPPED) {
+        val box = choiceBox(row, d, param, param.indexOf(value))
+        if (closing) box.right else box.left
+    } else {
+        row.left + row.width * param.positionOf(value)
+    }
+
+/**
+ * Which bracket of an exposed row is under [at]: false for the low `[`, true for the high
+ * `]`, null for neither. Where the two coincide, the side of it the finger landed on decides.
+ */
+internal fun panelBracketAt(panel: Rect, d: Float, module: PatchModule, index: Int, at: Offset): Boolean? {
+    val range = module.modRanges[index] ?: return null
+    val row = panelRow(panel, d, module.type, index)
+    if (!row.inflate(6f * d).contains(at)) return null
+    val param = module.type.params[index]
+    val low = panelBracketX(row, d, param, range.low, closing = false)
+    val high = panelBracketX(row, d, param, range.high, closing = true)
+    val toLow = kotlin.math.abs(at.x - low)
+    val toHigh = kotlin.math.abs(at.x - high)
+    if (minOf(toLow, toHigh) > PatchModule.BRACKET_REACH * d) return null
+    return if (toLow == toHigh) at.x > high else toHigh < toLow
+}
+
+/** Moves one end of a parameter's range to the knob value under [screenX]. */
+internal fun Patch.moveBracket(
+    module: PatchModule, panel: Rect, d: Float, index: Int, closing: Boolean, screenX: Float,
+) {
+    val range = module.modRanges[index] ?: return
+    val value = module.type.params[index].valueAt(panelKnobPosition(panel, d, screenX))
+    expose(module, index, if (closing) range.copy(high = value) else range.copy(low = value))
 }
 
 internal fun panelKnobAt(panel: Rect, d: Float, module: PatchModule, at: Offset): Int? {
@@ -1802,8 +1891,33 @@ fun PatchCanvas(
                             intervalMenu = true
                             return@awaitEachGesture
                         }
-                        val knob =
+                        // The [ ] chips come before the rows beside them. Only the chip itself
+                        // counts, so a near miss on a knob never gives anything a jack.
+                        val chipFor = if (onHistory) null else open.type.rowParams.firstOrNull {
+                            open.canExpose(it) &&
+                                panelModChip(panel, frame.density, open.type, it).contains(down.position)
+                        }
+                        if (chipFor != null) {
+                            waitForUpRelease()
+                            if (chipFor in open.modRanges) {
+                                patch.unexpose(open, chipFor)
+                            } else {
+                                val param = open.type.params[chipFor]
+                                patch.expose(open, chipFor, initialModRange(param, open.params[chipFor]))
+                            }
+                            return@awaitEachGesture
+                        }
+
+                        // A bracket before the knob it sits on: dragging `[` or `]` moves that
+                        // end of the range, and leaves the knob where it is.
+                        val bracket: Pair<Int, Boolean>? =
                             if (onHistory) null
+                            else open.modRanges.keys.firstNotNullOfOrNull { index ->
+                                panelBracketAt(panel, frame.density, open, index, down.position)
+                                    ?.let { index to it }
+                            }
+                        val knob =
+                            if (onHistory || bracket != null) null
                             else panelKnobAt(panel, frame.density, open, down.position)
                         val cell =
                             if (onHistory || knob != null) null
@@ -1829,7 +1943,12 @@ fun PatchCanvas(
                             if ((change.position - down.position).getDistance() > slop) {
                                 moved = true
                             }
-                            if (knob != null) {
+                            if (bracket != null) {
+                                patch.moveBracket(
+                                    open, panel, frame.density, bracket.first, bracket.second,
+                                    change.position.x,
+                                )
+                            } else if (knob != null) {
                                 val param = open.type.params[knob]
                                 open.setParam(
                                     knob,
@@ -1849,6 +1968,11 @@ fun PatchCanvas(
                         if (!moved) {
                             if (onHistory) {
                                 controls.tapHistory(frame, down.position)
+                            } else if (bracket != null) {
+                                patch.moveBracket(
+                                    open, panel, frame.density, bracket.first, bracket.second,
+                                    down.position.x,
+                                )
                             } else if (knob != null) {
                                 // A tap on a knob jumps there, which is faster than
                                 // dragging when you already know where you want it.
@@ -2032,6 +2156,7 @@ fun PatchCanvas(
                 a, b,
                 patch.kindOf(conn.from).cable.copy(alpha = if (dim) 0.3f else 1f),
                 2.5f * d,
+                intoBottom = conn.to.dir == PortDirection.MOD,
             )
         }
 
@@ -2211,6 +2336,16 @@ private fun Patch.hitPort(
                     bestDist = dist
                     best = ref
                 }
+            }
+        }
+        // The bottom band's jacks, which ports() does not list -- see PortDirection.MOD.
+        module.modRanges.keys.forEach { index ->
+            val ref = PortRef(module.id, PortDirection.MOD, index)
+            val at = portScreen(this, ref, camera, frame) ?: return@forEach
+            val dist = (at - screen).getDistance()
+            if (dist <= limit && dist < bestDist) {
+                bestDist = dist
+                best = ref
             }
         }
     }
@@ -2434,14 +2569,10 @@ private fun DrawScope.drawChoices(
 ) {
     val n = param.steps
     val selected = param.indexOf(value)
-    val gap = 5f * d
-    val height = PatchModule.PANEL_CHOICE * d
-    val width = (row.width - gap * (n - 1)) / n
-    val top = row.bottom - height - 6f * d
     val radius = CornerRadius(8f * d, 8f * d)
 
     repeat(n) { i ->
-        val box = Rect(Offset(row.left + i * (width + gap), top), Size(width, height))
+        val box = choiceBox(row, d, param, i)
         val on = i == selected
         drawRoundRect(
             color = if (on) accent else Color(0xFF12151A),
@@ -3327,11 +3458,26 @@ private val MenuLabelStyle = TextStyle(
     color = Color(0xFFE4E7EC),
 )
 
-private fun DrawScope.drawCable(a: Offset, b: Offset, color: Color, width: Float) {
+private fun DrawScope.drawCable(
+    a: Offset,
+    b: Offset,
+    color: Color,
+    width: Float,
+    /**
+     * A parameter's jack is on the module's bottom edge, so its cable comes up into it from
+     * below. Arriving from the left like any other would draw it across the module it feeds.
+     */
+    intoBottom: Boolean = false,
+) {
     val slack = ((b.x - a.x) * 0.5f).coerceAtLeast(28f)
     val path = Path().apply {
         moveTo(a.x, a.y)
-        cubicTo(a.x + slack, a.y, b.x - slack, b.y, b.x, b.y)
+        if (intoBottom) {
+            val rise = (kotlin.math.abs(b.y - a.y) * 0.5f).coerceAtLeast(48f)
+            cubicTo(a.x + slack, a.y, b.x, b.y + rise, b.x, b.y)
+        } else {
+            cubicTo(a.x + slack, a.y, b.x - slack, b.y, b.x, b.y)
+        }
     }
     drawPath(path, color, style = Stroke(width = width))
 }
@@ -3407,6 +3553,66 @@ private fun DrawScope.drawModuleBox(
             }
         }
     }
+
+    // The bottom band: a jack for each exposed parameter, its short name above it, under a
+    // hairline that says the band is part of this module rather than a module below it.
+    if (module.modRanges.isNotEmpty() && !module.isPinned) {
+        val bandTop = rect.top + (PatchModule.HEADER + module.portsBody) * unit
+        drawLine(
+            color = module.type.accent.copy(alpha = 0.3f * alpha),
+            start = Offset(rect.left + PatchModule.CORNER * unit, bandTop),
+            end = Offset(rect.right - PatchModule.CORNER * unit, bandTop),
+            strokeWidth = strokeWidth,
+        )
+        module.modRanges.keys.sorted().forEach { index ->
+            val ref = PortRef(module.id, PortDirection.MOD, index)
+            val at = modPortIn(rect, unit, module.type, index, module.portsBody * unit)
+            val lit = ref == armed
+            drawCircle(
+                color = (if (lit) module.type.accent else SignalKind.CV.idle).copy(alpha = alpha),
+                radius = (if (lit) PatchModule.PORT_RADIUS_ARMED else PatchModule.PORT_RADIUS) * unit,
+                center = at,
+            )
+            if (showLabels) {
+                val label = measurer.measure(module.type.params[index].short, PortLabelStyle)
+                drawText(
+                    label,
+                    alpha = alpha,
+                    topLeft = Offset(
+                        at.x - label.size.width / 2f,
+                        at.y - (PatchModule.PORT_RADIUS_ARMED + 2f) * unit - label.size.height,
+                    ),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The colour of modulation: CV's, which is what modulation is until it has a kind of its
+ * own, and the colour the design keeps for it when CV retires.
+ */
+private val ModulationColor = SignalKind.CV.cable
+
+/**
+ * The two ends of a modulation range, drawn as the glyphs that name them: `[` at the low end
+ * and `]` at the high, from [top] to [bottom]. Taller than the bar, so a finger can find them.
+ */
+private fun DrawScope.drawBrackets(
+    row: Rect, d: Float, param: Param, range: ModRange, top: Float, bottom: Float,
+) {
+    val serif = 6f * d
+    for (closing in listOf(false, true)) {
+        val x = panelBracketX(row, d, param, if (closing) range.high else range.low, closing)
+        val inward = if (closing) -serif else serif
+        val path = Path().apply {
+            moveTo(x + inward, top)
+            lineTo(x, top)
+            lineTo(x, bottom)
+            lineTo(x + inward, bottom)
+        }
+        drawPath(path, ModulationColor, style = Stroke(width = 2.5f * d))
+    }
 }
 
 /**
@@ -3478,6 +3684,30 @@ private fun DrawScope.drawPanel(
         }
     }
 
+    // A jack for each exposed parameter on the bottom edge, in the order of the rows, with a
+    // stub down past the edge when patched. Labelled below the edge rather than above it:
+    // a panel with four or five rows fills its body, and above would be on the last bar.
+    module.modRanges.keys.sorted().forEach { index ->
+        val ref = PortRef(module.id, PortDirection.MOD, index)
+        val at = panelModPort(panel, d, module.type, index)
+        val patched = patch.connections.any { it.to == ref }
+        if (patched) {
+            drawLine(
+                color = ModulationColor,
+                start = at,
+                end = Offset(at.x, at.y + PatchModule.PANEL_STUB * d),
+                strokeWidth = 3f * d,
+            )
+        }
+        drawCircle(
+            color = if (patched) ModulationColor else SignalKind.CV.idle,
+            radius = (if (patched) 8f else 6f) * d,
+            center = at,
+        )
+        val label = measurer.measure(module.type.params[index].short, PortLabelStyle)
+        drawText(label, topLeft = Offset(at.x + 12f * d, at.y + 4f * d))
+    }
+
     val intervalParam = module.type.intervalParam
     val chosenInterval = if (intervalParam < 0) -1
         else module.params.getOrElse(intervalParam) { DEFAULT_INTERVAL.toFloat() }.roundToInt()
@@ -3510,6 +3740,10 @@ private fun DrawScope.drawPanel(
         val param = module.type.params[index]
         val row = panelRow(panel, d, module.type, index)
         val value = module.params.getOrElse(index) { param.default }
+        val range = module.modRanges[index]
+        if (module.canExpose(index)) {
+            drawChip(panelModChip(panel, d, module.type, index), d, "[ ]", range != null, ModulationColor, measurer)
+        }
 
         val name = measurer.measure(param.name, PanelParamStyle)
         drawText(name, topLeft = Offset(row.left, row.top + 4f * d))
@@ -3526,6 +3760,10 @@ private fun DrawScope.drawPanel(
 
         if (param.curve == ParamCurve.STEPPED) {
             drawChoices(row, d, param, value, module.type.accent, measurer)
+            if (range != null) {
+                val box = choiceBox(row, d, param, 0)
+                drawBrackets(row, d, param, range, box.top - 4f * d, box.bottom + 4f * d)
+            }
             return@forEach
         }
 
@@ -3549,6 +3787,19 @@ private fun DrawScope.drawPanel(
 
         if (param.marks) {
             drawScaleMarks(row, barTop, barHeight, d, param, scale)
+        }
+
+        // The range, over the fill, and its brackets rising above the bar rather than below
+        // it -- below a cents bar is where the scale's marks are.
+        if (range != null) {
+            val lowX = panelBracketX(row, d, param, range.low, closing = false)
+            val highX = panelBracketX(row, d, param, range.high, closing = true)
+            drawRect(
+                color = ModulationColor.copy(alpha = 0.4f),
+                topLeft = Offset(minOf(lowX, highX), barTop),
+                size = Size(kotlin.math.abs(highX - lowX), barHeight),
+            )
+            drawBrackets(row, d, param, range, barTop - 8f * d, barTop + barHeight + 2f * d)
         }
     }
 }

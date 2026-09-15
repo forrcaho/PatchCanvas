@@ -50,7 +50,7 @@ crosses as POD commands through a lock-free SPSC queue (`spsc_queue.h`).
 **`GraphSync` diffs rather than hooks.** It compares a shadow of what the engine has
 against the current `Patch` and emits the difference, so one path handles an edit, a file
 loaded at launch, and eventually an undo. It is driven by a `snapshotFlow` in
-`MainActivity` reading *ids, type names, cables and parameters* — deliberately not
+`MainActivity` reading *ids, type names, cables, parameters and modulation ranges* — deliberately not
 positions. **Anything the engine cares about must be read there or it will never be
 sent**; parameters were added to the model without being added to that flow, and the whole
 feature was silently inert.
