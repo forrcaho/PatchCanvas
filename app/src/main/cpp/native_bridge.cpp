@@ -108,6 +108,30 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetParam(JNIEnv *, jobject
 }
 
 JNIEXPORT jboolean JNICALL
+Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetModRange(JNIEnv *, jobject,
+                                                                  jlong id, jint index,
+                                                                  jfloat low, jfloat high,
+                                                                  jboolean exponential) {
+    return engine().graph().postSetModRange(id, index, low, high, exponential == JNI_TRUE)
+                   ? JNI_TRUE
+                   : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeConnectMod(JNIEnv *, jobject,
+                                                                 jlong srcId, jint srcPort,
+                                                                 jlong dstId, jint index) {
+    return engine().graph().postConnectMod(srcId, srcPort, dstId, index) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeDisconnectMod(JNIEnv *, jobject,
+                                                                    jlong srcId, jint srcPort,
+                                                                    jlong dstId, jint index) {
+    return engine().graph().postDisconnectMod(srcId, srcPort, dstId, index) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
 Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetStep(JNIEnv *, jobject,
                                                               jlong id, jint index,
                                                               jint degree, jboolean gate) {

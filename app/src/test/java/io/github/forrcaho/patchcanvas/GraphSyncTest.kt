@@ -17,6 +17,11 @@ private sealed interface Cmd {
     /** Each entry's scale name and its length in beats, which is what the engine gets, and each root. */
     data class SetScales(val entries: List<Pair<String, Int>>, val roots: List<Float>) : Cmd
     data class SetTempo(val bpm: Float) : Cmd
+    data class SetModRange(
+        val id: Long, val index: Int, val low: Float, val high: Float, val exponential: Boolean,
+    ) : Cmd
+    data class ConnectMod(val src: Long, val srcPort: Int, val dst: Long, val index: Int) : Cmd
+    data class DisconnectMod(val src: Long, val srcPort: Int, val dst: Long, val index: Int) : Cmd
 }
 
 private class Recorder : GraphCommands {
@@ -44,6 +49,15 @@ private class Recorder : GraphCommands {
         )
     }
     override fun setTempo(bpm: Float) { log += Cmd.SetTempo(bpm) }
+    override fun setModRange(id: Long, index: Int, low: Float, high: Float, exponential: Boolean) {
+        log += Cmd.SetModRange(id, index, low, high, exponential)
+    }
+    override fun connectMod(srcId: Long, srcPort: Int, dstId: Long, index: Int) {
+        log += Cmd.ConnectMod(srcId, srcPort, dstId, index)
+    }
+    override fun disconnectMod(srcId: Long, srcPort: Int, dstId: Long, index: Int) {
+        log += Cmd.DisconnectMod(srcId, srcPort, dstId, index)
+    }
     override fun collectGarbage() { collected++ }
 
     fun clear() { log.clear() }
@@ -877,4 +891,110 @@ class ScaleLimitTest {
     }
     }
 
+}
+
+/** An exposed parameter, as the engine hears about it: its range, and cables landing on it. */
+class ModulationSyncTest {
+
+    private val rec = Recorder()
+    private val sync = GraphSync(rec)
+
+    private fun setup(): Triple<Patch, PatchModule, PatchModule> {
+        val patch = Patch()
+        val filter = patch.add(Types.Filter, Offset.Zero)!!
+        val lfo = patch.add(Types.Lfo, Offset.Zero)!!
+        return Triple(patch, filter, lfo)
+    }
+
+    private fun mod(m: PatchModule, index: Int) = PortRef(m.id, PortDirection.MOD, index)
+    private fun out(m: PatchModule) = PortRef(m.id, PortDirection.OUTPUT, 0)
+
+    private fun modCables() = rec.log.filter { it is Cmd.ConnectMod || it is Cmd.DisconnectMod }
+
+    @Test
+    fun `a range is sent before the cable that uses it`() {
+        val (patch, filter, lfo) = setup()
+        sync.sync(patch)
+        rec.clear()
+
+        patch.expose(filter, 0, ModRange(400f, 2000f))
+        patch.connect(out(lfo), mod(filter, 0))
+        sync.sync(patch)
+
+        val range = rec.log.indexOf(Cmd.SetModRange(filter.id, 0, 400f, 2000f, true))
+        val cable = rec.log.indexOf(Cmd.ConnectMod(lfo.id, 0, filter.id, 0))
+        assertTrue("the range is sent", range >= 0)
+        assertTrue("and the cable after it", cable > range)
+        assertTrue("never as a port connect", rec.log.none { it is Cmd.Connect })
+    }
+
+    @Test
+    fun `a sweep is geometric exactly where the knob is`() {
+        val (patch, filter, _) = setup()
+        patch.expose(filter, 0, ModRange(400f, 2000f)) // cutoff: exponential
+        patch.expose(filter, 1, ModRange(0.1f, 0.9f))  // resonance: linear
+        sync.sync(patch)
+        assertTrue(Cmd.SetModRange(filter.id, 0, 400f, 2000f, true) in rec.log)
+        assertTrue(Cmd.SetModRange(filter.id, 1, 0.1f, 0.9f, false) in rec.log)
+    }
+
+    @Test
+    fun `an unchanged range is not resent, and a moved bracket is`() {
+        val (patch, filter, _) = setup()
+        patch.expose(filter, 0, ModRange(400f, 2000f))
+        sync.sync(patch)
+        rec.clear()
+
+        sync.sync(patch)
+        assertTrue(rec.log.none { it is Cmd.SetModRange })
+
+        patch.expose(filter, 0, ModRange(300f, 2000f))
+        sync.sync(patch)
+        assertEquals(
+            listOf(Cmd.SetModRange(filter.id, 0, 300f, 2000f, true)),
+            rec.log.filterIsInstance<Cmd.SetModRange>(),
+        )
+    }
+
+    @Test
+    fun `replacing a modulator sends only the new cable`() {
+        val (patch, filter, lfo) = setup()
+        val other = patch.add(Types.Lfo, Offset.Zero)!!
+        patch.expose(filter, 0, ModRange(400f, 2000f))
+        patch.connect(out(lfo), mod(filter, 0))
+        sync.sync(patch)
+        rec.clear()
+
+        // One modulator per parameter, so this is a crossfade in the engine -- and a
+        // disconnect sent alongside would fade to the knob and back instead.
+        patch.connect(out(other), mod(filter, 0))
+        sync.sync(patch)
+        assertEquals(listOf(Cmd.ConnectMod(other.id, 0, filter.id, 0)), modCables())
+    }
+
+    @Test
+    fun `un-exposing sends a modulation disconnect`() {
+        val (patch, filter, lfo) = setup()
+        patch.expose(filter, 0, ModRange(400f, 2000f))
+        patch.connect(out(lfo), mod(filter, 0))
+        sync.sync(patch)
+        rec.clear()
+
+        patch.unexpose(filter, 0)
+        sync.sync(patch)
+        assertEquals(listOf(Cmd.DisconnectMod(lfo.id, 0, filter.id, 0)), modCables())
+        assertTrue(rec.log.none { it is Cmd.Disconnect })
+    }
+
+    @Test
+    fun `a rebuilt engine hears every range again`() {
+        val (patch, filter, _) = setup()
+        patch.expose(filter, 0, ModRange(400f, 2000f))
+        sync.sync(patch)
+        rec.clear()
+
+        sync.invalidate()
+        sync.sync(patch)
+        assertTrue(Cmd.SetModRange(filter.id, 0, 400f, 2000f, true) in rec.log)
+    }
 }

@@ -74,6 +74,25 @@ public:
      */
     bool postDisconnect(int64_t srcId, int32_t srcPort, int64_t dstId, int32_t dstPort);
     bool postSetParam(int64_t id, int32_t paramIndex, float value);
+    /**
+     * What parameter [paramIndex] sweeps between when something modulates it, in the
+     * parameter's own units. [exponential] makes the sweep geometric, for the parameters
+     * whose knob is: a cutoff from 400Hz to 2kHz passes 894Hz halfway, not 1200Hz.
+     *
+     * Sent when the range is marked and whenever it changes. There is no command to clear
+     * one: a parameter nothing is patched to ignores its range, so un-exposing is only
+     * ever a disconnect.
+     */
+    bool postSetModRange(int64_t id, int32_t paramIndex, float low, float high, bool exponential);
+    /**
+     * Patches output [srcPort] of [srcId] to parameter [paramIndex] of [dstId].
+     *
+     * A parameter takes one modulator, so this replaces whatever was there, crossfading
+     * between the two exactly as a signal input does.
+     */
+    bool postConnectMod(int64_t srcId, int32_t srcPort, int64_t dstId, int32_t paramIndex);
+    /** Unpatches a parameter's modulator, fading back to the knob's own value. */
+    bool postDisconnectMod(int64_t srcId, int32_t srcPort, int64_t dstId, int32_t paramIndex);
     /** One step of a sequence, as a degree of the patch's scales. */
     bool postSetStep(int64_t id, int32_t index, int32_t degree, bool gate);
     /**
@@ -126,7 +145,7 @@ public:
 private:
     enum class CommandType : int32_t {
         Add, Remove, Connect, Disconnect, SetParam, SetStep, SetTempo, ResetTransport,
-        SetScales,
+        SetScales, SetModRange, ConnectMod, DisconnectMod,
     };
 
     struct Command {
@@ -138,7 +157,11 @@ private:
         NodeType nodeType = NodeType::Unknown;
         Node *node = nullptr;
         int32_t paramIndex = 0;
+        /** SetParam's value, and the low end of SetModRange's. */
         float value = 0.0f;
+        /** SetModRange only: the high end, and whether the sweep between them is geometric. */
+        float high = 0.0f;
+        bool exponential = false;
         /** SetStep only: whether the step sounds, and its degree. */
         bool gate = false;
         int32_t degree = 0;
@@ -188,6 +211,31 @@ private:
     };
     static constexpr int32_t kMaxNoteSources = 4;
 
+    /**
+     * A parameter, and whatever is modulating it.
+     *
+     * The routing is an InputRef, crossfade and all, with one reinterpretation: where an
+     * input's -1 means silence, a parameter's means its own knob. So patching a modulator
+     * fades from the knob's value to the modulated one, replacing it fades between two
+     * live modulators, and unpatching fades back to the knob -- the same three cases
+     * repatch() already gets right for signals, in value space instead of sample space.
+     *
+     * Applied once per block, through the node's own setParam. That makes every parameter
+     * of every node modulatable without any node knowing modulation exists, at the cost of
+     * a 1500Hz control rate. Audio-rate modulation is not what this is for: a module that
+     * wants it declares an audio input, as Osc's fm does.
+     */
+    struct ParamRef {
+        InputRef route;
+        /** The knob's own value, which is what an unmodulated parameter is. */
+        float base = 0.0f;
+        float low = 0.0f;
+        float high = 0.0f;
+        bool exponential = false;
+        /** Whether a range ever arrived. A modulator patched before one does changes nothing. */
+        bool ranged = false;
+    };
+
     struct Record {
         bool used = false;
         int64_t id = 0;
@@ -196,6 +244,8 @@ private:
         std::array<InputRef, kMaxPorts> inputs{};
         /** Only the ports the node declares as note inputs use these. */
         std::array<std::array<NoteSource, kMaxNoteSources>, kMaxPorts> noteSources{};
+        /** Indexed by parameter, not by port: a modulator lands on a knob, not a jack. */
+        std::array<ParamRef, kMaxParams> params{};
         /**
          * Samples left before a removed node is actually handed back.
          *
@@ -220,6 +270,17 @@ private:
      * have to be ended by whatever is sounding them.
      */
     void dropNoteSources(int32_t dst, int32_t port, int32_t src, int32_t srcPort);
+    /**
+     * What a parameter would be if [index]'s output [port] were driving it this block.
+     *
+     * The source's mean over the block, clamped to 0..1 and mapped across the range. The
+     * mean rather than any one sample, because a block rate samples whatever is patched --
+     * and averaging is at least a crude lowpass where picking a sample is pure aliasing.
+     * No source, or no range, is the knob's own value.
+     */
+    float modulatedValue(const ParamRef &param, int32_t index, int32_t port, int32_t frames) const;
+    /** Pushes every modulated or fading parameter of [record] into its node. */
+    void applyModulation(Record &record, int32_t frames);
     /** Gathers a note input's sources into one buffer, in offset order, tagged by slot. */
     const NoteBuffer &mergeNotes(const Record &record, int32_t port);
     /** Frees nodes whose fade-out has run. Audio thread, end of each block. */

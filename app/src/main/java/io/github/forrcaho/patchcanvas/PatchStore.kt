@@ -21,8 +21,11 @@ import java.io.File
  * geometry being persisted.
  */
 
-/** 2: the Clock module became the patch's tempo. 3: one scale became a list of them. */
-private const val FORMAT_VERSION = 3
+/**
+ * 2: the Clock module became the patch's tempo. 3: one scale became a list of them.
+ * 4: parameters can be exposed for modulation, and cables can land on them.
+ */
+private const val FORMAT_VERSION = 4
 private const val TAG = "PatchStore"
 
 fun Patch.toJson(): String {
@@ -36,6 +39,7 @@ fun Patch.toJson(): String {
                 .put("y", m.position.y.toDouble())
                 .put("params", paramsOf(m))
                 .put("steps", stepsOf(m))
+                .put("mod", modOf(m))
         )
     }
 
@@ -50,13 +54,18 @@ fun Patch.toJson(): String {
     connections.forEach { c ->
         // connect() normalises every cable to output -> input, so the directions are an
         // invariant rather than data, and reload re-imposes them.
-        cables.put(
-            JSONObject()
-                .put("from", c.from.moduleId)
-                .put("fromPort", c.from.index)
-                .put("to", c.to.moduleId)
-                .put("toPort", c.to.index)
-        )
+        val cable = JSONObject()
+            .put("from", c.from.moduleId)
+            .put("fromPort", c.from.index)
+            .put("to", c.to.moduleId)
+        // A modulation cable lands on a parameter, named the way the knobs are, so reordering
+        // a module's parameters cannot move a modulator onto a different knob.
+        if (c.to.dir == PortDirection.MOD) {
+            cable.put("toParam", module(c.to.moduleId)?.type?.params?.getOrNull(c.to.index)?.name ?: "")
+        } else {
+            cable.put("toPort", c.to.index)
+        }
+        cables.put(cable)
     }
 
     val scaleList = JSONArray()
@@ -108,6 +117,39 @@ private fun stepsOf(module: PatchModule): JSONArray {
         out.put(JSONObject().put("d", step.degree).put("on", step.on))
     }
     return out
+}
+
+/** Exposed parameters, keyed by name like the knobs, each as its low and high. */
+private fun modOf(module: PatchModule): JSONObject {
+    val out = JSONObject()
+    module.modRanges.keys.sorted().forEach { i ->
+        val name = module.type.params.getOrNull(i)?.name ?: return@forEach
+        val range = module.modRanges.getValue(i)
+        out.put(name, JSONArray().put(range.low.toDouble()).put(range.high.toDouble()))
+    }
+    return out
+}
+
+/**
+ * Clamped into the parameter's own range, because the file is untrusted: a bracket past the
+ * end of a knob would sweep it somewhere the knob itself cannot go. Anything that is not two
+ * numbers, or names a parameter that cannot be exposed, is dropped.
+ */
+private fun restoreMod(module: PatchModule, stored: JSONObject?) {
+    if (stored == null) return
+    val restored = mutableMapOf<Int, ModRange>()
+    module.type.params.forEachIndexed { i, p ->
+        val pair = stored.optJSONArray(p.name) ?: return@forEachIndexed
+        if (pair.length() != 2 || !module.canExpose(i)) return@forEachIndexed
+        val lowest = minOf(p.min, p.max)
+        val highest = maxOf(p.min, p.max)
+        fun bracket(at: Int) = pair.optDouble(at, Double.NaN).toFloat()
+            .takeIf { it.isFinite() }?.coerceIn(lowest, highest)
+        val low = bracket(0) ?: return@forEachIndexed
+        val high = bracket(1) ?: return@forEachIndexed
+        restored[i] = ModRange(low, high)
+    }
+    module.modRanges = restored.toMap()
 }
 
 private fun restoreSteps(module: PatchModule, stored: JSONArray?) {
@@ -170,6 +212,8 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
             // Absent in files written before sequences were editable, which leaves the
             // module on the same default figure it used to have compiled in.
             restoreSteps(module, m.optJSONArray("steps"))
+            // Before the cables, which can only land on a parameter already exposed.
+            restoreMod(module, m.optJSONObject("mod"))
             patch.adopt(module)
         }
 
@@ -187,9 +231,14 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
             val from = patch.portRefOrNull(
                 c.optLong("from", -1L), PortDirection.OUTPUT, c.optInt("fromPort", -1)
             ) ?: continue
-            val to = patch.portRefOrNull(
-                c.optLong("to", -1L), PortDirection.INPUT, c.optInt("toPort", -1)
-            ) ?: continue
+            val toId = c.optLong("to", -1L)
+            val to = if (c.has("toParam")) {
+                val index = patch.module(toId)?.type?.params
+                    ?.indexOfFirst { it.name == c.optString("toParam") } ?: -1
+                patch.portRefOrNull(toId, PortDirection.MOD, index)
+            } else {
+                patch.portRefOrNull(toId, PortDirection.INPUT, c.optInt("toPort", -1))
+            } ?: continue
             patch.connect(from, to)
         }
 
@@ -238,6 +287,12 @@ private fun upgrade(root: JSONObject): JSONObject? {
         version = 3
     }
 
+    if (version == 3) {
+        // Modulation arrived. Nothing to convert: a file from before it has no parameter
+        // exposed, which is what an absent "mod" already reads as.
+        version = 4
+    }
+
     if (version != FORMAT_VERSION) {
         Log.w(TAG, "unsupported patch version ${root.optInt("version", -1)}")
         return null
@@ -248,6 +303,9 @@ private fun upgrade(root: JSONObject): JSONObject? {
 /** Null unless the module exists and actually has a port at that index and direction. */
 private fun Patch.portRefOrNull(moduleId: Long, dir: PortDirection, index: Int): PortRef? {
     val module = module(moduleId) ?: return null
+    if (dir == PortDirection.MOD) {
+        return if (index in module.modRanges) PortRef(moduleId, dir, index) else null
+    }
     if (index < 0 || index >= module.ports(dir).size) return null
     return PortRef(moduleId, dir, index)
 }

@@ -3,6 +3,7 @@
 // Driven directly rather than through a Graph: these are claims about what each module
 // does, and a failure should say which module rather than which patch.
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <string>
@@ -803,6 +804,37 @@ void aNinthNoteStealsAVoice() {
           "and the note that stole it is not ended by the old one's off");
 }
 
+void anLfoStaysInsideItsRangeAtItsRate() {
+    std::printf("an lfo stays inside its range, at its rate\n");
+    for (int wave = 0; wave < 4; ++wave) {
+        LfoNode lfo;
+        lfo.prepare(kRate);
+        lfo.setParam(0, 10.0f);
+        lfo.setParam(1, static_cast<float>(wave));
+        const auto second = run(lfo, kRate / kBlockSize);
+
+        float lowest = 1.0f;
+        float highest = 0.0f;
+        int rises = 0;
+        for (std::size_t i = 0; i < second.size(); ++i) {
+            lowest = std::min(lowest, second[i]);
+            highest = std::max(highest, second[i]);
+            if (i > 0 && second[i - 1] < 0.5f && second[i] >= 0.5f) ++rises;
+        }
+        const std::string name = "wave " + std::to_string(wave);
+        // Unipolar is the contract: a destination maps 0..1 across its own range, so a
+        // modulator dipping below zero would push a knob past the end it was given.
+        check(lowest >= 0.0f && highest <= 1.0f, name + " never leaves 0..1");
+        check(lowest < 0.05f && highest > 0.95f, name + " reaches both ends of it");
+        check(rises >= 9 && rises <= 11, name + " crosses the middle ten times a second at 10Hz");
+    }
+    LfoNode fresh;
+    fresh.prepare(kRate);
+    fresh.setParam(1, 3.0f);
+    const auto first = run(fresh, 1);
+    check(first[0] < 0.01f, "a sine starts from the bottom of the range, not its middle");
+}
+
 int main() {
     oscPlaysTheRequestedPitch();
     oscStaysBandLimited();
@@ -832,5 +864,6 @@ int main() {
     unpatchingASourceEndsItsNotes();
     aVoiceResolvesANoteAgainstItsOwnBeat();
     aNinthNoteStealsAVoice();
+    anLfoStaysInsideItsRangeAtItsRate();
     return testing::report("nodes");
 }

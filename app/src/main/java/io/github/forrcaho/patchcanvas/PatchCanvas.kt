@@ -89,7 +89,16 @@ import kotlin.math.sin
 
 // ---------------------------------------------------------------- model
 
-enum class PortDirection { INPUT, OUTPUT }
+/**
+ * Which side of a module a port is on, and so what it takes.
+ *
+ * [MOD] is a parameter with a jack, on the module's bottom edge. Its index is the
+ * parameter's rather than a position among ports, and it exists only while that parameter
+ * is exposed. [PatchModule.ports] returns nothing for it, deliberately: every loop over
+ * `ports(dir)` was written for two sides and puts a port on the left or the right, so a
+ * site that forgets modulation draws no port rather than one in the wrong place.
+ */
+enum class PortDirection { INPUT, OUTPUT, MOD }
 
 /** Which viewport edge a pinned module is welded to. */
 enum class Edge { LEFT, RIGHT }
@@ -172,6 +181,12 @@ data class Param(
      * two thirds of the body, and a third row in what is left overlaps the other two.
      */
     val header: Boolean = false,
+    /**
+     * What this parameter's modulation port is labelled, on a bottom edge where three share
+     * 116dp. The name itself when it is that short already, which most are; otherwise its
+     * first three letters, unless those would say something else.
+     */
+    val short: String = if (name.length <= 4) name else name.take(3),
 ) {
     /**
      * How many options a stepped parameter offers.
@@ -232,6 +247,36 @@ data class Param(
  * advances through it and the pitch still holds -- the note is withheld, the step is not.
  */
 data class Step(val degree: Int, val on: Boolean = true)
+
+/**
+ * What an exposed parameter sweeps between when something modulates it, in its own units.
+ *
+ * Stored on the parameter's module rather than on the cable, which is Bespoke's shape and
+ * the reason for it: "sweep the cutoff from 400Hz to 2kHz" is a fact about the cutoff, and
+ * it survives swapping one LFO for another. [low] above [high] is an inverted sweep, not an
+ * error.
+ */
+data class ModRange(val low: Float, val high: Float)
+
+/**
+ * The range a parameter gets when it is first exposed: some travel either side of where
+ * its knob sits, so the first modulator patched to it is heard at once.
+ *
+ * Both brackets on the knob, which is the literal reading of "at the control's current
+ * value", would make that first cable do nothing -- and a cable that does nothing reads as a
+ * cable that failed. A stepped parameter gets all of its options.
+ */
+internal fun initialModRange(param: Param, value: Float): ModRange {
+    if (param.curve == ParamCurve.STEPPED) return ModRange(param.min, param.max)
+    val at = param.positionOf(value)
+    return ModRange(
+        param.valueAt((at - MOD_SPREAD).coerceIn(0f, 1f)),
+        param.valueAt((at + MOD_SPREAD).coerceIn(0f, 1f)),
+    )
+}
+
+/** How far either side of the knob a new range reaches, in knob travel. */
+internal const val MOD_SPREAD = 0.2f
 
 data class ModuleType(
     val name: String,
@@ -297,6 +342,20 @@ object Types {
             Param("R", 0.001f, 10f, 0.25f, "s", EXP),
         ),
     )
+    /**
+     * A slow wave, for turning knobs. Patched to a parameter's modulation port it sweeps
+     * that parameter across the range stored there, which is why it is unipolar -- see
+     * LfoNode. Its output is CV until modulation has a kind of its own.
+     */
+    val Lfo = ModuleType(
+        "LFO", emptyList(), listOf(Port("out", C)),
+        Color(0xFFC9A8EE),
+        params = listOf(
+            // Order mirrors LfoNode::setParam.
+            Param("rate", 0.02f, 20f, 1f, "Hz", EXP),
+            Param("wave", 0f, 3f, 3f, "", STEP, Choice.WAVE),
+        ),
+    )
     val Vca = ModuleType(
         "VCA", listOf(Port("in", A), Port("cv", C)), listOf(Port("out", A)),
         Color(0xFFE07A9B),
@@ -312,7 +371,7 @@ object Types {
         Color(0xFF6FA8E5),
         params = listOf(
             Param("len", 1f, STEP_COUNT.toFloat(), 8f, "", STEP),
-            Param("transp", -TUNE_RANGE, TUNE_RANGE, 0f, "\u00A2", LIN, marks = true),
+            Param("transp", -TUNE_RANGE, TUNE_RANGE, 0f, "\u00A2", LIN, marks = true, short = "trn"),
             Param(
                 "interval", 0f, (INTERVALS.size - 1).toFloat(), DEFAULT_INTERVAL.toFloat(),
                 curve = STEP, choice = Choice.DIVISION, header = true,
@@ -358,7 +417,7 @@ object Types {
     val Out = ModuleType(
         "Out", listOf(Port("L", A), Port("R", A)), emptyList(),
         Color(0xFFE0E0E0),
-        params = listOf(Param("level", 0f, 2f, 1f, "", LIN)),
+        params = listOf(Param("level", 0f, 2f, 1f, "", LIN, short = "lvl")),
         pinned = Edge.RIGHT,
     )
     val In = ModuleType(
@@ -377,7 +436,7 @@ object Types {
      * inputs as you like, since each input stores its own source. Only summing ever
      * needed a module, and that is Mix.
      */
-    val palette = listOf(Osc, Filter, Env, Vca, Steps, Voice, Mix)
+    val palette = listOf(Osc, Filter, Env, Lfo, Vca, Steps, Voice, Mix)
 
     val byName: Map<String, ModuleType> =
         (palette + listOf(Out, In)).associateBy { it.name }
@@ -422,6 +481,18 @@ class PatchModule(
     }
 
     /**
+     * The parameters given a jack, by index, and what each sweeps between.
+     *
+     * An immutable map replaced whole on every edit, like the patch's scale list, so two of
+     * them compare by content. A snapshot map would compare by identity -- the trap that
+     * made every module pulse on undo. Row parameters of free modules only: a header
+     * parameter has no row to put brackets on, and a rail has no bottom edge to spare.
+     */
+    var modRanges by mutableStateOf(emptyMap<Int, ModRange>())
+
+    fun canExpose(index: Int): Boolean = !isPinned && index in type.rowParams
+
+    /**
      * The degree shown on the grid's top row.
      *
      * View state, like the camera and like which panel is open: it is where you are
@@ -455,7 +526,12 @@ class PatchModule(
      */
     var expanded by mutableStateOf(false)
 
-    val height: Float get() = heightFor(type)
+    /**
+     * The type's height, plus a band for modulation ports when any are exposed. The band
+     * grows downward, below the side jacks, which [portIn] places from the top -- so exposing
+     * a parameter never moves a jack already on the module.
+     */
+    val height: Float get() = heightFor(type) + modBandFor(type, modRanges.keys)
 
     /** The ports' band. Equal to the body, now that opening a module leaves the canvas. */
     val portsBody: Float get() = portsBodyFor(type)
@@ -465,8 +541,12 @@ class PatchModule(
     /** World-space bounds. Meaningless for pinned modules; use Frame.railRect instead. */
     val bounds: Rect get() = Rect(position, Size(width, height))
 
-    fun ports(dir: PortDirection): List<Port> =
-        if (dir == PortDirection.INPUT) type.inputs else type.outputs
+    /** The side jacks. Empty for [PortDirection.MOD], whose ports are [modRanges]. */
+    fun ports(dir: PortDirection): List<Port> = when (dir) {
+        PortDirection.INPUT -> type.inputs
+        PortDirection.OUTPUT -> type.outputs
+        PortDirection.MOD -> emptyList()
+    }
 
     companion object {
         const val WIDTH = 116f
@@ -507,6 +587,25 @@ class PatchModule(
         /** Closed height. Derived from the type alone, so the add menu can centre one. */
         fun heightFor(type: ModuleType): Float = HEADER + portsBodyFor(type)
 
+        /** Modulation ports per row of the bottom band, and the height of each row. */
+        const val MOD_COLUMNS = 3
+        const val MOD_ROW = PORT_PITCH
+
+        /**
+         * Which slot of the band a parameter's port takes: its position among the rows.
+         *
+         * Fixed per parameter rather than packed, because packing would slide a port along
+         * whenever a parameter before it was exposed, and ports must never move. So the same
+         * knob's jack is in the same place on every module of its type, gaps and all.
+         */
+        fun modSlot(type: ModuleType, index: Int): Int = type.rowParams.indexOf(index)
+
+        /** The band's height: as many rows as its deepest exposed port needs, or none. */
+        fun modBandFor(type: ModuleType, exposed: Set<Int>): Float {
+            val deepest = exposed.maxOfOrNull { modSlot(type, it) / MOD_COLUMNS } ?: return 0f
+            return (deepest + 1) * MOD_ROW
+        }
+
 
     }
 }
@@ -534,6 +633,27 @@ internal fun portIn(
     val span = (count - 1) * PatchModule.PORT_PITCH * unit
     val first = bodyTop + (bodyHeight - span) / 2f
     return Offset(x, first + index * PatchModule.PORT_PITCH * unit)
+}
+
+/**
+ * Where parameter [index]'s modulation port sits in a module's bottom band.
+ *
+ * Three across, inset like the labels, which puts them 45dp apart -- clear of
+ * [PatchModule.PORT_PITCH] -- and each row [PatchModule.MOD_ROW] below the last, so the
+ * deepest row lies on the module's bottom edge the way side jacks lie on its sides.
+ * Measured down from the side jacks' band rather than up from the bottom, so a deeper row
+ * appearing below never moves a port above it.
+ */
+internal fun modPortIn(rect: Rect, unit: Float, type: ModuleType, index: Int, bodyHeight: Float): Offset {
+    val slot = PatchModule.modSlot(type, index).coerceAtLeast(0)
+    val column = slot % PatchModule.MOD_COLUMNS
+    val row = slot / PatchModule.MOD_COLUMNS
+    val pitch = (PatchModule.WIDTH - 2f * PatchModule.LABEL_INSET) / (PatchModule.MOD_COLUMNS - 1)
+    val bandTop = rect.top + PatchModule.HEADER * unit + bodyHeight
+    return Offset(
+        rect.left + (PatchModule.LABEL_INSET + column * pitch) * unit,
+        bandTop + (row + 1) * PatchModule.MOD_ROW * unit,
+    )
 }
 
 // ---------------------------------------------------------------- the open panel
@@ -905,7 +1025,15 @@ class Patch {
 
     fun module(id: Long): PatchModule? = modules.firstOrNull { it.id == id }
 
-    fun port(ref: PortRef): Port? = module(ref.moduleId)?.ports(ref.dir)?.getOrNull(ref.index)
+    fun port(ref: PortRef): Port? {
+        val module = module(ref.moduleId) ?: return null
+        if (ref.dir != PortDirection.MOD) return module.ports(ref.dir).getOrNull(ref.index)
+        // A parameter's jack, which exists only while the parameter is exposed. CV, because
+        // CV is what modulation is until it has a kind of its own.
+        if (ref.index !in module.modRanges) return null
+        val param = module.type.params.getOrNull(ref.index) ?: return null
+        return Port(param.short, SignalKind.CV)
+    }
 
     /** What a cable leaving a port carries. Advisory: it colours, it does not gate. */
     fun kindOf(ref: PortRef): SignalKind = port(ref)?.kind ?: SignalKind.AUDIO
@@ -936,6 +1064,23 @@ class Patch {
     fun duplicate(module: PatchModule): PatchModule? =
         if (module.isPinned) null else add(module.type, module.position + Offset(28f, 28f))
 
+    /**
+     * Gives a parameter a jack sweeping [range], or moves the brackets of one that has one.
+     * Refused for a parameter that cannot have one; see [PatchModule.canExpose].
+     */
+    fun expose(module: PatchModule, index: Int, range: ModRange): Boolean {
+        if (!module.canExpose(index)) return false
+        module.modRanges = module.modRanges + (index to range)
+        return true
+    }
+
+    /** Takes a parameter's jack away, and whatever was patched into it. */
+    fun unexpose(module: PatchModule, index: Int) {
+        if (index !in module.modRanges) return
+        disconnect(PortRef(module.id, PortDirection.MOD, index))
+        module.modRanges = module.modRanges - index
+    }
+
     /** A disabled input rail cannot be patched from, so it reads as present but inert. */
     fun portUsable(ref: PortRef): Boolean =
         !(ref.moduleId == IN_ID && !inputEnabled)
@@ -957,11 +1102,21 @@ class Patch {
      */
     fun connect(a: PortRef, b: PortRef): Boolean {
         val (out, inp) = when {
-            a.dir == PortDirection.OUTPUT && b.dir == PortDirection.INPUT -> a to b
-            b.dir == PortDirection.OUTPUT && a.dir == PortDirection.INPUT -> b to a
+            a.dir == PortDirection.OUTPUT && b.dir != PortDirection.OUTPUT -> a to b
+            b.dir == PortDirection.OUTPUT && a.dir != PortDirection.OUTPUT -> b to a
             else -> return false
         }
         if (out.moduleId == inp.moduleId) return false // no self-patching for now
+
+        // A parameter's jack takes one modulator, as a signal input takes one source, and
+        // only from a control output: CV is what becomes modulation, and audio or notes on a
+        // knob would pin it somewhere with nothing on screen saying why.
+        if (inp.dir == PortDirection.MOD) {
+            if (port(inp) == null || kindOf(out) != SignalKind.CV) return false
+            connections.removeAll { it.to == inp }
+            connections.add(Connection(out, inp))
+            return true
+        }
         if (!kindOf(out).patchesTo(kindOf(inp))) return false
 
         if (kindOf(inp) == SignalKind.NOTE) {
@@ -1421,6 +1576,12 @@ private fun portScreen(
     frame: Frame,
 ): Offset? {
     val module = patch.module(ref.moduleId) ?: return null
+    if (ref.dir == PortDirection.MOD) {
+        if (module.isPinned || ref.index !in module.modRanges) return null
+        return camera.toScreen(
+            modPortIn(module.bounds, 1f, module.type, ref.index, module.portsBody),
+        )
+    }
     val count = module.ports(ref.dir).size
     if (ref.index >= count) return null
     return if (module.isPinned) {

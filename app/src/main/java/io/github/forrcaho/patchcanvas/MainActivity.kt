@@ -156,7 +156,7 @@ class MainActivity : ComponentActivity() {
                 }
         }
 
-        // Topology, knobs, sequences, the tuning and the tempo. Position is deliberately absent, so
+        // Topology, knobs, modulation ranges, sequences, the tuning and the tempo. Position is deliberately absent, so
         // dragging a module around does not re-sync -- the audio graph has no opinion
         // about where a module sits.
         //
@@ -172,6 +172,8 @@ class MainActivity : ComponentActivity() {
                     patch.modules.map { it.id to it.type.name },
                     patch.connections.toList(),
                     patch.modules.map { it.params.toList() },
+                    // A plain map replaced whole, so it compares by content as it stands.
+                    patch.modules.map { it.modRanges },
                     patch.modules.map { it.steps.toList() },
                     patch.scales,
                     patch.beatsPerBar,

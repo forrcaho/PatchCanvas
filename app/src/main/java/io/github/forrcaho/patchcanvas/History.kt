@@ -100,6 +100,8 @@ fun Patch.replaceWith(source: Patch): Set<Long> {
             val copy = PatchModule(from.id, from.type, from.position)
             from.params.forEachIndexed { index, value -> copy.setParam(index, value) }
             from.steps.forEachIndexed { index, step -> copy.setStep(index, step) }
+            // Before the cables below, which include any landing on these parameters.
+            copy.modRanges = from.modRanges
             adopt(copy)
         }
 
@@ -149,7 +151,8 @@ private fun Patch.changesFrom(source: Patch): Set<Long> {
         // that is always false, and every module in the patch would pulse.
         if (was.position != now.position ||
             was.params.toList() != now.params.toList() ||
-            was.steps.toList() != now.steps.toList()
+            was.steps.toList() != now.steps.toList() ||
+            was.modRanges != now.modRanges
         ) {
             changed += id
         }

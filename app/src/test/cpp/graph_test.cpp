@@ -807,6 +807,234 @@ void anIdIsOnlyUniqueToItsOwnSource() {
     check(!everSilent, "the long note survives the short one's offs");
 }
 
+// ---------------------------------------------------------------- modulation
+
+/**
+ * The loudest sample in a stretch of output, which through a VCA with nothing on its CV
+ * input is its bias -- the parameter these tests modulate, because amplitude is the one
+ * parameter the graph's output shows directly.
+ */
+float peakOf(const std::vector<float> &samples) {
+    float worst = 0.0f;
+    for (float s : samples) worst = std::max(worst, std::fabs(s));
+    return worst;
+}
+
+/**
+ * The level of each window of [blocks] blocks, in order.
+ *
+ * Eight blocks is 256 samples, more than one cycle of the 262Hz sine these tests use, so a
+ * window's peak is the VCA's bias across it rather than wherever the wave happened to be.
+ * That is what makes a fade measurable by how long it takes. Measuring its steepest sample
+ * instead passed with the crossfade deleted: a bias that jumps only steps the output by as
+ * much as the sine is at that one sample, which near a zero crossing is nothing.
+ */
+std::vector<float> levels(Graph &graph, int windows, int blocks = 8) {
+    std::vector<float> out;
+    for (int w = 0; w < windows; ++w) out.push_back(peakOf(render(graph, blocks)));
+    return out;
+}
+
+/**
+ * A sine through a VCA to the output, and a stopped sequencer whose pitch output is used
+ * as a constant: with the transport stopped it holds degree zero, so its transpose alone
+ * sets the level -- 1200 cents is exactly 1.0, 600 is 0.5. A modulator that holds still is
+ * what lets a test ask what value a parameter landed on.
+ *
+ * Measured through Out, whose limiter is transparent only well below full scale: a bias of
+ * 0.2 reads back as 0.198, but 0.6 already settles at 0.543. So a test that compares two
+ * levels keeps both below 0.4, and one that has to go higher judges against what it measured.
+ */
+struct ModPatch {
+    Graph graph;
+    ModPatch() {
+        graph.setSampleRate(48000);
+        graph.postAdd(1, NodeType::Osc);
+        graph.postAdd(2, NodeType::Vca);
+        graph.postAdd(3, NodeType::Out);
+        graph.postAdd(4, NodeType::Steps);
+        graph.postSetParam(1, 1, 3.0f); // sine, so a step in level is not hidden by the wave's own edges
+        graph.postConnect(1, 0, 2, 0);
+        graph.postConnect(2, 0, 3, 0);
+        graph.applyCommands();
+    }
+    void level(float octaves) {
+        graph.postSetParam(4, 1, octaves * 1200.0f);
+        graph.applyCommands();
+    }
+};
+
+void aModulatorDrivesAParameterAcrossItsRange() {
+    std::printf("a modulator drives a parameter across its range\n");
+    ModPatch m;
+    m.graph.postSetParam(2, 0, 0.0f);
+    m.graph.postSetModRange(2, 0, 0.1f, 0.3f, false);
+    m.graph.postConnectMod(4, 0, 2, 0);
+    m.level(0.0f);
+
+    render(m.graph, 200); // past the fade in
+    const float low = peakOf(render(m.graph, 64));
+    m.level(1.0f);
+    render(m.graph, 200);
+    const float high = peakOf(render(m.graph, 64));
+
+    check(low > 0.07f && low < 0.13f, "a modulator at nothing sits on the low end");
+    check(high > 0.25f && high < 0.35f, "and at full on the high end");
+    check(std::fabs(high / low - 3.0f) < 0.3f, "in the parameter's own units, not the modulator's");
+}
+
+void anExponentialRangeSweepsGeometrically() {
+    std::printf("an exponential range sweeps geometrically\n");
+    ModPatch m;
+    m.graph.postSetModRange(2, 0, 0.1f, 0.4f, true);
+    m.graph.postConnectMod(4, 0, 2, 0);
+    m.level(0.5f);
+    render(m.graph, 200);
+    const float half = peakOf(render(m.graph, 64));
+
+    // Halfway between 0.1 and 0.4 is 0.2 geometrically and 0.25 linearly. A cutoff knob is
+    // exponential because hearing is, and a sweep across it has to be the same shape.
+    check(std::fabs(half - 0.2f) < 0.02f, "halfway is the geometric middle of the range");
+}
+
+void aKnobMovedUnderAModulatorWaitsForItToLetGo() {
+    std::printf("a knob moved under a modulator waits for it to let go\n");
+    ModPatch m;
+    m.graph.postSetParam(2, 0, 0.0f);
+    m.graph.postSetModRange(2, 0, 0.0f, 0.5f, false);
+    m.graph.postConnectMod(4, 0, 2, 0);
+    m.level(1.0f);
+    render(m.graph, 200);
+
+    // Moved while modulated, to a value it has never had -- so returning to it can only
+    // mean the move was remembered, where returning to zero would pass whether it was or not.
+    m.graph.postSetParam(2, 0, 0.3f);
+    m.graph.applyCommands();
+    const float held = peakOf(render(m.graph, 64));
+    check(held > 0.4f, "the modulated value holds while the knob moves");
+
+    m.graph.postDisconnectMod(4, 0, 2, 0);
+    m.graph.applyCommands();
+    render(m.graph, 200);
+    const float released = peakOf(render(m.graph, 64));
+    check(released > 0.25f && released < 0.35f, "and unpatching returns it to where the knob now is");
+}
+
+void patchingAModulatorFadesRatherThanJumps() {
+    std::printf("patching a modulator fades rather than jumps\n");
+    ModPatch m;
+    m.graph.postSetParam(2, 0, 0.1f);
+    m.graph.postSetModRange(2, 0, 0.6f, 0.6f, false);
+    m.level(0.0f);
+    render(m.graph, 200);
+
+    // 30ms is 1454 samples, nearly six windows. Measured, a fade in reads 0.14, 0.21, 0.34,
+    // 0.45, 0.53 and then holds at 0.54 -- the limiter's reading of 0.6 -- and a fade out
+    // mirrors it. Without a fade every window after the patch is already at its end, so
+    // "partway" is judged against both ends rather than against a number.
+    m.graph.postConnectMod(4, 0, 2, 0);
+    m.graph.applyCommands();
+    const auto in = levels(m.graph, 8);
+    check(in[0] < 0.25f, "the first window after patching is still near the knob");
+    check(in[3] > in[0] + 0.1f && in[3] < in[7] - 0.05f, "partway through, it is partway there");
+    check(in[7] > 0.5f, "and it arrives");
+
+    m.graph.postDisconnectMod(4, 0, 2, 0);
+    m.graph.applyCommands();
+    const auto out = levels(m.graph, 8);
+    check(out[0] > 0.45f, "the first window after unpatching is still near the modulator");
+    check(out[3] < out[0] - 0.1f && out[3] > out[7] + 0.1f, "partway back, it is partway back");
+    check(out[7] < 0.15f, "and it arrives back at the knob");
+}
+
+void aModulatorIsEvaluatedBeforeTheKnobItTurns() {
+    std::printf("a modulator is evaluated before the knob it turns\n");
+    Graph graph;
+    graph.setSampleRate(48000);
+    // Slots chosen so nothing else orders them: the VCA's audio source takes the lowest
+    // slot and the sequencer the highest, so without the modulation edge the VCA is ready,
+    // and emitted, before the sequencer has been reached.
+    graph.postAdd(1, NodeType::Osc);
+    graph.postAdd(2, NodeType::Vca);
+    graph.postAdd(3, NodeType::Out);
+    graph.postAdd(4, NodeType::Steps);
+    graph.postSetParam(1, 1, 3.0f);
+    graph.postConnect(1, 0, 2, 0);
+    graph.postConnect(2, 0, 3, 0);
+    graph.postSetModRange(2, 0, 0.0f, 1.0f, false);
+    graph.postConnectMod(4, 0, 2, 0);
+    graph.postSetTempo(300.0f);
+    graph.applyCommands();
+    graph.setTransportRunning(true);
+
+    // A 1/8 at 300bpm is 4800 frames, exactly 150 blocks: the first step (degree 0, pitch
+    // 0) holds the VCA shut until the second step lands on the first sample of block 150
+    // and raises the pitch to a quarter of an octave.
+    render(graph, 150);
+    check(nearSilent(graph.outputL(), kBlockSize), "shut while the first step holds");
+    graph.process(kBlockSize);
+    // Evaluated after the sequencer, the VCA hears the new step in the block it lands.
+    // Before, it would read the previous block's pitch and stay shut for one more.
+    check(!nearSilent(graph.outputL(), kBlockSize), "open in the very block the step lands");
+}
+
+void aDeletedModulatorHandsTheKnobBack() {
+    std::printf("a deleted modulator hands the knob back\n");
+    ModPatch m;
+    m.graph.postSetParam(2, 0, 0.0f);
+    m.graph.postSetModRange(2, 0, 0.5f, 0.5f, false);
+    m.graph.postConnectMod(4, 0, 2, 0);
+    m.graph.applyCommands();
+    render(m.graph, 200);
+    check(peakOf(render(m.graph, 64)) > 0.35f, "modulated open");
+
+    m.graph.postRemove(4);
+    m.graph.applyCommands();
+    const float first = levels(m.graph, 1)[0];
+    render(m.graph, 2000); // past the fade and the reap
+    // The node lingers to render its own fade out; cut instead, the first window is shut.
+    check(first > 0.35f, "deleting it fades rather than cuts");
+    check(nearSilent(m.graph.outputL(), kBlockSize), "back to the knob, which is shut");
+
+    // The slot it left is reused by whatever comes next, and must not still be modulating.
+    m.graph.postAdd(5, NodeType::Steps);
+    m.graph.postSetParam(5, 1, 1200.0f);
+    m.graph.applyCommands();
+    render(m.graph, 200);
+    check(nearSilent(m.graph.outputL(), kBlockSize), "and a node reusing its slot inherits nothing");
+}
+
+void aModulatorPastFullStopsAtTheEndOfTheRange() {
+    std::printf("a modulator past full stops at the end of the range\n");
+    ModPatch m;
+    m.graph.postSetModRange(2, 0, 0.1f, 0.3f, false);
+    m.graph.postConnectMod(4, 0, 2, 0);
+    m.level(2.0f); // twice full scale
+    render(m.graph, 200);
+    const float over = peakOf(render(m.graph, 64));
+    m.level(-1.0f);
+    render(m.graph, 200);
+    const float under = peakOf(render(m.graph, 64));
+
+    // Unclamped, twice full scale would land on 0.5, past the end the range was given, and
+    // minus one on -0.1, which the VCA would shut on. A modulator says how far along a
+    // range; it does not get to say "further than the end".
+    check(over > 0.25f && over < 0.35f, "twice full scale is still the high end");
+    check(under > 0.05f && under < 0.15f, "and below nothing is still the low end");
+}
+
+void aNoteOutputCannotModulate() {
+    std::printf("a note output cannot modulate\n");
+    ModPatch m;
+    m.graph.postSetParam(2, 0, 0.5f);
+    m.graph.postSetModRange(2, 0, 0.0f, 0.0f, false);
+    m.graph.postConnectMod(4, 2, 2, 0); // Steps' notes output
+    m.graph.applyCommands();
+    render(m.graph, 200);
+    // Accepted, it would pin the VCA at its low end of zero, reading a buffer nobody writes.
+    check(peakOf(render(m.graph, 64)) > 0.35f, "the knob keeps its own value");
+}
+
 int main() {
     signalReachesTheOutputWithinOneBlock();
     patchingDoesNotStep();
@@ -834,6 +1062,14 @@ int main() {
     aRemovedSourceEndsTheNotesItStarted();
     twoSequencersMergeIntoOneVoice();
     anIdIsOnlyUniqueToItsOwnSource();
+    aModulatorDrivesAParameterAcrossItsRange();
+    anExponentialRangeSweepsGeometrically();
+    aKnobMovedUnderAModulatorWaitsForItToLetGo();
+    patchingAModulatorFadesRatherThanJumps();
+    aModulatorIsEvaluatedBeforeTheKnobItTurns();
+    aDeletedModulatorHandsTheKnobBack();
+    aModulatorPastFullStopsAtTheEndOfTheRange();
+    aNoteOutputCannotModulate();
 
     std::printf("\n%d checks, %d failed\n", checks, failures);
     std::fflush(stdout);

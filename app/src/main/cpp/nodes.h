@@ -27,6 +27,7 @@ enum class NodeType : int32_t {
     // reassigned, so nothing can mistake an old id for a new module.
     Mix = 9,
     Voice = 10,
+    Lfo = 11,
 };
 
 /**
@@ -251,6 +252,31 @@ private:
     float decay_ = 0.12f;
     float sustain_ = 0.6f;
     float release_ = 0.25f;
+};
+
+/**
+ * A slow wave, for turning knobs.
+ *
+ * Unipolar, 0 to 1, because that is what a modulation cable means: the destination stores
+ * the low and high it sweeps between, in its own units, so the modulator only ever says
+ * how far along. A bipolar LFO would put half of every sweep below the low end.
+ *
+ * Free-running in hertz for now. Locking it to the transport is the obvious next control
+ * and the reason the waveform order matches the oscillator's, so the panel draws the same
+ * four pictures.
+ */
+class LfoNode : public Node {
+public:
+    int32_t inputCount() const override { return 0; }
+    int32_t outputCount() const override { return 1; }
+    void process(int32_t frames) override;
+    void setParam(int32_t index, float value) override;
+
+private:
+    double phase_ = 0.0;
+    float rateHz_ = 1.0f;
+    /** Order mirrors kWaves in OscNode::setParam: saw, square, triangle, sine. */
+    int32_t wave_ = 3;
 };
 
 /** Sums its inputs. Necessary because an input takes exactly one source. */

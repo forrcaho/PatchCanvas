@@ -63,6 +63,18 @@ object AudioEngine {
     fun setParam(id: Long, index: Int, value: Float): Boolean =
         available && started && nativeSetParam(id, index, value)
 
+    /** What an exposed parameter sweeps between, in its own units, and whether geometrically. */
+    fun setModRange(id: Long, index: Int, low: Float, high: Float, exponential: Boolean): Boolean =
+        available && started && nativeSetModRange(id, index, low, high, exponential)
+
+    /** A modulator onto parameter [index] of [dstId]. One per parameter, so this replaces. */
+    fun connectMod(srcId: Long, srcPort: Int, dstId: Long, index: Int): Boolean =
+        available && started && nativeConnectMod(srcId, srcPort, dstId, index)
+
+    /** Unpatches a parameter's modulator; the engine fades it back to the knob. */
+    fun disconnectMod(srcId: Long, srcPort: Int, dstId: Long, index: Int): Boolean =
+        available && started && nativeDisconnectMod(srcId, srcPort, dstId, index)
+
     /** One step of a sequence, as a degree of whichever scale is sounding when it plays. */
     fun setStep(id: Long, index: Int, degree: Int, gate: Boolean): Boolean =
         available && started && nativeSetStep(id, index, degree, gate)
@@ -183,6 +195,11 @@ object AudioEngine {
         srcId: Long, srcPort: Int, dstId: Long, dstPort: Int,
     ): Boolean
     private external fun nativeSetParam(id: Long, index: Int, value: Float): Boolean
+    private external fun nativeSetModRange(
+        id: Long, index: Int, low: Float, high: Float, exponential: Boolean,
+    ): Boolean
+    private external fun nativeConnectMod(srcId: Long, srcPort: Int, dstId: Long, index: Int): Boolean
+    private external fun nativeDisconnectMod(srcId: Long, srcPort: Int, dstId: Long, index: Int): Boolean
     private external fun nativeSetStep(id: Long, index: Int, degree: Int, gate: Boolean): Boolean
     private external fun nativeSetScales(
         degrees: FloatArray,

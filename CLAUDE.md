@@ -92,8 +92,13 @@ call out the audio thread makes.
 only at density 1.0 — which is where `@Preview` renders and nowhere else. `Camera` folds
 density into the single place that converts.
 
-**Ports must never move.** A module's height is fixed; the open panel is screen space
-precisely so opening one cannot shift its jacks and make every attached cable jump.
+**Ports must never move.** Side jacks are placed down from a module's top, never from its
+height, and the open panel is screen space -- both so that nothing can shift a jack and make
+every attached cable jump. A module's height does change in exactly one way: exposing a
+parameter adds a band of modulation ports *below* the side jacks. Each parameter has a fixed
+slot in that band rather than a packed one, because packing slides a port along whenever an
+earlier parameter is exposed. A module never gets wider, since its outputs are on its right
+edge.
 
 **Cycles are legal.** Whatever cannot be topologically ordered is appended, which costs
 exactly one block of delay on the back edge — because output buffers are never cleared

@@ -1,5 +1,7 @@
 #include "graph.h"
 
+#include <cmath>
+
 // ---------------------------------------------------------------- UI thread
 
 bool Graph::postAdd(int64_t id, NodeType type) {
@@ -88,6 +90,38 @@ bool Graph::postSetParam(int64_t id, int32_t paramIndex, float value) {
     cmd.id = id;
     cmd.paramIndex = paramIndex;
     cmd.value = value;
+    return commands_.push(cmd);
+}
+
+bool Graph::postSetModRange(int64_t id, int32_t paramIndex, float low, float high,
+                            bool exponential) {
+    Command cmd;
+    cmd.type = CommandType::SetModRange;
+    cmd.id = id;
+    cmd.paramIndex = paramIndex;
+    cmd.value = low;
+    cmd.high = high;
+    cmd.exponential = exponential;
+    return commands_.push(cmd);
+}
+
+bool Graph::postConnectMod(int64_t srcId, int32_t srcPort, int64_t dstId, int32_t paramIndex) {
+    Command cmd;
+    cmd.type = CommandType::ConnectMod;
+    cmd.srcId = srcId;
+    cmd.srcPort = srcPort;
+    cmd.id = dstId;
+    cmd.paramIndex = paramIndex;
+    return commands_.push(cmd);
+}
+
+bool Graph::postDisconnectMod(int64_t srcId, int32_t srcPort, int64_t dstId, int32_t paramIndex) {
+    Command cmd;
+    cmd.type = CommandType::DisconnectMod;
+    cmd.srcId = srcId;
+    cmd.srcPort = srcPort;
+    cmd.id = dstId;
+    cmd.paramIndex = paramIndex;
     return commands_.push(cmd);
 }
 
@@ -262,6 +296,11 @@ void Graph::retire(int32_t slot) {
             // would hold forever.
             dropNoteSources(i, p, slot, -1);
         }
+        // A deleted modulator fades back to the knob it was turning, from the node that is
+        // still lingering to render exactly that fade.
+        for (auto &param : nodes_[i].params) {
+            if (param.route.sourceIndex == slot) repatch(param.route, -1, 0);
+        }
     }
     // Stop claiming this id, or the interface would go on drawing a playhead for a
     // sequencer that has been deleted. Either store alone would be enough -- no match
@@ -299,6 +338,10 @@ void Graph::reapDying(int32_t frames) {
                     if (source.index == i) source = NoteSource{};
                 }
             }
+            for (auto &param : other.params) {
+                if (param.route.fromIndex == i) param.route.fromIndex = -1;
+                if (param.route.sourceIndex == i) param.route.sourceIndex = -1;
+            }
         }
 
         // Handed back rather than deleted: freeing here would be an allocation call on
@@ -331,6 +374,7 @@ void Graph::applyCommands() {
                 nodes_[slot].type = cmd.nodeType;
                 nodes_[slot].node = cmd.node;
                 nodes_[slot].inputs.fill(InputRef{});
+                nodes_[slot].params.fill(ParamRef{});
                 if (cmd.nodeType == NodeType::Out) outIndex_ = slot;
                 if (cmd.nodeType == NodeType::In) inIndex_ = slot;
                 dirty_ = true;
@@ -371,7 +415,53 @@ void Graph::applyCommands() {
                 if (slot < 0) break;
                 if (cmd.paramIndex < 0 || cmd.paramIndex >= kMaxParams) break;
                 // No topology change, so no re-sort: a knob does not move the graph.
-                nodes_[slot].node->setParam(cmd.paramIndex, cmd.value);
+                //
+                // Remembered always, applied only when nothing is modulating it. A modulated
+                // parameter is set from its modulator before every block anyway, so this is
+                // the value it fades back to when unpatched -- and pushing it into the node
+                // now would only recompute coefficients the next block overwrites.
+                ParamRef &param = nodes_[slot].params[cmd.paramIndex];
+                param.base = cmd.value;
+                if (param.route.sourceIndex < 0 && param.route.rampRemaining <= 0) {
+                    nodes_[slot].node->setParam(cmd.paramIndex, cmd.value);
+                }
+                break;
+            }
+            case CommandType::SetModRange: {
+                const int32_t slot = indexOf(cmd.id);
+                if (slot < 0) break;
+                if (cmd.paramIndex < 0 || cmd.paramIndex >= kMaxParams) break;
+                ParamRef &param = nodes_[slot].params[cmd.paramIndex];
+                param.low = cmd.value;
+                param.high = cmd.high;
+                param.exponential = cmd.exponential;
+                param.ranged = true;
+                break;
+            }
+            case CommandType::ConnectMod: {
+                const int32_t dst = indexOf(cmd.id);
+                const int32_t src = indexOf(cmd.srcId);
+                if (dst < 0 || src < 0) break;
+                if (cmd.paramIndex < 0 || cmd.paramIndex >= kMaxParams) break;
+                if (cmd.srcPort < 0 || cmd.srcPort >= nodes_[src].node->outputCount()) break;
+                // A note output has a sample buffer nobody writes, so modulating from one
+                // would pin the parameter at the bottom of its range with no visible cause.
+                if ((nodes_[src].node->noteOutputs() &
+                     (1u << static_cast<uint32_t>(cmd.srcPort))) != 0) {
+                    break;
+                }
+                repatch(nodes_[dst].params[cmd.paramIndex].route, src, cmd.srcPort);
+                dirty_ = true;
+                break;
+            }
+            case CommandType::DisconnectMod: {
+                const int32_t dst = indexOf(cmd.id);
+                if (dst < 0) break;
+                if (cmd.paramIndex < 0 || cmd.paramIndex >= kMaxParams) break;
+                // One modulator per parameter, so the source is named for symmetry with a
+                // cable and checked by nothing: the interface says this knob is now free.
+                repatch(nodes_[dst].params[cmd.paramIndex].route, -1, 0);
+                dirty_ = true;
                 break;
             }
             case CommandType::SetStep: {
@@ -446,6 +536,12 @@ void Graph::rebuildOrder() {
                     if (source.index >= 0 && !emitted_[source.index]) { ready = false; break; }
                 }
             }
+            // A modulator before the knob it turns, for the same reason: evaluated after, the
+            // node would read the previous block's sweep, and a block late is still late.
+            for (int32_t p = 0; p < kMaxParams && ready; ++p) {
+                const int32_t src = nodes_[i].params[p].route.sourceIndex;
+                if (src >= 0 && !emitted_[src]) ready = false;
+            }
             if (!ready) continue;
 
             emitted_[i] = true;
@@ -463,6 +559,52 @@ void Graph::rebuildOrder() {
             emitted_[i] = true;
             order_[orderCount_++] = i;
         }
+    }
+}
+
+float Graph::modulatedValue(const ParamRef &param, int32_t index, int32_t port,
+                            int32_t frames) const {
+    if (index < 0 || !param.ranged || !nodes_[index].used || frames <= 0) return param.base;
+
+    const float *buffer = nodes_[index].node->output(port);
+    float sum = 0.0f;
+    for (int32_t i = 0; i < frames; ++i) sum += buffer[i];
+    const float mean = sum / static_cast<float>(frames);
+    // NaN compares false both ways, so it falls through to the bottom of the range rather
+    // than reaching a node's setParam.
+    const float amount = mean > 1.0f ? 1.0f : (mean > 0.0f ? mean : 0.0f);
+
+    // Geometric only where it can be: a range touching zero or crossing it has no ratio,
+    // and a stepped or bipolar parameter is linear anyway.
+    if (param.exponential && param.low > 0.0f && param.high > 0.0f) {
+        return param.low * std::pow(param.high / param.low, amount);
+    }
+    return param.low + amount * (param.high - param.low);
+}
+
+void Graph::applyModulation(Record &record, int32_t frames) {
+    for (int32_t p = 0; p < kMaxParams; ++p) {
+        ParamRef &param = record.params[p];
+        InputRef &ref = param.route;
+        if (ref.sourceIndex < 0 && ref.rampRemaining <= 0) continue;
+
+        const float target = modulatedValue(param, ref.sourceIndex, ref.sourcePort, frames);
+        float value = target;
+        if (ref.rampRemaining > 0) {
+            ref.rampRemaining = ref.rampRemaining > frames ? ref.rampRemaining - frames : 0;
+            const float linear = 1.0f - static_cast<float>(ref.rampRemaining) /
+                                        static_cast<float>(ref.rampLength);
+            // Smoothstep, as for signals. At a block rate the corners are steps in a
+            // parameter rather than in a waveform, but a gain parameter turns one into the
+            // other.
+            const float t = linear * linear * (3.0f - 2.0f * linear);
+            const float previous = modulatedValue(param, ref.fromIndex, ref.fromPort, frames);
+            value = previous * (1.0f - t) + target * t;
+        }
+        // The last block of a fade back to the knob lands on the knob exactly, and the
+        // next block skips this parameter altogether.
+        if (ref.rampRemaining == 0) ref.fromIndex = -1;
+        record.node->setParam(p, value);
     }
 }
 
@@ -491,6 +633,8 @@ void Graph::process(int32_t frames) {
             const int32_t count = transport_.ticks(interval, frames, ticks.data(), kMaxTicks);
             for (int32_t t = 0; t < count; ++t) node->tick(ticks[t].offset, ticks[t].count);
         }
+
+        applyModulation(record, frames);
 
         const int32_t ins = node->inputCount();
         const uint32_t noteMask = node->noteInputs();

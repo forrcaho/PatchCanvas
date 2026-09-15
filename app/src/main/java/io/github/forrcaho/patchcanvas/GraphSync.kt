@@ -17,7 +17,8 @@ enum class NodeType(val id: Int) {
     Vca(7),
     // 8 was Clock, retired when the transport replaced it, and deliberately not reused.
     Mix(9),
-    Voice(10);
+    Voice(10),
+    Lfo(11);
 
     companion object {
         fun of(type: ModuleType): NodeType = when (type.name) {
@@ -30,6 +31,7 @@ enum class NodeType(val id: Int) {
             "VCA" -> Vca
             "Mix" -> Mix
             "Voice" -> Voice
+            "LFO" -> Lfo
             else -> Unknown
         }
     }
@@ -52,6 +54,14 @@ interface GraphCommands {
      */
     fun disconnect(srcId: Long, srcPort: Int, dstId: Long, dstPort: Int)
     fun setParam(id: Long, index: Int, value: Float)
+    /**
+     * What an exposed parameter sweeps between, in its own units, and whether geometrically.
+     * There is no clearing one: a parameter nothing modulates ignores its range.
+     */
+    fun setModRange(id: Long, index: Int, low: Float, high: Float, exponential: Boolean)
+    /** A cable onto parameter [index] of [dstId]. A parameter takes one, so this replaces. */
+    fun connectMod(srcId: Long, srcPort: Int, dstId: Long, index: Int)
+    fun disconnectMod(srcId: Long, srcPort: Int, dstId: Long, index: Int)
     /** One step of a sequence, as a degree: the engine resolves it against the scale list. */
     fun setStep(id: Long, index: Int, degree: Int, gate: Boolean)
     /** The patch's scale list, whole, with each entry's length worked out in beats. */
@@ -100,6 +110,21 @@ object EngineCommands : GraphCommands {
         AudioEngine.setParam(id, index, value)
     }
 
+    override fun setModRange(id: Long, index: Int, low: Float, high: Float, exponential: Boolean) {
+        trace { "range $id[$index] = $low..$high${if (exponential) " exp" else ""}" }
+        AudioEngine.setModRange(id, index, low, high, exponential)
+    }
+
+    override fun connectMod(srcId: Long, srcPort: Int, dstId: Long, index: Int) {
+        trace { "modulate $srcId[$srcPort] -> $dstId.param[$index]" }
+        AudioEngine.connectMod(srcId, srcPort, dstId, index)
+    }
+
+    override fun disconnectMod(srcId: Long, srcPort: Int, dstId: Long, index: Int) {
+        trace { "unmodulate $srcId[$srcPort] -> $dstId.param[$index]" }
+        AudioEngine.disconnectMod(srcId, srcPort, dstId, index)
+    }
+
     override fun setStep(id: Long, index: Int, degree: Int, gate: Boolean) {
         trace { "step $id[$index] = degree $degree ${if (gate) "on" else "rest"}" }
         AudioEngine.setStep(id, index, degree, gate)
@@ -138,6 +163,7 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
     private var syncedNodes = emptyMap<Long, NodeType>()
     private var syncedCables = emptySet<Connection>()
     private var syncedParams = emptyMap<Long, List<Float>>()
+    private var syncedRanges = emptyMap<Long, Map<Int, ModRange>>()
     private var syncedSteps = emptyMap<Long, List<Step>>()
     private var syncedScales: List<ScaleEntry>? = null
     private var syncedBeatsPerBar: Int? = null
@@ -148,6 +174,7 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
         syncedNodes = emptyMap()
         syncedCables = emptySet()
         syncedParams = emptyMap()
+        syncedRanges = emptyMap()
         syncedSteps = emptyMap()
         syncedScales = null
         syncedBeatsPerBar = null
@@ -173,23 +200,50 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
             // what was playing, which steps. Letting the connect stand on its own is
             // what makes replacing a cable an actual crossfade.
             if (it.to !in replaced) {
-                commands.disconnect(it.from.moduleId, it.from.index, it.to.moduleId, it.to.index)
+                if (it.to.dir == PortDirection.MOD) {
+                    commands.disconnectMod(it.from.moduleId, it.from.index, it.to.moduleId, it.to.index)
+                } else {
+                    commands.disconnect(it.from.moduleId, it.from.index, it.to.moduleId, it.to.index)
+                }
             }
         }
 
         (syncedNodes.keys - nodes.keys).forEach { commands.removeNode(it) }
 
+        val fresh = mutableSetOf<Long>()
         nodes.forEach { (id, type) ->
             val had = syncedNodes[id]
             if (had != type) {
                 // A type change would be a different node wearing the same id.
                 if (had != null) commands.removeNode(id)
                 commands.addNode(id, type)
+                fresh += id
+            }
+        }
+
+        // Ranges before the cables that use them. The engine ignores a modulator on a
+        // parameter that has no range yet, so the other order would be silent rather than
+        // wrong -- but only until the range arrived, and a queue drained partway through a
+        // sync would let a block render in between. Every range of a node that was just
+        // made, because the engine's node knows none of them.
+        val ranges = patch.modules.associate { it.id to it.modRanges }
+        ranges.forEach { (id, exposed) ->
+            val type = patch.module(id)?.type ?: return@forEach
+            val previous = if (id in fresh) null else syncedRanges[id]
+            exposed.forEach { (index, range) ->
+                if (previous?.get(index) != range) {
+                    val exponential = type.params.getOrNull(index)?.curve == ParamCurve.EXPONENTIAL
+                    commands.setModRange(id, index, range.low, range.high, exponential)
+                }
             }
         }
 
         (cables - syncedCables).forEach {
-            commands.connect(it.from.moduleId, it.from.index, it.to.moduleId, it.to.index)
+            if (it.to.dir == PortDirection.MOD) {
+                commands.connectMod(it.from.moduleId, it.from.index, it.to.moduleId, it.to.index)
+            } else {
+                commands.connect(it.from.moduleId, it.from.index, it.to.moduleId, it.to.index)
+            }
         }
 
         // Knobs last, and every knob of a node that was just added: the engine's node
@@ -235,6 +289,7 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
         syncedNodes = nodes
         syncedCables = cables
         syncedParams = params
+        syncedRanges = ranges
         syncedSteps = steps
         syncedScales = patch.scales
         syncedBeatsPerBar = patch.beatsPerBar

@@ -467,6 +467,36 @@ void VoiceNode::setParam(int32_t index, float value) {
     }
 }
 
+// ---------------------------------------------------------------- LFO
+
+void LfoNode::process(int32_t frames) {
+    float *o = out(0);
+    const double step = static_cast<double>(rateHz_) / static_cast<double>(sampleRate_);
+    for (int32_t i = 0; i < frames; ++i) {
+        const auto phase = static_cast<float>(phase_);
+        switch (wave_) {
+            case 0: o[i] = phase; break;                                  // saw, rising
+            case 1: o[i] = phase < 0.5f ? 1.0f : 0.0f; break;             // square
+            case 2: o[i] = 1.0f - std::fabs(2.0f * phase - 1.0f); break;  // triangle, from 0
+            // Cosine rather than sine, so it starts from the bottom of the range like the
+            // other three instead of from the middle of it.
+            default: o[i] = 0.5f - 0.5f * std::cos(2.0f * static_cast<float>(M_PI) * phase); break;
+        }
+        // Naive, not band-limited. Nothing reads this at audio rate -- a parameter samples
+        // it once a block -- and a square that is a clean 1 or 0 is the useful kind.
+        phase_ += step;
+        if (phase_ >= 1.0) phase_ -= std::floor(phase_);
+    }
+}
+
+void LfoNode::setParam(int32_t index, float value) {
+    switch (index) {
+        case 0: rateHz_ = clampf(value, 0.01f, 40.0f); break;
+        case 1: wave_ = static_cast<int32_t>(clampf(value, 0.0f, 3.0f) + 0.5f); break;
+        default: break;
+    }
+}
+
 // ---------------------------------------------------------------- Mix
 
 void MixNode::process(int32_t frames) {
@@ -559,6 +589,7 @@ Node *makeNode(NodeType type) {
         case NodeType::Steps: return new StepsNode();
         case NodeType::Mix: return new MixNode();
         case NodeType::Voice: return new VoiceNode();
+        case NodeType::Lfo: return new LfoNode();
         case NodeType::Out: return new OutNode();
         case NodeType::In: return new InNode();
         default: return new NullNode(1, 1);

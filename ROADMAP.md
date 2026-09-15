@@ -1355,6 +1355,59 @@ the ranges *and* the modulation cables, or the feature is inert exactly as param
 format. And `PortRef` survives with a third `PortDirection` whose index means a parameter,
 but `PatchStore` hard-codes `OUTPUT`/`INPUT` on load, so it is a format bump.
 
+---
+
+**Engine and model built, 2026-09-14; the gesture is not.** 90 graph checks, 90 node checks,
+197 JVM tests. Nothing has been on the device, and nothing a finger can reach has changed:
+the `[ ]` chip, its brackets and the drawn band are the next step. Everything above the rule
+was designed before any code; what follows is what building the rest changed.
+
+**Every parameter became modulatable at once.** The graph applies a modulator through each
+node's own `setParam`, once per block, so no node learned that modulation exists. The price is
+a 1500Hz control rate at 48k -- which is why audio-rate modulation stays a declared audio
+input, as the design already said. A block reads its modulator's *mean* over the block rather
+than any one sample: picking a sample is pure aliasing, and averaging is at least a crude
+lowpass.
+
+**The crossfade needed no new mechanism.** A parameter's route is an `InputRef`, and `repatch`
+runs on it unchanged. The one reinterpretation is that no source means the knob's own value
+rather than silence -- so patching fades from the knob, replacing fades between two live
+modulators, and unpatching fades back, all in value space. A knob moved while modulated is
+remembered, and applied nowhere until the modulator lets go.
+
+**Ports take fixed slots, not packed ones.** "Three across, then a second row" did not say
+which parameter goes where, and the first reading -- pack the exposed ones left to right --
+slides a port along whenever a parameter before it is exposed. So a parameter's slot is its
+position among the rows, gaps included: a `Voice`'s release is always the middle of the second
+row, and exposing it alone makes a two-row band with an empty row above it.
+
+**A new range is not at the knob.** The design had both brackets start at the control's
+current value. Taken literally, the first modulator patched to it would do nothing, which reads
+as a cable that failed -- so a new range reaches a fifth of the knob's travel either side, and a
+stepped parameter gets all of its options.
+
+**Only CV modulates, for now.** Audio and gate outputs are refused at a parameter's jack, as
+notes already were at a signal input. CV is what becomes modulation when CV retires, so this is
+that rule arriving early rather than a new one. An `LFO` exists so there is something to patch:
+free-running in hertz, and unipolar because the destination owns the range.
+
+**The three things were remembered.** The `snapshotFlow` reads the ranges; `toJson` writes them
+as format 4, with a modulation cable saved against its parameter's *name*, like the knobs; and
+`PortRef` carries `PortDirection.MOD`. `ports(MOD)` is deliberately empty, because every loop
+over `ports(dir)` was written for two sides and puts a port on the left or the right -- a site
+that forgets modulation draws nothing rather than a jack in the wrong place.
+
+**The mutation check found two tests that could not fail.** Deleting the crossfade outright
+passed the first version, which measured the steepest sample: a bias that jumps steps a sine
+only by as much as the sine is at that one sample, and near a zero crossing that is nothing.
+The fade is now measured by how long it takes, in windows longer than a cycle. And a threshold
+worked out on paper failed against the real output, because Out's limiter already reads a peak
+of 0.6 as 0.543 -- so tests comparing two levels stay below 0.4, and the rest judge against what
+was measured. Seventeen of twenty mutations now fail a test. The three that do not are the reap
+and `Add` clearing parameter routes, which `retire()` and `record = Record{}` already guarantee
+and which stay as the same belt and braces the signal inputs have; and a straight-line fade in
+place of smoothstep, which windowed peaks cannot tell apart.
+
 ### Choosing from a library
 
 A flat grid of 5 columns by 6 rows is about 404x279dp on the reference device -- a
