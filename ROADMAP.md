@@ -1459,9 +1459,13 @@ has yet wanted the output level modulated.
 Noticed and left alone: a fifth of an exponential knob's travel near its bottom is not much,
 so a new range on an attack of 5ms is 1ms to 27ms. The reading now says so.
 
-**Still open: cables pass behind modules.** Whether they should route around them instead is
-a question with real costs -- a route that flips sides as a module is dragged across it, and a
-path search per cable per frame -- and is waiting on a decision rather than on code.
+**Cables are drawn over modules now, as a trial.** Drawn under, a cable passing behind a box
+vanished there. Routing around the boxes was the other candidate and was not tried first, for
+its costs: a route that flips sides as a module is dragged across it, and a path search per
+cable per frame. Over the modules, a cable is a little translucent so a title still reads
+through it, and each end gets a plug in the cable's colour, since the stroke would otherwise
+cover the jack's own dot. Whether crossing labels is worse than vanishing is for the phone to
+say.
 
 ### Choosing from a library
 

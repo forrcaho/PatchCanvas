@@ -2182,24 +2182,6 @@ fun PatchCanvas(
 
         drawRect(Color(0xFF14171C))
 
-        // Cables are drawn in screen space, because a cable can run from a world module
-        // to a rail and so have one endpoint in each space. Resolving both through
-        // portScreen() keeps that a non-case.
-        patch.connections.forEach { conn ->
-            val a = portScreen(patch, conn.from, camera, frame) ?: return@forEach
-            val b = portScreen(patch, conn.to, camera, frame) ?: return@forEach
-            val dim = !patch.portUsable(conn.from) || !patch.portUsable(conn.to)
-            // Coloured by what the source emits, not what the destination expects --
-            // the two may legitimately differ, and the cable should say what is actually
-            // travelling down it.
-            drawCable(
-                a, b,
-                patch.kindOf(conn.from).cable.copy(alpha = if (dim) 0.3f else 1f),
-                2.5f * d,
-                intoBottom = conn.to.dir == PortDirection.MOD,
-            )
-        }
-
         withTransform({
             translate(camera.pan.x, camera.pan.y)
             scale(camera.worldToScreen, camera.worldToScreen, pivot = Offset.Zero)
@@ -2264,6 +2246,34 @@ fun PatchCanvas(
             }
             if (rail.id in flash.ids && pulse.value > 0f) {
                 drawFlash(frame.railRect(rail), d, pulse.value, 3f * d)
+            }
+        }
+
+        // Cables over the modules rather than under them, and a little translucent, so a cable
+        // crossing a module stays visible and the module still shows through it. Drawn under,
+        // a cable passing behind a box simply vanished there, and which of two jacks it came
+        // out at was a guess. Routing around the boxes was the other candidate and was not
+        // tried first: a route flips sides as a module is dragged across it, and it costs a
+        // path search per cable per frame.
+        //
+        // In screen space, because a cable can run from a world module to a rail and so have
+        // one endpoint in each space. Resolving both through portScreen() keeps that a non-case.
+        patch.connections.forEach { conn ->
+            val a = portScreen(patch, conn.from, camera, frame) ?: return@forEach
+            val b = portScreen(patch, conn.to, camera, frame) ?: return@forEach
+            val dim = !patch.portUsable(conn.from) || !patch.portUsable(conn.to)
+            // Coloured by what the source emits, not what the destination expects --
+            // the two may legitimately differ, and the cable should say what is actually
+            // travelling down it.
+            val color = patch.kindOf(conn.from).cable.copy(alpha = if (dim) 0.3f else CABLE_ALPHA)
+            drawCable(a, b, color, 2.5f * d, intoBottom = conn.to.dir == PortDirection.MOD)
+            // A plug at each end, in the cable's colour. Drawn over, the stroke would cover the
+            // jack's own dot; this puts one back, and says the jack is taken, as a patched jack
+            // on the open panel already does.
+            for ((ref, at) in listOf(conn.from to a, conn.to to b)) {
+                val pinned = patch.module(ref.moduleId)?.isPinned == true
+                val scale = if (pinned) d else camera.worldToScreen
+                drawCircle(color.copy(alpha = if (dim) 0.3f else 1f), PatchModule.PORT_RADIUS * scale, at)
             }
         }
 
@@ -3497,6 +3507,12 @@ private val MenuLabelStyle = TextStyle(
     fontWeight = FontWeight.Medium,
     color = Color(0xFFE4E7EC),
 )
+
+/**
+ * How opaque a cable is. Less than solid because cables now cross the modules they pass,
+ * and a module's title and labels should still read through one.
+ */
+private const val CABLE_ALPHA = 0.8f
 
 private fun DrawScope.drawCable(
     a: Offset,
