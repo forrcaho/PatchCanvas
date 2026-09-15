@@ -143,9 +143,15 @@ the only one defined in code, and exists so the app still works when that folder
 unreadable. Tuning controls are in **cents**, never semitones: a semitone is a fact about 12-TET and
 means nothing in the tunings these knobs still have to work in.
 
-**Signal types are advisory.** Audio, CV and gate colour the cable and the port; any
-output may patch to any input. In hardware it is all voltage, and audio-rate modulation
-lives in exactly the connections enforcement would forbid. Do not "fix" this.
+**Signal types were advisory, and are being retired.** Audio, CV and gate coloured the
+cable without constraining it, because in hardware it is all voltage. That was the
+Eurorack model and the project has left it: CV and gate become *modulation* and *pulse*,
+which are not voltages and do not interchange, so typing is enforced rather than
+advisory. Audio-rate modulation does not need the loophole — a module that wants it
+declares an audio input, as `Osc`'s `fm` already does. **Designed, not built**: the code
+below still carries `SignalKind.CV`/`GATE` and `patchesTo`, and the engine still has
+`Env`, `Vca` and `Steps`' pitch and gate outputs. See Phase 7 in `ROADMAP.md` before
+changing either side.
 
 **Inputs take one source.** A connect already replaces, so a replacement must send only
 the connect — sending a disconnect too makes the engine fade to silence and back, which

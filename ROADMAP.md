@@ -21,7 +21,8 @@ vocabulary -- 1V/oct, gates, "it is all voltage" -- and while the two agreed not
 depended on which was the model. They disagree about notes: a Eurorack cable carries one
 signal, so polyphony means copying voices, where Bespoke passes notes as events and lets
 whatever sounds them allocate the voices. Where they part, Bespoke's shape wins -- though
-not its names, and not its internal MIDI. See Phase 6.
+not its names, and not its internal MIDI. See Phase 6, where notes became events, and
+Phase 7, where CV and gate follow them out.
 
 ## Stack
 
@@ -1172,6 +1173,13 @@ better shape for a finger.
 the panel owns the screen. How a modulator's output reaches a slider inside it is the
 unsolved part (open question 7), and nothing is built until it is.
 
+**Answered in Phase 7, by reversing one premise of this section.** The argument above was
+that a parameter becomes a target *without* a jack, since `kMaxPorts` is four and a jack
+costs 44dp. Both halves were true of the edges a module had when this was written. A new
+edge and a separate index space make the jack affordable -- and the jack turns out to be
+what lets a modulator reach a control it cannot see, which the jackless version could
+never do across a scope boundary.
+
 ### Names
 
 **Not Bespoke's, and not Eurorack's by default.** Bespoke calls a note source an
@@ -1190,7 +1198,15 @@ The app's own name is part of the same question and equally open. Changing the n
 on the launcher costs nothing; changing the `applicationId` makes it a different app to
 Android, so an installed copy cannot update into it.
 
-## Phase 7 -- Subpatches
+## Phase 7 -- Subpatches, and the end of CV
+
+**Designed, not built.** The screen-space reasoning below predates it; everything from
+*Opening a module is going inside it* onward was settled in discussion on 2026-09-14,
+before any code. It answers open question 7, retires an invariant CLAUDE.md marked
+do-not-touch, and changes most of the module catalogue. Four layouts were drawn against
+the real 986x443dp landscape frame first, and the drawings are what settled it -- two of
+the four turned out to be too small rather than merely worse, which is not something the
+argument had reached on its own.
 
 A phone screen holds about 17 modules at zoom 1.0. A patch worth playing will exceed
 that, and panning around a flat sheet of forty nodes is a worse problem than the one
@@ -1226,6 +1242,118 @@ Env, VCA and Filter patched together, and three voices meant three copies. Phase
 polyphony onto note events and voice pools, so grouping is about screen space again, and
 abstraction's stamped-out instances are one candidate for what fills a pool rather than
 the only route to a chord.
+
+### Opening a module is going inside it
+
+**One gesture, and what you find depends on what the module is.** Open a composite and
+there is a graph; open a primitive and there are its controls. The breadcrumb is the same
+either way, so how deep you are is one thing to read rather than two modes to tell apart --
+and the open panel stops being the gesture loop's exception by becoming an ordinary scope.
+
+The panel is reinterpreted rather than deleted. Its generous controls are what a scope
+offers when the thing inside is a primitive, and that number is what decided the layout: a
+slider gets 380dp of travel inside a scope against the 68dp a 116dp module face could give
+it. 68dp is 166 physical pixels at this density -- enough to set a filter, tight for an
+attack time.
+
+The sequencer decided it as well. A 16-step grid on a 116dp face is 7dp per step, and 13dp
+even at double width, against the 24dp the panel gives it. A layout that cannot hold the
+module the instrument is built around is not a layout.
+
+Three alternatives were drawn and rejected. **Controls on the module face**, which is
+Bespoke's own layout and Audulus's, on those two measurements. **Semantic zoom**, with
+controls drawn only above a threshold -- it keeps the density and dissolves the same
+problems, but it puts patching and tweaking at different zooms, and open question 2 is
+already watching how much navigation this interface costs. **Keeping the panel modal and
+giving descent its own affordance**, which is the smallest change and leaves both of the
+problems it was meant to solve exactly where they were.
+
+### What a cable carries
+
+**CV and gate go.** They are Eurorack's answer to having one kind of wire, and this stopped
+being Eurorack in Phase 6. Four kinds, which are Bespoke's:
+
+| | |
+| --- | --- |
+| **audio** | samples, per frame -- unchanged |
+| **note** | events with pitch, velocity and an id -- unchanged, built in Phase 6 |
+| **pulse** | events without pitch: reset, retrigger, sample-start |
+| **modulation** | a value driving a control between a low and a high stored on the control, in its units |
+
+Pulse and modulation keep the colours of the gate and CV they replace, which is most of the
+argument that they are the same idea said properly. `Node::tick` already anticipates the
+first: "one entry point on purpose: a pulse cable, if one is ever built, calls the same
+thing with a count of its own".
+
+**Typing stops being advisory.** It was advisory because in hardware it is all voltage, and
+because audio-rate modulation lives in exactly the connections enforcement would forbid.
+The second half is answered rather than abandoned -- a module that wants audio-rate
+modulation declares an audio input, as `Osc`'s `fm` already does. The first half simply
+stops being true, since not one of these four is a voltage. Note to pulse is the single
+allowed conversion, because a note implies a trigger; the reverse is refused, because
+nothing says what pitch it would be.
+
+**The catalogue changes more than the engine does.** `Steps` drops pitch and gate and keeps
+notes, ending the "same sequence, said twice" that Phase 6 left deliberately in place.
+`Filter` drops its cutoff jack and `Osc` its pitch jack, both becoming modulatable knobs.
+`Env` becomes a modulator rather than a CV source. `Vca` retires outright: its entire reason
+was a CV input, and what remains is a gain with a modulatable level. Every surviving module
+gets *shorter*, because ports drive height -- so retiring CV buys canvas back before the
+subpatch work spends any of it.
+
+**Blocked on the rest of this phase, in that order.** CV cannot be retired until a parameter
+can be modulated, and a parameter cannot be modulated until the mechanic below exists.
+
+### Modulating a parameter
+
+**Expose it from inside; patch it from outside.** A parameter has no jack until you say so.
+Inside the module, each control row carries a `[ ]` chip -- `[` marks the low end and `]`
+the high, which is what the icon is saying. Tapping it grows two range handles on the row at
+the control's current value, and a port appears on the module's **bottom edge** in the same
+moment, so the consequence shows up where the gesture was made and the label is learned
+immediately. Tapping it again un-exposes. Back out, and the port is on the module's face
+where you left it; an LFO or an envelope patches to it with the ordinary two taps.
+
+**The virtue is that no armed state crosses a boundary.** The obvious alternative -- tap the
+modulator's output, descend, tap the slider -- needs a half-finished cable to survive a
+navigation, where the gesture loop's whole property is that it decides once, on the first
+move. Making the port exist first keeps the connection an ordinary connection.
+
+**Bottom, because a module can grow downward and not sideways.** `portIn` takes the ports'
+band height as a parameter rather than deriving it from the rect, precisely so that an open
+module does not move its jacks -- so a band added below the body costs nothing. Width is not
+symmetrical with height here: the same function reads `rect.left` and `rect.right`, so a
+wider module moves its outputs and every cable attached to them jumps. **A full band pages
+into a second row, never wider.** Three fit across 116dp -- inset 13dp each side leaves 90dp,
+and three at a 45dp pitch clears the 44dp `PORT_PITCH` used everywhere else. `kMaxParams` is
+five, so one more row covers the worst a module can ask for.
+
+**`kMaxPorts` is not involved.** A modulation port is addressed by parameter index rather
+than port index, and a parameter takes at most one modulator, so it is an array of
+`kMaxParams` beside `inputs_` in its own space; the four signal ports are untouched. The
+engine side stays the pointer swap SuperCollider's `/n_map` suggested: a parameter reads
+either its own float or a modulator's buffer, with the usual crossfade on a change, both
+sides live.
+
+**Ports are told apart by name and position, not by shape.** Every port on that edge is the
+same kind, so a shape would have to carry identity -- arbitrary, where colour carrying kind
+is not. The band runs left to right in the same order as the rows inside, so the bottom edge
+is a map of what you just saw. The names are already short enough to be the labels: `cut`,
+`res`, `A`, `D`, `S`, `R`, `wave`, `len`, `bias`, `gain`, `lvl`. A truncation rule, not a
+naming scheme.
+
+**A parameter can only be modulated from its immediate parent, for now.** A composite built
+for a library should expose a sensible handful of things to modulate, which needs a way to
+promote a port up through a second boundary. That will be added and is not designed here.
+It is explicitly allowed to be fiddly: exposing controls is something done once while
+authoring a reusable module, not while playing, so the cost falls in the right place.
+
+**Three things to remember when this is built**, each of which has already gone wrong once
+in this project or is one line from doing so. The `snapshotFlow` in `MainActivity` must read
+the ranges *and* the modulation cables, or the feature is inert exactly as parameters were.
+`toJson` must emit them, because marking a range is an edit and undo goes through the file
+format. And `PortRef` survives with a third `PortDirection` whose index means a parameter,
+but `PatchStore` hard-codes `OUTPUT`/`INPUT` on load, so it is a format bump.
 
 ### Choosing from a library
 
@@ -1344,6 +1472,12 @@ use rather than by argument.
    Two uses survive latency regardless -- continuous gestures on notes already sounding,
    and input the transport quantises, where the finger chooses what and the next step
    chooses when.
-7. **How does a modulator reach a knob?** Phase 6 adopts modulation onto controls, and the
-   targets live in a panel that owns the screen. Tap-to-connect is already two taps, so
-   "tap the output, open the target, tap a slider" is plausible and untested.
+7. **How does a modulator reach a knob?** **Answered by design on 2026-09-14**, which is
+   not how this list is meant to work -- recorded as answered rather than deleted, because
+   the answer is still untested by a finger. "Tap the output, open the target, tap a
+   slider" was the guess, and it was wrong in an instructive way: it needs a half-finished
+   cable to survive a navigation. Phase 7 inverts it -- expose the parameter from inside,
+   where a `[ ]` chip on its row gives it a jack on the module's bottom edge, then patch
+   that jack from outside like any other. What remains untested is whether a port that
+   only exists because you asked for it reads as a feature or as a thing you have to know
+   about.
