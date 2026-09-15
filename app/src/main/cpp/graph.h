@@ -113,6 +113,15 @@ public:
      * thread's side of it is one relaxed store per sequencer per block.
      */
     int32_t stepOf(int64_t id) const;
+    /**
+     * Where a modulated parameter has got to, in its own units, or NaN for a node that is not
+     * here. Published once per block as the modulation is applied, for the same reason and in
+     * the same way as stepOf: the panel draws the newest value and nothing else wants one.
+     *
+     * Meaningful only for a parameter something is modulating, which is all the interface
+     * asks about. Any other reads whatever its last modulator left there, or zero.
+     */
+    float paramOf(int64_t id, int32_t index) const;
 
     /** The transport's rate. Rebased on arrival, so the position carries on rather than jumping. */
     bool postSetTempo(float bpm);
@@ -279,8 +288,11 @@ private:
      * No source, or no range, is the knob's own value.
      */
     float modulatedValue(const ParamRef &param, int32_t index, int32_t port, int32_t frames) const;
-    /** Pushes every modulated or fading parameter of [record] into its node. */
-    void applyModulation(Record &record, int32_t frames);
+    /**
+     * Pushes every modulated or fading parameter of [record] into its node, and publishes
+     * where each has got to under [slot].
+     */
+    void applyModulation(Record &record, int32_t slot, int32_t frames);
     /** Gathers a note input's sources into one buffer, in offset order, tagged by slot. */
     const NoteBuffer &mergeNotes(const Record &record, int32_t port);
     /** Frees nodes whose fade-out has run. Audio thread, end of each block. */
@@ -295,6 +307,8 @@ private:
     struct Telemetry {
         std::atomic<int64_t> id{0};
         std::atomic<int32_t> step{-1};
+        /** Each modulated parameter's value this block, so its bar can follow the modulator. */
+        std::array<std::atomic<float>, kMaxParams> params{};
     };
     std::array<Telemetry, kMaxNodes> telemetry_{};
 

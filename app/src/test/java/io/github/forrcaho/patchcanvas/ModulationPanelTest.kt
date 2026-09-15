@@ -84,7 +84,7 @@ class ModulationPanelTest {
     }
 
     @Test
-    fun `a bracket is found where it is drawn, and nowhere else`() {
+    fun `on an exposed row, a touch anywhere takes the nearer bracket`() {
         val patch = Patch()
         val filter = patch.add(Types.Filter, Offset.Zero)!!
         patch.expose(filter, 0, ModRange(400f, 2000f))
@@ -92,12 +92,49 @@ class ModulationPanelTest {
         val param = filter.type.params[0]
         val low = panelBracketX(row, d, param, 400f, closing = false)
         val high = panelBracketX(row, d, param, 2000f, closing = true)
+        val y = row.center.y
+        val middle = (low + high) / 2f
 
-        assertEquals(false, panelBracketAt(panel, d, filter, 0, Offset(low, row.center.y)))
-        assertEquals(true, panelBracketAt(panel, d, filter, 0, Offset(high, row.center.y)))
-        assertNull("between them is the knob", panelBracketAt(panel, d, filter, 0, Offset((low + high) / 2f, row.center.y)))
+        assertEquals(false, panelBracketAt(panel, d, filter, 0, Offset(low, y)))
+        assertEquals(true, panelBracketAt(panel, d, filter, 0, Offset(high, y)))
+        assertEquals(false, panelBracketAt(panel, d, filter, 0, Offset(middle - 5f, y)))
+        assertEquals(true, panelBracketAt(panel, d, filter, 0, Offset(middle + 5f, y)))
+        assertEquals("far along the bar is still the nearer one", true, panelBracketAt(panel, d, filter, 0, Offset(row.right - 1f, y)))
         assertNull("another row is not this one", panelBracketAt(panel, d, filter, 0, Offset(low, row.top - 40f * d)))
-        assertNull("an unexposed row has none", panelBracketAt(panel, d, filter, 1, Offset(low, panelRow(panel, d, filter.type, 1).center.y)))
+        assertNull(
+            "an unexposed row has none",
+            panelBracketAt(panel, d, filter, 1, Offset(low, panelRow(panel, d, filter.type, 1).center.y)),
+        )
+    }
+
+    @Test
+    fun `a bracket parked at the end of its bar is taken from beyond it`() {
+        // A new range puts [ at the very end for any knob in the bottom fifth of its travel,
+        // and a finger aiming at it from outside lands a little past the bar.
+        val patch = Patch()
+        val voice = patch.add(Types.Voice, Offset.Zero)!!
+        val attack = voice.type.params[1]
+        patch.expose(voice, 1, initialModRange(attack, attack.default))
+        val row = panelRow(panel, d, voice.type, 1)
+        val low = panelBracketX(row, d, attack, voice.modRanges.getValue(1).low, closing = false)
+        assertEquals("the new range starts at the end of the bar", row.left, low, 0.5f)
+        assertEquals(false, panelBracketAt(panel, d, voice, 1, Offset(row.left - 15f * d, row.center.y)))
+    }
+
+    @Test
+    fun `an exposed row's knob cannot be moved by hand`() {
+        val patch = Patch()
+        val filter = patch.add(Types.Filter, Offset.Zero)!!
+        val at = panelRow(panel, d, filter.type, 0).center
+        assertEquals(0, panelKnobAt(panel, d, filter, at))
+        patch.expose(filter, 0, ModRange(400f, 2000f))
+        assertNull(panelKnobAt(panel, d, filter, at))
+    }
+
+    @Test
+    fun `an exposed bar reads its range in its own units`() {
+        assertEquals("[0.017s \u2013 0.522s]", rangeReading(Types.Voice.params[1], ModRange(0.017f, 0.522f)))
+        assertEquals("[300Hz \u2013 3000Hz]", rangeReading(Types.Filter.params[0], ModRange(300f, 3000f)))
     }
 
     @Test

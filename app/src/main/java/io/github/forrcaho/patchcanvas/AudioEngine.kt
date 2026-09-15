@@ -116,6 +116,17 @@ object AudioEngine {
     fun stepOf(id: Long): Int =
         if (available && started) nativeStepOf(id) else -1
 
+    /**
+     * Where a modulated parameter has got to, or null when the engine cannot say.
+     *
+     * Polled per frame while its panel is open and something is patched to it, and nowhere
+     * else -- the same shape as [stepOf], for the same reason.
+     */
+    fun paramOf(id: Long, index: Int): Float? {
+        if (!available || !started) return null
+        return nativeParamOf(id, index).takeIf { !it.isNaN() }
+    }
+
     /** The transport's rate, in beats per minute. The engine clamps it to what it supports. */
     fun setTempo(bpm: Float): Boolean = available && started && nativeSetTempo(bpm)
 
@@ -210,6 +221,7 @@ object AudioEngine {
     ): Boolean
     private external fun nativeScaleEntry(): Int
     private external fun nativeStepOf(id: Long): Int
+    private external fun nativeParamOf(id: Long, index: Int): Float
     private external fun nativeSetTempo(bpm: Float): Boolean
     private external fun nativeResetTransport(): Boolean
     private external fun nativeTransportBeat(): Double

@@ -1434,6 +1434,35 @@ burst, which says nothing about how a sweep sounds. The chip's `[ ]` renders wit
 squeezed to `[]`. The rails expose nothing -- a rail has no bottom edge to spare, and nothing
 has yet wanted the output level modulated.
 
+**The first use on the phone, 2026-09-15, changed four things.**
+
+- **A range reads as a range.** Moving the brackets showed no numbers at all. An exposed bar
+  now reads `[0.005s – 0.027s]` where its value was, following either end as it moves; an en
+  dash, since a hyphen beside a negative number of cents reads as a sign.
+- **An exposed knob is not the hand's.** The bar stayed draggable, and what it set was not
+  clear -- it was the value the parameter returns to when unpatched, which nothing shows while
+  a modulator runs. The bar now shows where the modulator has taken the parameter, live: the
+  engine publishes each modulated value once per block, as it does a sequencer's step, and the
+  open panel polls it per frame. "Modulation on" means the chip, patched or not; an exposed
+  parameter with no cable in it simply shows its knob.
+- **The whole row takes the nearer bracket**, which is what a row with no knob left to drag
+  can mean, and a tap moves that bracket to where it landed, as a tap moves a knob.
+- **A bracket at the end of its bar could barely be taken.** A new range parks `[` at the very
+  end for any knob in the bottom fifth of its travel, and a bracket was found only within 22dp
+  of it and never beyond the row -- so a finger aiming at it from outside, which is where a
+  finger aiming at an edge lands, found nothing, and "stuck" was exactly right. Reproduced on
+  the emulator before it was fixed: a drag starting 15dp left of the bracket sent no command,
+  and the same drag starting on it moved it. The row now reaches a bracket's width past both
+  ends. Mutation-checked, with the other three: restoring the old zone, leaving an exposed knob
+  editable, and dropping either half of the published value each fail a test.
+
+Noticed and left alone: a fifth of an exponential knob's travel near its bottom is not much,
+so a new range on an attack of 5ms is 1ms to 27ms. The reading now says so.
+
+**Still open: cables pass behind modules.** Whether they should route around them instead is
+a question with real costs -- a route that flips sides as a module is dragged across it, and a
+path search per cable per frame -- and is waiting on a decision rather than on code.
+
 ### Choosing from a library
 
 A flat grid of 5 columns by 6 rows is about 404x279dp on the reference device -- a

@@ -1,6 +1,7 @@
 #include "graph.h"
 
 #include <cmath>
+#include <limits>
 
 // ---------------------------------------------------------------- UI thread
 
@@ -57,6 +58,17 @@ int32_t Graph::stepOf(int64_t id) const {
         }
     }
     return -1;
+}
+
+float Graph::paramOf(int64_t id, int32_t index) const {
+    if (id != 0 && index >= 0 && index < kMaxParams) {
+        for (const auto &entry : telemetry_) {
+            if (entry.id.load(std::memory_order_relaxed) == id) {
+                return entry.params[index].load(std::memory_order_relaxed);
+            }
+        }
+    }
+    return std::numeric_limits<float>::quiet_NaN();
 }
 
 bool Graph::postSetStep(int64_t id, int32_t index, int32_t degree, bool gate) {
@@ -582,7 +594,8 @@ float Graph::modulatedValue(const ParamRef &param, int32_t index, int32_t port,
     return param.low + amount * (param.high - param.low);
 }
 
-void Graph::applyModulation(Record &record, int32_t frames) {
+void Graph::applyModulation(Record &record, int32_t slot, int32_t frames) {
+    bool published = false;
     for (int32_t p = 0; p < kMaxParams; ++p) {
         ParamRef &param = record.params[p];
         InputRef &ref = param.route;
@@ -605,7 +618,12 @@ void Graph::applyModulation(Record &record, int32_t frames) {
         // next block skips this parameter altogether.
         if (ref.rampRemaining == 0) ref.fromIndex = -1;
         record.node->setParam(p, value);
+        // One relaxed store each, like a sequencer's step: a torn read is a bar drawn a block
+        // stale, and the next frame corrects it.
+        telemetry_[slot].params[p].store(value, std::memory_order_relaxed);
+        published = true;
     }
+    if (published) telemetry_[slot].id.store(record.id, std::memory_order_relaxed);
 }
 
 void Graph::setLiveInput(const float *mono) {
@@ -634,7 +652,7 @@ void Graph::process(int32_t frames) {
             for (int32_t t = 0; t < count; ++t) node->tick(ticks[t].offset, ticks[t].count);
         }
 
-        applyModulation(record, frames);
+        applyModulation(record, order_[i], frames);
 
         const int32_t ins = node->inputCount();
         const uint32_t noteMask = node->noteInputs();

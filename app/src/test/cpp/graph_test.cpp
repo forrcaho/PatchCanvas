@@ -1035,6 +1035,25 @@ void aNoteOutputCannotModulate() {
     check(peakOf(render(m.graph, 64)) > 0.35f, "the knob keeps its own value");
 }
 
+void theGraphReportsWhereAModulatedParameterHasGot() {
+    std::printf("the graph reports where a modulated parameter has got\n");
+    ModPatch m;
+    m.graph.postSetModRange(2, 0, 0.1f, 0.3f, false);
+    m.graph.postConnectMod(4, 0, 2, 0);
+    m.level(1.0f);
+    render(m.graph, 200);
+    check(std::fabs(m.graph.paramOf(2, 0) - 0.3f) < 0.001f, "a modulated parameter reports its value");
+
+    m.level(0.5f);
+    render(m.graph, 200);
+    check(std::fabs(m.graph.paramOf(2, 0) - 0.2f) < 0.001f, "and follows its modulator");
+
+    check(std::isnan(m.graph.paramOf(99, 0)), "an id that is not here reports nothing");
+    m.graph.postRemove(2);
+    m.graph.applyCommands();
+    check(std::isnan(m.graph.paramOf(2, 0)), "nor does one that has been deleted");
+}
+
 int main() {
     signalReachesTheOutputWithinOneBlock();
     patchingDoesNotStep();
@@ -1070,6 +1089,7 @@ int main() {
     aDeletedModulatorHandsTheKnobBack();
     aModulatorPastFullStopsAtTheEndOfTheRange();
     aNoteOutputCannotModulate();
+    theGraphReportsWhereAModulatedParameterHasGot();
 
     std::printf("\n%d checks, %d failed\n", checks, failures);
     std::fflush(stdout);

@@ -576,7 +576,7 @@ class PatchModule(
         const val PANEL_MOD_CHIP_W = 40f
         const val PANEL_MOD_CHIP_H = 30f
         const val PANEL_MOD_GAP = 14f
-        /** How far either side of a bracket a finger still takes hold of it: a 44dp target. */
+        /** How far past either end of its bar a bracket can still be taken from. */
         const val BRACKET_REACH = 22f
 
         /**
@@ -786,21 +786,36 @@ internal fun panelBracketX(row: Rect, d: Float, param: Param, value: Float, clos
     }
 
 /**
- * Which bracket of an exposed row is under [at]: false for the low `[`, true for the high
- * `]`, null for neither. Where the two coincide, the side of it the finger landed on decides.
+ * Which bracket of an exposed row a touch at [at] takes: false for the low `[`, true for the
+ * high `]`, null for a touch that is not on this row.
+ *
+ * The nearer one, from anywhere on the row. An exposed row's knob belongs to its modulator, so
+ * a bracket is the only thing a finger there can mean -- and the row reaches past both ends of
+ * its bar, because a bracket parked at an end is aimed at from beyond it. A bracket was first
+ * found only within 22dp of it and never outside the row, which left a `[` at the very left,
+ * where a new range puts it for any knob in the bottom fifth of its travel, hard to take hold
+ * of at all. Where the two brackets coincide, the side the finger landed on decides.
  */
 internal fun panelBracketAt(panel: Rect, d: Float, module: PatchModule, index: Int, at: Offset): Boolean? {
     val range = module.modRanges[index] ?: return null
     val row = panelRow(panel, d, module.type, index)
-    if (!row.inflate(6f * d).contains(at)) return null
+    val reach = PatchModule.BRACKET_REACH * d
+    val zone = Rect(row.left - reach, row.top - 6f * d, row.right + reach, row.bottom + 6f * d)
+    if (!zone.contains(at)) return null
     val param = module.type.params[index]
     val low = panelBracketX(row, d, param, range.low, closing = false)
     val high = panelBracketX(row, d, param, range.high, closing = true)
     val toLow = kotlin.math.abs(at.x - low)
     val toHigh = kotlin.math.abs(at.x - high)
-    if (minOf(toLow, toHigh) > PatchModule.BRACKET_REACH * d) return null
     return if (toLow == toHigh) at.x > high else toHigh < toLow
 }
+
+/**
+ * What an exposed bar reads in place of its value: its range, in the parameter's own units.
+ * An en dash rather than a hyphen, which beside a negative number of cents would read as a sign.
+ */
+internal fun rangeReading(param: Param, range: ModRange): String =
+    "[${param.format(range.low)} \u2013 ${param.format(range.high)}]"
 
 /** Moves one end of a parameter's range to the knob value under [screenX]. */
 internal fun Patch.moveBracket(
@@ -813,6 +828,9 @@ internal fun Patch.moveBracket(
 
 internal fun panelKnobAt(panel: Rect, d: Float, module: PatchModule, at: Offset): Int? {
     module.type.rowParams.forEach { i ->
+        // An exposed row's knob is not the hand's. It shows where the modulator has taken the
+        // parameter, and dragging it would set a value nothing is listening to.
+        if (i in module.modRanges) return@forEach
         // Generous vertically: the rows are the only targets on the panel, so a near
         // miss should still land rather than do nothing.
         if (panelRow(panel, d, module.type, i).inflate(6f * d).contains(at)) return i
@@ -1793,6 +1811,28 @@ fun PatchCanvas(
         }
     }
 
+    // Where each modulated parameter of the open module has got to, polled per frame for the
+    // same reasons as the playing step. Only the parameters with a cable in them: an exposed
+    // one with nothing patched is simply its knob, and needs nothing from the engine.
+    val modulated = openModule?.let { m ->
+        patch.connections
+            .filter { it.to.moduleId == m.id && it.to.dir == PortDirection.MOD }
+            .map { it.to.index }
+            .sorted()
+    }.orEmpty()
+    var liveParams by remember { mutableStateOf(emptyMap<Int, Float>()) }
+    LaunchedEffect(openModule?.id, modulated) {
+        val id = openModule?.id
+        if (id == null || modulated.isEmpty()) {
+            liveParams = emptyMap()
+            return@LaunchedEffect
+        }
+        while (true) {
+            withFrameNanos { }
+            liveParams = modulated.mapNotNull { i -> AudioEngine.paramOf(id, i)?.let { i to it } }.toMap()
+        }
+    }
+
     // The pulse that says what an undo just touched. Snapped to full and faded out
     // rather than eased both ways: the onset should be simultaneous with the sound
     // changing, and an attack ramp would put it late.
@@ -2241,7 +2281,7 @@ fun PatchCanvas(
         patch.modules.firstOrNull { it.expanded }?.let { open ->
             drawPanel(
                 open, patch, panelRect(frame), d, screenMeasurer, playing, playingStep,
-                intervalMenu,
+                intervalMenu, liveParams,
             )
         }
 
@@ -3632,6 +3672,8 @@ private fun DrawScope.drawPanel(
     scale: Scale,
     playingStep: Int,
     intervalMenu: Boolean,
+    /** Where each modulated parameter has got to, from the engine. A missing one shows its knob. */
+    live: Map<Int, Float> = emptyMap(),
 ) {
     val corner = CornerRadius(14f * d, 14f * d)
 
@@ -3739,8 +3781,10 @@ private fun DrawScope.drawPanel(
     module.type.rowParams.forEach { index ->
         val param = module.type.params[index]
         val row = panelRow(panel, d, module.type, index)
-        val value = module.params.getOrElse(index) { param.default }
         val range = module.modRanges[index]
+        // Where the modulator has taken it this frame, for a parameter being modulated; its
+        // knob for anything else.
+        val value = live[index] ?: module.params.getOrElse(index) { param.default }
         if (module.canExpose(index)) {
             drawChip(panelModChip(panel, d, module.type, index), d, "[ ]", range != null, ModulationColor, measurer)
         }
@@ -3751,7 +3795,9 @@ private fun DrawScope.drawPanel(
         // A stepped parameter shows no numeric readout: the lit button is the reading,
         // and "0" next to a picture of a sawtooth is noise.
         if (param.curve != ParamCurve.STEPPED) {
-            val reading = measurer.measure(param.format(value), PanelValueStyle)
+            // An exposed parameter reads its range, not a value it is not going to hold.
+            val text = if (range != null) rangeReading(param, range) else param.format(value)
+            val reading = measurer.measure(text, PanelValueStyle)
             drawText(
                 reading,
                 topLeft = Offset(row.right - reading.size.width, row.top + 2f * d),

@@ -200,6 +200,12 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeStepOf(JNIEnv *, jobject, 
     return engine().graph().stepOf(id);
 }
 
+JNIEXPORT jfloat JNICALL
+Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeParamOf(JNIEnv *, jobject, jlong id,
+                                                              jint index) {
+    return engine().graph().paramOf(id, index);
+}
+
 JNIEXPORT jboolean JNICALL
 Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetTempo(JNIEnv *, jobject, jfloat bpm) {
     return engine().graph().postSetTempo(bpm) ? JNI_TRUE : JNI_FALSE;
