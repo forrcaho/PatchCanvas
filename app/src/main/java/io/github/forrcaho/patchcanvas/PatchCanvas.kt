@@ -3512,7 +3512,7 @@ private val MenuLabelStyle = TextStyle(
  * How opaque a cable is. Less than solid because cables now cross the modules they pass,
  * and a module's title and labels should still read through one.
  */
-private const val CABLE_ALPHA = 0.8f
+private const val CABLE_ALPHA = 0.6f
 
 private fun DrawScope.drawCable(
     a: Offset,
