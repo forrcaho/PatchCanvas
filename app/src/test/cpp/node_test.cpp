@@ -148,23 +148,145 @@ void filterTracksCutoffAtAudioRate() {
     check(difference > 1.0, "audio-rate cutoff modulation actually reaches the filter");
 }
 
-void envFollowsItsGate() {
-    std::printf("env follows its gate\n");
-    const auto open = constantBuffer(1.0f);
-    const auto shut = constantBuffer(0.0f);
+namespace {
 
+/** One note, as the graph would deliver it: an On or an Off at the top of the block. */
+NoteBuffer noteAt(NoteKind kind, uint32_t id, int32_t source = 0) {
+    NoteBuffer buffer;
+    NoteEvent event;
+    event.id = id;
+    event.kind = kind;
+    event.offset = 0;
+    event.source = source;
+    event.velocity = 1.0f;
+    buffer.push(event);
+    return buffer;
+}
+
+const NoteBuffer kNoNotes{};
+
+} // namespace
+
+void envFollowsTheNotesItIsHolding() {
+    std::printf("env follows the notes it is holding\n");
     EnvNode env;
     env.prepare(kRate);
-    env.setInput(0, open.data());
-    const auto held = run(env, 64); // ~43ms, past attack and into decay
-    check(peak(held) > 0.5f, "opens while gated");
 
-    env.setInput(0, shut.data());
+    const auto on = noteAt(NoteKind::On, 1);
+    env.setNoteInput(0, &on);
+    run(env, 1);
+    // The buffer is valid for one block only, as the graph's merge is, so it is taken
+    // back before the envelope is left to run.
+    env.setNoteInput(0, &kNoNotes);
+    check(peak(run(env, 64)) > 0.5f, "opens while a note is held"); // ~43ms, into decay
+
+    const auto off = noteAt(NoteKind::Off, 1);
+    env.setNoteInput(0, &off);
+    run(env, 1);
+    env.setNoteInput(0, &kNoNotes);
     // The release is 250ms but the tail is exponential, so "closed" takes considerably
     // longer than the nominal time: measured, it is still at 0.05 after 1024 blocks.
-    const auto released = run(env, 2048); // about 1.4s
+    check(std::fabs(run(env, 2048).back()) < 0.02f, "closes once the last one lets go");
+}
 
-    check(std::fabs(released.back()) < 0.02f, "closes once the gate goes");
+void envSustainsUnderAChordAndWaitsForTheLastNote() {
+    std::printf("env sustains under a chord and waits for the last note\n");
+    EnvNode env;
+    env.prepare(kRate);
+
+    const auto first = noteAt(NoteKind::On, 1);
+    env.setNoteInput(0, &first);
+    run(env, 1);
+    env.setNoteInput(0, &kNoNotes);
+    const auto settled = run(env, 64);
+
+    // A second note over a held one must not restart the attack: an envelope that
+    // re-struck under a chord would turn one into a stutter. Legato, so the level simply
+    // carries on from where it was rather than diving to zero and climbing again.
+    const auto second = noteAt(NoteKind::On, 2);
+    env.setNoteInput(0, &second);
+    run(env, 1);
+    env.setNoteInput(0, &kNoNotes);
+    const auto during = run(env, 4);
+    check(during.front() > settled.back() * 0.5f, "a second note does not restart the attack");
+
+    // Letting go of one of two leaves the gate open, because something is still down.
+    const auto liftFirst = noteAt(NoteKind::Off, 1);
+    env.setNoteInput(0, &liftFirst);
+    run(env, 1);
+    env.setNoteInput(0, &kNoNotes);
+    check(run(env, 2048).back() > 0.3f, "and one of two letting go is not the end of it");
+
+    const auto liftSecond = noteAt(NoteKind::Off, 2);
+    env.setNoteInput(0, &liftSecond);
+    run(env, 1);
+    env.setNoteInput(0, &kNoNotes);
+    check(std::fabs(run(env, 2048).back()) < 0.02f, "the last one closes it");
+}
+
+void envEndsTheNotesOfASourceThatWasUnpatched() {
+    std::printf("env ends the notes of a source that was unpatched\n");
+    EnvNode env;
+    env.prepare(kRate);
+
+    // Two sources holding a note each. Unpatching one must release only its own, or the
+    // envelope stays open on a note whose sender is gone -- the hanging note notesCut
+    // exists to prevent.
+    const auto fromA = noteAt(NoteKind::On, 1, 0);
+    env.setNoteInput(0, &fromA);
+    run(env, 1);
+    const auto fromB = noteAt(NoteKind::On, 1, 1); // same id, different source
+    env.setNoteInput(0, &fromB);
+    run(env, 1);
+    env.setNoteInput(0, &kNoNotes);
+    run(env, 32);
+
+    // Measured after longer than the 250ms release rather than over the next 21ms: a
+    // gate that wrongly closed is still near its sustain level a moment later, so a short
+    // window cannot tell an envelope that is holding from one that has just let go.
+    env.notesCut(0, 0);
+    check(run(env, 2048).back() > 0.3f, "the other source's note still holds it open");
+
+    env.notesCut(0, 1);
+    check(std::fabs(run(env, 2048).back()) < 0.02f, "and cutting the last closes it");
+}
+
+/**
+ * An Off is matched against the source that sent it, not against its id alone.
+ *
+ * Ids are each source's own and start again at 1 whenever a node is rebuilt, so two
+ * sequencers patched to one envelope will both be holding a note called 1 almost at once.
+ * Matching on the id alone releases whichever was found first, and the envelope then lets
+ * go of a note nobody lifted.
+ *
+ * The sequence below is the one that tells the two apart. A gate is only "anything held",
+ * so the wrong note being released is invisible until something asks specifically about
+ * the note that should still be down -- which is what cutting source 1 at the end does.
+ */
+void envMatchesAnOffAgainstItsOwnSource() {
+    std::printf("env matches an off against its own source\n");
+    EnvNode env;
+    env.prepare(kRate);
+
+    const auto fromA = noteAt(NoteKind::On, 1, 0);
+    env.setNoteInput(0, &fromA);
+    run(env, 1);
+    const auto fromB = noteAt(NoteKind::On, 1, 1); // the same id, a different source
+    env.setNoteInput(0, &fromB);
+    run(env, 1);
+
+    // An Off carrying that id from a source holding nothing must release nothing at all.
+    const auto strayOff = noteAt(NoteKind::Off, 1, 2);
+    env.setNoteInput(0, &strayOff);
+    run(env, 1);
+    env.setNoteInput(0, &kNoNotes);
+    run(env, 32);
+
+    // Source 1 lets go. Source 0's note was never lifted, so the envelope stays open --
+    // and it only can if the stray Off above released nothing and this one released
+    // source 1's note rather than source 0's.
+    env.notesCut(0, 1);
+    check(run(env, 2048).back() > 0.3f, "the note nobody lifted is still holding it open");
 }
 
 void vcaIsShutWithoutControl() {
@@ -240,6 +362,9 @@ void stepsPlayTheirOwnPattern() {
           "an out-of-range step changes nothing");
 }
 
+/** What a sequencer said in the block just rendered. */
+const NoteBuffer &stepNotes(const StepsNode &steps) { return *steps.noteOutput(1); }
+
 void aClosedGateIsARestNotASkip() {
     std::printf("a closed gate is a rest, not a skip\n");
     StepsNode steps;
@@ -250,7 +375,8 @@ void aClosedGateIsARestNotASkip() {
 
     tickAt(steps, 0);
     tickAt(steps, 1);                // the rest
-    check(steps.output(1)[0] == 0.0f, "a closed step emits no gate");
+    check(stepNotes(steps).count == 1 && stepNotes(steps).events[0].kind == NoteKind::Off,
+          "a closed step starts nothing, and ends what was sounding");
     // The remembered degree exists so switching the step back on restores what was
     // there. It is not a note, nobody can see it, and emitting it makes the pitch jump
     // for no visible reason -- so the output holds whatever last actually sounded.
@@ -258,7 +384,8 @@ void aClosedGateIsARestNotASkip() {
           "and the pitch holds the last note rather than the rest's own");
 
     tickAt(steps, 2);
-    check(steps.output(1)[0] == 1.0f, "the next open step still fires");
+    check(stepNotes(steps).count == 1 && stepNotes(steps).events[0].kind == NoteKind::On,
+          "the next open step still fires");
     check(std::fabs(steps.output(0)[0] - 0.75f) < 0.0001f,
           "so a rest costs a step rather than being skipped");
 }
@@ -282,7 +409,9 @@ void aRestKeepsTheNoteItRemembers() {
     steps.setStep(1, 3, true);        // switch it back on
     tickAt(steps, 2);                 // step 0
     tickAt(steps, 3);                 // step 1, now sounding
-    check(steps.output(1)[0] == 1.0f, "it fires once it is open again");
+    check(stepNotes(steps).count >= 1 &&
+                  stepNotes(steps).events[stepNotes(steps).count - 1].kind == NoteKind::On,
+          "it fires once it is open again");
     check(std::fabs(steps.output(0)[0] - 0.25f) < 0.0001f,
           "with the pitch it was holding on to all along");
 }
@@ -293,13 +422,17 @@ void aNoteLastsHalfItsStep() {
     steps.prepare(kRate);
     steps.setStep(0, 0, true);
 
-    // The default 1/8 at 120bpm is 12000 frames, so the gate is open for frames 0-5999.
+    // The default 1/8 at 120bpm is 12000 frames, so the note runs for frames 0-5999.
+    // Measured now by when its Off arrives rather than by a gate falling, which is the
+    // same claim: a note is two events, and the second one is its length.
     tickAt(steps, 0);
-    check(steps.output(1)[0] == 1.0f, "open as the step starts");
+    check(stepNotes(steps).count == 1 && stepNotes(steps).events[0].kind == NoteKind::On,
+          "it starts as the step does");
     idle(steps, 185);                 // through frame 5951
-    check(steps.output(1)[kBlockSize - 1] == 1.0f, "still open just short of half the step");
+    check(stepNotes(steps).count == 0, "and is still held just short of half the step");
     idle(steps, 2);                   // through frame 6015
-    check(steps.output(1)[kBlockSize - 1] == 0.0f, "closed by half the step");
+    check(stepNotes(steps).count == 1 && stepNotes(steps).events[0].kind == NoteKind::Off,
+          "then ends by half the step");
 }
 
 /**
@@ -314,10 +447,15 @@ void aStoppedTransportHoldsTheNote() {
     steps.setStep(0, 0, true);
 
     tickAt(steps, 0);
-    idle(steps, 400, false);          // 12800 frames, twice the gate, stopped
-    check(steps.output(1)[kBlockSize - 1] == 1.0f, "the gate does not run out while stopped");
-    idle(steps, 200, true);
-    check(steps.output(1)[kBlockSize - 1] == 0.0f, "and does once time moves again");
+    idle(steps, 400, false);          // 12800 frames, twice the note, stopped
+    check(stepNotes(steps).count == 0, "the note does not run out while stopped");
+    bool ended = false;
+    for (int i = 0; i < 200 && !ended; ++i) {
+        idle(steps, 1, true);
+        ended = stepNotes(steps).count == 1 &&
+                stepNotes(steps).events[0].kind == NoteKind::Off;
+    }
+    check(ended, "and does once time moves again");
 }
 
 void aTickLandsOnItsOwnSample() {
@@ -333,9 +471,9 @@ void aTickLandsOnItsOwnSample() {
     // Inside the block rather than at its start: the transport knows the frame, and a
     // sequencer that rounded to the block would be up to 32 frames late on every note.
     tickAt(steps, 1, 10);
-    const float *gate = steps.output(1);
     const float *pitch = steps.output(0);
-    check(gate[9] == 0.0f && gate[10] == 1.0f, "the gate opens on the tick's sample");
+    check(stepNotes(steps).count == 1 && stepNotes(steps).events[0].offset == 10,
+          "the note starts on the tick's own sample");
     check(std::fabs(pitch[9]) < 0.0001f && std::fabs(pitch[10] - 1.0f) < 0.0001f,
           "and the pitch moves on the same sample");
 }
@@ -559,7 +697,7 @@ void outProtectsTheListener() {
 // ---------------------------------------------------------------- notes
 
 /** The events one block left behind, for reading what a sequencer said. */
-const NoteBuffer &notesOf(const StepsNode &steps) { return *steps.noteOutput(2); }
+const NoteBuffer &notesOf(const StepsNode &steps) { return *steps.noteOutput(1); }
 
 void theNotesOutputSaysWhatTheGateSays() {
     std::printf("the notes output says what the gate says\n");
@@ -973,7 +1111,10 @@ int main() {
     oscPlaysTheRequestedPitch();
     oscStaysBandLimited();
     filterTracksCutoffAtAudioRate();
-    envFollowsItsGate();
+    envFollowsTheNotesItIsHolding();
+    envSustainsUnderAChordAndWaitsForTheLastNote();
+    envEndsTheNotesOfASourceThatWasUnpatched();
+    envMatchesAnOffAgainstItsOwnSource();
     vcaIsShutWithoutControl();
     stepsTakeTheirStepFromTheCount();
     stepsPlayTheirOwnPattern();

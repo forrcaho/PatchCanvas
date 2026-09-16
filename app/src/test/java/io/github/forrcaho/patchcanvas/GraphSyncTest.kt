@@ -303,7 +303,7 @@ class GraphSyncTest {
             "merging supersedes nothing",
             rec.log.none { it is Cmd.Disconnect },
         )
-        assertTrue(rec.log.contains(Cmd.Connect(second.id, 2, voice.id, 0)))
+        assertTrue(rec.log.contains(Cmd.Connect(second.id, notesOut(second).index, voice.id, 0)))
     }
 
     @Test
@@ -322,10 +322,10 @@ class GraphSyncTest {
         sync.sync(patch)
 
         assertEquals(
-            listOf(Cmd.Disconnect(steps.id, 2, voice.id, 0)),
+            listOf(Cmd.Disconnect(steps.id, notesOut(steps).index, voice.id, 0)),
             rec.log.filterIsInstance<Cmd.Disconnect>(),
         )
-        assertTrue(rec.log.contains(Cmd.Connect(second.id, 2, voice.id, 0)))
+        assertTrue(rec.log.contains(Cmd.Connect(second.id, notesOut(second).index, voice.id, 0)))
     }
 
     @Test
@@ -342,7 +342,7 @@ class GraphSyncTest {
         // Both ends, because the port still has the other sequencer on it: a disconnect
         // that named only the port would take that one with it.
         assertEquals(
-            listOf(Cmd.Disconnect(steps.id, 2, voice.id, 0)),
+            listOf(Cmd.Disconnect(steps.id, notesOut(steps).index, voice.id, 0)),
             rec.log.filterIsInstance<Cmd.Disconnect>(),
         )
         assertTrue(

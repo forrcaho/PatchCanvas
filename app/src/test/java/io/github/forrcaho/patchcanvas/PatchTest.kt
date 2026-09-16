@@ -13,6 +13,12 @@ import org.junit.Test
 /** The graph rules that the rest of the app is entitled to assume. */
 class PatchModelTest {
 
+    /** A module's notes output, found by kind so no test writes a port index down. */
+    private fun notesOut(module: PatchModule) = PortRef(
+        module.id, PortDirection.OUTPUT,
+        module.type.outputs.indexOfFirst { it.kind == SignalKind.NOTE },
+    )
+
     @Test
     fun `patch starts with both rails at reserved ids`() {
         val p = Patch()
@@ -47,8 +53,8 @@ class PatchModelTest {
         // Single source exists to stop signals summing where nobody asked for it. Merging
         // event streams hides nothing -- every note stays itself and arrives when it
         // arrived -- and a voice fed by two sequencers is the obvious patch.
-        assertTrue(p.connect(PortRef(a.id, PortDirection.OUTPUT, 2), target))
-        assertTrue(p.connect(PortRef(b.id, PortDirection.OUTPUT, 2), target))
+        assertTrue(p.connect(notesOut(a), target))
+        assertTrue(p.connect(notesOut(b), target))
 
         assertEquals(2, p.connections.size)
         assertEquals(setOf(a.id, b.id), p.connections.map { it.from.moduleId }.toSet())
@@ -59,7 +65,7 @@ class PatchModelTest {
         val p = Patch()
         val steps = p.add(Types.Steps, Offset.Zero)!!
         val voice = p.add(Types.Voice, Offset.Zero)!!
-        val src = PortRef(steps.id, PortDirection.OUTPUT, 2)
+        val src = notesOut(steps)
         val target = PortRef(voice.id, PortDirection.INPUT, 0)
 
         p.connect(src, target)
@@ -75,49 +81,49 @@ class PatchModelTest {
         val steps = p.add(Types.Steps, Offset.Zero)!!
         val voice = p.add(Types.Voice, Offset.Zero)!!
         val osc = p.add(Types.Osc, Offset.Zero)!!
+        val filter = p.add(Types.Filter, Offset.Zero)!!
         val env = p.add(Types.Env, Offset.Zero)!!
 
         fun out(m: PatchModule, i: Int) = PortRef(m.id, PortDirection.OUTPUT, i)
         fun into(m: PatchModule, i: Int) = PortRef(m.id, PortDirection.INPUT, i)
         val outL = PortRef(OUT_ID, PortDirection.INPUT, 0)
 
-        // Steps: 0 pitch (modulation), 1 gate (pulse), 2 notes. Osc: 0 pitch, 1 fm, both
-        // modulation, out audio. Env: 0 gate (pulse), out modulation. Voice: 0 notes.
+        // Steps: 0 pitch (modulation), 1 notes. Osc: 0 pitch and 1 fm, both modulation,
+        // out audio. Filter: 0 in, audio. Env: 0 notes, out modulation. Voice: 0 notes.
         assertFalse("modulation is not a note", p.connect(out(steps, 0), into(voice, 0)))
         assertFalse("nor is audio", p.connect(out(osc, 0), into(voice, 0)))
-        assertFalse("nor do notes go into audio", p.connect(out(steps, 2), outL))
-        // The three that only enforcement refuses -- each was legal while typing was
-        // advisory, and each is a different pair of kinds.
-        assertFalse("a pulse does not drive a knob", p.connect(out(steps, 1), into(osc, 0)))
-        assertFalse("nor does modulation trigger", p.connect(out(steps, 0), into(env, 0)))
-        assertFalse("nor does audio", p.connect(out(osc, 0), into(env, 0)))
-        assertFalse("and modulation is not audio", p.connect(out(env, 0), outL))
+        assertFalse("nor do notes go into audio", p.connect(out(steps, 1), outL))
+        // Each of these was legal while typing was advisory.
+        assertFalse("modulation is not audio", p.connect(out(env, 0), into(filter, 0)))
+        assertFalse("nor does audio turn a knob", p.connect(out(osc, 0), into(osc, 1)))
+        assertFalse("and modulation is not audio at the rail either", p.connect(out(env, 0), outL))
         assertTrue("nothing above was patched", p.connections.isEmpty())
 
-        assertTrue("notes to notes", p.connect(out(steps, 2), into(voice, 0)))
-        assertTrue("pulse to pulse", p.connect(out(steps, 1), into(env, 0)))
+        assertTrue("notes to notes", p.connect(out(steps, 1), into(voice, 0)))
+        assertTrue("and an envelope is opened by them too", p.connect(out(steps, 1), into(env, 0)))
         assertTrue("modulation to modulation", p.connect(out(steps, 0), into(osc, 0)))
-        assertTrue("audio to audio", p.connect(out(osc, 0), outL))
+        assertTrue("audio to audio", p.connect(out(osc, 0), into(filter, 0)))
         assertEquals(4, p.connections.size)
     }
 
     /**
-     * Designed and deliberately not built: the engine refuses note against non-note
-     * outright, so a cable the model allowed here would be dropped on the other side of
-     * the queue with nothing on screen to say why. It arrives when a pulse is an event.
+     * Pulse has no port anywhere in the catalogue: Env was the last thing taking a gate
+     * and it takes notes now. The kind stays, for a module that wants a bare trigger, and
+     * so does the rule -- asserted here against the kinds themselves, since there is no
+     * longer a pair of ports to try it on.
      */
     @Test
-    fun `note into a pulse input is refused until a pulse is an event`() {
-        val p = Patch()
-        val steps = p.add(Types.Steps, Offset.Zero)!!
-        val env = p.add(Types.Env, Offset.Zero)!!
-        assertFalse(
-            p.connect(
-                PortRef(steps.id, PortDirection.OUTPUT, 2),
-                PortRef(env.id, PortDirection.INPUT, 0),
-            ),
-        )
-        assertTrue(p.connections.isEmpty())
+    fun `pulse keeps its rule although nothing carries one yet`() {
+        assertTrue(Types.byName.values.none { type ->
+            (type.inputs + type.outputs).any { it.kind == SignalKind.PULSE }
+        })
+        // Note into a pulse input is the one conversion the design allows, and it is
+        // still refused: the engine rejects note against non-note outright, so a cable
+        // allowed here would be dropped on the far side of the queue with nothing on
+        // screen to say why. It arrives when a pulse is an event.
+        assertFalse(SignalKind.NOTE.patchesTo(SignalKind.PULSE))
+        assertFalse(SignalKind.PULSE.patchesTo(SignalKind.NOTE))
+        assertTrue(SignalKind.PULSE.patchesTo(SignalKind.PULSE))
     }
 
     // ------------------------------------------------------------- the drone grid

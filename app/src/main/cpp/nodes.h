@@ -99,15 +99,48 @@ private:
     float cutoffHz_ = 1000.0f;
 };
 
+/**
+ * An envelope, opened by notes.
+ *
+ * It took a gate, which was a level: high is on. A pulse is an event and has no duration,
+ * so it could never say when to release -- and a note already carries exactly what an ADSR
+ * wants, an on, an off and an id to match them by. So this reads notes and the gate is
+ * simply whether any note is being held.
+ *
+ * Legato, not retriggered: a second note arriving over a held one leaves the gate open, so
+ * the envelope carries on rather than starting its attack again. Sustain is what an
+ * envelope is for, and re-attacking under a held note would make a chord into a stutter.
+ */
 class EnvNode : public Node {
 public:
-    int32_t inputCount() const override { return 1; }  // gate
+    int32_t inputCount() const override { return 1; }  // notes
     int32_t outputCount() const override { return 1; }
+    uint32_t noteInputs() const override { return 1u << 0; }
     void prepare(int32_t sampleRate) override;
     void process(int32_t frames) override;
     void setParam(int32_t index, float value) override;
+    void notesCut(int32_t port, int32_t source) override;
 
 private:
+    /**
+     * Notes tracked at once. An envelope is one control voltage however many notes are on
+     * it, so this exists only to know when the last one lets go. Past the end an On is not
+     * tracked -- the gate is already open and stays open while anything tracked is held,
+     * so the worst it costs is a release that comes early on a sixteen-note pile-up.
+     */
+    static constexpr int32_t kHeld = 16;
+
+    struct Held {
+        uint32_t id = 0;
+        /** The input slot the event came from, so notesCut can end one source's notes. */
+        int32_t source = -1;
+    };
+
+    void start(const NoteEvent &event);
+    void release(uint32_t id, int32_t source);
+
+    Held held_[kHeld] = {};
+    int32_t heldCount_ = 0;
     daisysp::Adsr adsr_;
 };
 
@@ -138,16 +171,17 @@ public:
     StepsNode();
 
     int32_t inputCount() const override { return 0; }
-    int32_t outputCount() const override { return 3; } // pitch, gate, notes
+    int32_t outputCount() const override { return 2; } // pitch, notes
     /**
-     * The same sequence, said twice.
+     * The gate output has gone with the envelope that read it.
      *
-     * Pitch and gate stay: they are what an Osc and an Env take, and a patch built before
-     * notes existed is still a patch. The notes output says the same thing as an event,
-     * which is the only one of the two a polyphonic voice can use -- and the only one
-     * that can ever carry a chord, which is where this is going.
+     * Env was the only thing taking it, and an envelope now takes notes -- a gate was a
+     * level, and the pulse it would have become is an event with no duration, so it could
+     * never have said when to release. Pitch stays until the monophonic Osc that reads it
+     * does; the notes output says the same thing as an event, and is the only one of the
+     * two that can carry a chord.
      */
-    uint32_t noteOutputs() const override { return 1u << 2; }
+    uint32_t noteOutputs() const override { return 1u << 1; }
     void process(int32_t frames) override;
     void setParam(int32_t index, float value) override;
     void setStep(int32_t index, int32_t degree, bool gate) override;

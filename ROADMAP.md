@@ -1523,6 +1523,36 @@ keeps that difference visible. Each end gets a plug in the cable's colour, since
 would otherwise cover the jack's own dot. Crossing a label is better than vanishing behind a
 box -- that was the open half, and the phone answered it.
 
+### The envelope takes notes, and the gate goes
+
+**Decided and built 2026-09-16.** The design had `Env` become a modulator opened by a
+*pulse*, and building it showed the hole in that: a pulse is an event without duration, so
+it can say start and never say stop, while an ADSR's whole shape is a sustain between the
+two. A note already carries an on, an off and an id to match them by, which is exactly what
+an envelope wants. So `Env` takes notes.
+
+The consequences ran further than the module. `Steps`' gate output had no consumer left, so
+it went -- ending half of the "same sequence, said twice" a commit earlier than planned.
+And **no port in the catalogue carries a pulse any more.** The kind stays, for a module
+that wants a bare trigger, and the rule is now pinned against the kinds themselves rather
+than against a pair of ports.
+
+**Legato, not retriggered**, because re-attacking under a held note turns a chord into a
+stutter. An Off is matched against the source that sent it as well as its id, for the same
+reason `VoiceNode` does it: ids are each source's own and start again at 1 whenever a node
+is rebuilt, so two sequencers on one envelope are both holding a note called 1 almost at
+once.
+
+**The mutation check caught itself being wrong**, which is worth recording. Two mutations
+appeared to fail and were in fact failing to *compile* -- removing the `source` half of the
+match leaves the parameter unused, and the suite builds with warnings as errors. Silenced,
+both mutations passed every test. The tests were then genuinely unable to fail for a second
+reason: they measured the envelope over the 21ms after the gate should have shut, and a
+release of 250ms is still near its sustain level at that point. Measured after the release
+has actually run, four mutations now fail the right checks. **A mutation that fails the
+build is not a mutation that fails a test**, and the difference is invisible unless the
+output is read rather than the exit code.
+
 ### Drone, and what a test tone is made of
 
 **Added 2026-09-16, to unblock the catalogue change above.** Retiring the monophonic `Osc`

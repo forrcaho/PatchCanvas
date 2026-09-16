@@ -645,7 +645,7 @@ void aNoteCableSoundsAndOrdersTheGraph() {
     graph.postAdd(1, NodeType::Voice);
     graph.postAdd(2, NodeType::Steps);
     graph.postAdd(3, NodeType::Out);
-    graph.postConnect(2, 2, 1, 0); // notes out -> notes in
+    graph.postConnect(2, 1, 1, 0); // notes out -> notes in
     graph.postConnect(1, 0, 3, 0);
     graph.postSetTempo(300.0f);
     graph.applyCommands();
@@ -674,7 +674,7 @@ void notesAndSignalsDoNotPatchToEachOther() {
     // oscillator into the same, and the note output into the sink's audio input.
     graph.postConnect(1, 0, 2, 0);
     graph.postConnect(4, 0, 2, 0);
-    graph.postConnect(1, 2, 3, 0);
+    graph.postConnect(1, 1, 3, 0);
     graph.postConnect(2, 0, 3, 1);
     graph.postSetTempo(300.0f);
     graph.applyCommands();
@@ -691,7 +691,7 @@ void notesAndSignalsDoNotPatchToEachOther() {
           "and a note cable carries nothing into an audio input");
     // The right way round still works on the same graph, so the refusal is about the
     // kinds and not about the patch having been poisoned.
-    graph.postConnect(1, 2, 2, 0);
+    graph.postConnect(1, 1, 2, 0);
     graph.applyCommands();
     // Past the next tick. A 1/8 at 300bpm is 4800 frames, and nothing sounds until one:
     // patching mid-note joins at the next note rather than the one already playing, since
@@ -708,7 +708,7 @@ void aRemovedSourceEndsTheNotesItStarted() {
     graph.postAdd(1, NodeType::Steps);
     graph.postAdd(2, NodeType::Voice);
     graph.postAdd(3, NodeType::Out);
-    graph.postConnect(1, 2, 2, 0);
+    graph.postConnect(1, 1, 2, 0);
     graph.postConnect(2, 0, 3, 0);
     // Whole notes at 60bpm: four seconds a step, so the note under test is still held
     // rather than having ended on its own while the test was looking away.
@@ -736,8 +736,8 @@ void twoSequencersMergeIntoOneVoice() {
     graph.postAdd(2, NodeType::Steps);
     graph.postAdd(3, NodeType::Voice);
     graph.postAdd(4, NodeType::Out);
-    graph.postConnect(1, 2, 3, 0);
-    graph.postConnect(2, 2, 3, 0); // the same input: a note input merges rather than replaces
+    graph.postConnect(1, 1, 3, 0);
+    graph.postConnect(2, 1, 3, 0); // the same input: a note input merges rather than replaces
     graph.postConnect(3, 0, 4, 0);
     graph.postSetParam(2, 1, 700.0f); // a fifth up, so the two are not the same note
     graph.postSetTempo(300.0f);       // and fast, so both keep starting notes throughout
@@ -776,8 +776,8 @@ void anIdIsOnlyUniqueToItsOwnSource() {
     graph.postAdd(2, NodeType::Steps);
     graph.postAdd(3, NodeType::Voice);
     graph.postAdd(4, NodeType::Out);
-    graph.postConnect(1, 2, 3, 0);
-    graph.postConnect(2, 2, 3, 0);
+    graph.postConnect(1, 1, 3, 0);
+    graph.postConnect(2, 1, 3, 0);
     graph.postConnect(3, 0, 4, 0);
     graph.postSetParam(1, 2, 1.0f); // half notes: one long note held across many short ones
     graph.postSetParam(2, 2, 5.0f); // 1/32, starting and ending inside it over and over

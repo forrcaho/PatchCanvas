@@ -155,13 +155,22 @@ voltages and do not interchange, so `patchesTo` is like-to-like and a mismatch i
 Audio-rate modulation does not need the loophole — a module that wants it declares an
 audio input, and `MODULATION` is applied once per block and could not carry it anyway.
 
-**Note into a pulse input is the one designed conversion, and is not built.** A note
-implies a trigger; the reverse is refused because nothing says what pitch a pulse would
-be. It is refused on both sides today because a pulse is still the *gate buffer* it was
-renamed from rather than an event, and `graph.cpp`'s Connect case rejects note against
-non-note outright — so allowing it in the model alone would make a cable the UI accepts and
-the engine silently drops. It arrives when a pulse carries events. The catalogue half of
-the retirement — `Env`, `Vca`, `Steps`' pitch and gate outputs — is tracked in Phase 7.
+**Nothing carries a pulse yet, and the kind stays anyway.** `Env` was the last thing taking
+a gate and it takes *notes* now: a pulse is an event with no duration, so it could never
+say when to release, while a note already carries an on, an off and an id to match them by.
+`Steps`' gate output went with it. `SignalKind.PULSE` is kept for a module that wants a
+bare trigger — reset, retrigger, sample-start — and `PatchModelTest` pins the rule against
+the kinds themselves, since there is no longer a pair of ports to try it on.
+
+Note into a pulse input is the one designed conversion and is still refused, because
+`graph.cpp`'s Connect case rejects note against non-note outright, so allowing it in the
+model alone would make a cable the UI accepts and the engine silently drops.
+
+**An envelope is legato.** A second note over a held one leaves the gate open rather than
+re-striking, because sustain is what an envelope is for and re-attacking under a chord
+turns it into a stutter. An Off is matched against *the source that sent it* as well as its
+id: ids are each source's own and restart at 1 when a node is rebuilt, so two sequencers on
+one envelope are both holding a note called 1 almost at once.
 
 **Inputs take one source.** A connect already replaces, so a replacement must send only
 the connect — sending a disconnect too makes the engine fade to silence and back, which

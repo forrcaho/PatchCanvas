@@ -128,11 +128,48 @@ void EnvNode::prepare(int32_t sampleRate) {
     adsr_.SetReleaseTime(0.25f);
 }
 
+void EnvNode::start(const NoteEvent &event) {
+    if (heldCount_ >= kHeld) return;
+    held_[heldCount_].id = event.id;
+    held_[heldCount_].source = event.source;
+    ++heldCount_;
+}
+
+void EnvNode::release(uint32_t id, int32_t source) {
+    for (int32_t i = 0; i < heldCount_; ++i) {
+        if (held_[i].id != id || held_[i].source != source) continue;
+        held_[i] = held_[heldCount_ - 1];
+        --heldCount_;
+        return;
+    }
+}
+
+void EnvNode::notesCut(int32_t port, int32_t source) {
+    (void) port; // one note input, so there is nothing to tell apart
+    for (int32_t i = heldCount_ - 1; i >= 0; --i) {
+        if (held_[i].source != source) continue;
+        held_[i] = held_[heldCount_ - 1];
+        --heldCount_;
+    }
+}
+
 void EnvNode::process(int32_t frames) {
     float *o = out(0);
-    const float *gate = input(0);
+    const NoteBuffer &notes = notesIn(0);
+    int32_t next = 0;
+
     for (int32_t i = 0; i < frames; ++i) {
-        o[i] = adsr_.Process(gateHigh(gate[i]));
+        // Events land on their own sample, the way a tick does, and arrive in offset
+        // order because the graph merges them that way.
+        while (next < notes.count && notes.events[next].offset <= i) {
+            const NoteEvent &event = notes.events[next];
+            if (event.kind == NoteKind::On) start(event);
+            if (event.kind == NoteKind::Off) release(event.id, event.source);
+            ++next;
+        }
+        // Held rather than struck: the gate is open while anything is down, so an
+        // overlapping note sustains the envelope instead of restarting it.
+        o[i] = adsr_.Process(heldCount_ > 0);
     }
 }
 
@@ -262,8 +299,7 @@ constexpr double kGateFraction = 0.5;
 
 void StepsNode::process(int32_t frames) {
     float *pitch = out(0);
-    float *gate = out(1);
-    NoteBuffer &notes = notesOut(2);
+    NoteBuffer &notes = notesOut(1);
     // Events do not persist the way sample buffers do -- see NoteBuffer.
     notes.clear();
     int32_t next = 0;
@@ -329,7 +365,6 @@ void StepsNode::process(int32_t frames) {
         }
 
         pitch[i] = held + transposeCents_ / 1200.0f;
-        gate[i] = (step_ >= 0 && gate_[step_] && gateRemaining_ > 0) ? 1.0f : 0.0f;
         if (running_ && gateRemaining_ > 0) {
             --gateRemaining_;
             // The gate falls on the next sample; the Off goes out on this one. A sample

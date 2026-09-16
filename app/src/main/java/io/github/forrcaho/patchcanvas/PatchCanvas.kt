@@ -383,8 +383,13 @@ object Types {
             Param("res", 0f, 0.95f, 0.3f, "", LIN),
         ),
     )
+    /**
+     * Opened by notes rather than by a gate. A pulse is an event and has no duration, so
+     * it could never say when to release; a note carries an on, an off and an id to match
+     * them by, which is exactly what an envelope wants.
+     */
     val Env = ModuleType(
-        "Env", listOf(Port("gate", P)), listOf(Port("out", M)),
+        "Env", listOf(Port("notes", N)), listOf(Port("out", M)),
         Color(0xFFB98FE0),
         params = listOf(
             Param("A", 0.001f, 5f, 0.005f, "s", EXP),
@@ -418,7 +423,7 @@ object Types {
      * mirrors StepsNode::setParam -- length, transpose, interval.
      */
     val Steps = ModuleType(
-        "Steps", emptyList(), listOf(Port("pitch", M), Port("gate", P), Port("notes", N)),
+        "Steps", emptyList(), listOf(Port("pitch", M), Port("notes", N)),
         Color(0xFF6FA8E5),
         params = listOf(
             Param("len", 1f, STEP_COUNT.toFloat(), 8f, "", STEP),
@@ -4068,7 +4073,7 @@ fun demoPatch(): Patch =
         fun into(m: PatchModule, i: Int) = PortRef(m.id, PortDirection.INPUT, i)
 
         connect(out(steps, 0), into(osc, 0))   // pitch
-        connect(out(steps, 1), into(env, 0))   // gate
+        connect(out(steps, 1), into(env, 0))   // notes, which is what opens the envelope
         connect(out(osc, 0), into(filter, 0))
         connect(out(filter, 0), into(vca, 0))
         connect(out(env, 0), into(vca, 1))     // envelope opens the VCA
