@@ -1328,8 +1328,31 @@ that enforcement costs nothing was leaning on a module that did not do what it w
 do. FM is now deferred to a future FM voice, where the operators are internal and FM is
 what the module *is* rather than a jack bolted to a subtractive one -- decided 2026-09-15.
 
-**Nothing on the device yet.** Enforcement can only refuse patches that were previously
-accepted, and which of those a finger will miss is not something the desk can answer.
+**The emulator found what the desk had not: enforcement was quietly eating cables.** A file
+written while typing was advisory can hold a cable that is now illegal -- audio into a gate
+was the one tried -- and both of its ports still exist, so neither the missing-module check
+nor the port-range one caught it. `connect` refused it, the loader discarded the result, and
+three of four cables came back. The file on disk had already been rewritten without the
+fourth before anything was touched: no edit, no warning, no way back.
+
+So a cable refused *for its kind* now refuses the whole file, where a cable naming a port
+that no longer exists still skips quietly -- the version 1 migration depends on that second
+behaviour, and the two cases are genuinely different. One is a file this build cannot read
+honestly; the other is a cable whose module went away and which is meant to disappear with
+it.
+
+**And refusing had to stop meaning destroying.** The caller's only answer to a refused file
+is the demo patch, and the next autosave wrote that over the file it had just refused --
+so every refusal path, including the format bump this phase is about to make, was quietly
+a delete. A refused file is now moved to `patch.rejected.json` first. One slot, overwritten
+each time: keeping every rejected file needs a policy for clearing them out, and the one
+worth having back is the one just refused. This matters more than the bug that found it,
+because Phase 7's format 5 refuses *every* format 4 file by design.
+
+Verified on the emulator: the log names both ports, the file is refused whole, and all four
+of its cables are still in `patch.rejected.json` afterwards. **Not on the phone.**
+Enforcement can only refuse patches that were previously accepted, and which of those a
+finger will miss is not something the desk can answer.
 
 ### Modulating a parameter
 

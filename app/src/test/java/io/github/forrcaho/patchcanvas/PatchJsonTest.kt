@@ -110,6 +110,27 @@ class PatchJsonTest {
         assertEquals(sample().connections.size - 1, restored.connections.size)
     }
 
+    /**
+     * Found on the emulator, loading a file written while typing was advisory: three of
+     * its four cables came back, and the fourth was gone from the file on disk before
+     * anything had been touched. Refusing is loud; dropping was silent and permanent.
+     */
+    @Test
+    fun `a cable whose kinds no longer agree refuses the whole file`() {
+        val root = JSONObject(sample().toJson())
+        // The oscillator's audio output into the envelope's gate input, which is what a
+        // file written under advisory typing can contain. Both ports still exist, so
+        // neither the missing-module check nor the port-range one catches it.
+        val osc = sample().free.first { it.type.name == "Osc" }
+        val env = sample().free.first { it.type.name == "Env" }
+        root.getJSONArray("connections").put(
+            JSONObject().put("from", osc.id).put("fromPort", 0).put("to", env.id).put("toPort", 0),
+        )
+
+        assertNull("a file with an illegal cable is refused whole", patchFromJson(root.toString()))
+        assertNotNull("while the same file without it still loads", patchFromJson(sample().toJson()))
+    }
+
     @Test
     fun `garbage loads as nothing rather than throwing`() {
         assertNull(patchFromJson("not json at all"))

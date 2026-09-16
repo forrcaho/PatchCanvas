@@ -239,7 +239,20 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
             } else {
                 patch.portRefOrNull(toId, PortDirection.INPUT, c.optInt("toPort", -1))
             } ?: continue
-            patch.connect(from, to)
+            // A cable whose ports both still exist but whose kinds now disagree means
+            // this file was written while typing was advisory. Refused rather than
+            // dropped, because dropping it is silent and permanent: the patch loads
+            // looking fine, the next autosave writes it back without that cable, and
+            // what it used to do is gone with no record that it ever did it.
+            //
+            // A port that no longer exists is a different case and still skips, which is
+            // what the version 1 migration above depends on -- the cable into Steps' old
+            // clock input is meant to disappear quietly, because the module it named is
+            // gone too and there is nothing left to be wrong about.
+            if (!patch.connect(from, to)) {
+                Log.w(TAG, "refusing patch: $from -> $to is not a legal cable")
+                return null
+            }
         }
 
         patch
@@ -313,6 +326,7 @@ private fun Patch.portRefOrNull(moduleId: Long, dir: PortDirection, index: Int):
 class PatchStore(context: Context, private val scales: ScaleLibrary) {
     private val file = File(context.filesDir, "patch.json")
     private val temp = File(context.filesDir, "patch.json.tmp")
+    private val rejected = File(context.filesDir, "patch.rejected.json")
 
     /**
      * Written to a sibling and renamed, so a kill mid-write leaves the previous patch
@@ -330,11 +344,38 @@ class PatchStore(context: Context, private val scales: ScaleLibrary) {
         }
     }
 
+    /**
+     * The patch on disk, or null for one this build will not read.
+     *
+     * A refused file is moved aside rather than left where it is, because the caller's
+     * only answer to null is the demo patch -- and the next autosave would write that over
+     * the file it just refused. "Refuse" would then mean "destroy", which is not what
+     * refusing is for: the point of it is that a file this build cannot read honestly is
+     * left alone instead of half-converted.
+     *
+     * One slot, overwritten each time. Keeping every rejected file would need a policy for
+     * clearing them out, and the one worth having back is the one that was just refused.
+     */
     fun load(): Patch? =
         try {
-            if (file.exists()) patchFromJson(file.readText(), scales) else null
+            if (!file.exists()) {
+                null
+            } else {
+                val patch = patchFromJson(file.readText(), scales)
+                if (patch == null) setAside()
+                patch
+            }
         } catch (e: Exception) {
             Log.w(TAG, "could not load patch", e)
             null
         }
+
+    private fun setAside() {
+        try {
+            rejected.delete()
+            if (file.renameTo(rejected)) Log.w(TAG, "patch refused; kept at ${rejected.name}")
+        } catch (e: Exception) {
+            Log.w(TAG, "could not set the refused patch aside", e)
+        }
+    }
 }
