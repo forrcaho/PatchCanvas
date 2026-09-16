@@ -34,49 +34,6 @@ void NullNode::process(int32_t frames) {
     }
 }
 
-// ---------------------------------------------------------------- Osc
-
-void OscNode::prepare(int32_t sampleRate) {
-    Node::prepare(sampleRate);
-    osc_.Init(static_cast<float>(sampleRate));
-    osc_.SetWaveform(daisysp::Oscillator::WAVE_POLYBLEP_SAW);
-    osc_.SetAmp(1.0f);
-}
-
-void OscNode::process(int32_t frames) {
-    float *o = out(0);
-    const float *pitch = input(0);
-    const float *fm = input(1);
-
-    for (int32_t i = 0; i < frames; ++i) {
-        // Per sample rather than per block, deliberately: signal types are advisory, so
-        // patching audio into an FM input is allowed and is a real technique. Updating
-        // only at block rate would quantise that to the control rate and ruin it.
-        const float octaves = clampf(pitch[i] + fm[i] + tuneCents_ / 1200.0f, -6.0f, 6.0f);
-        osc_.SetFreq(kMiddleC * std::exp2(octaves));
-        o[i] = osc_.Process();
-    }
-}
-
-void OscNode::setParam(int32_t index, float value) {
-    switch (index) {
-        case 0: tuneCents_ = clampf(value, -kTuneRange, kTuneRange); break;
-        case 1: {
-            // Discrete, so the knob lands on a waveform rather than between two.
-            const auto wave = static_cast<uint8_t>(clampf(value, 0.0f, 3.0f) + 0.5f);
-            static const uint8_t kWaves[4] = {
-                    daisysp::Oscillator::WAVE_POLYBLEP_SAW,
-                    daisysp::Oscillator::WAVE_POLYBLEP_SQUARE,
-                    daisysp::Oscillator::WAVE_POLYBLEP_TRI,
-                    daisysp::Oscillator::WAVE_SIN,
-            };
-            osc_.SetWaveform(kWaves[wave]);
-            break;
-        }
-        default: break;
-    }
-}
-
 // ---------------------------------------------------------------- Filter
 
 void FilterNode::prepare(int32_t sampleRate) {
@@ -89,17 +46,14 @@ void FilterNode::prepare(int32_t sampleRate) {
 void FilterNode::process(int32_t frames) {
     float *o = out(0);
     const float *in = input(0);
-    const float *cutoff = input(1);
 
+    // Set once per block rather than per sample, which is what is left once the cutoff
+    // jack has gone: cutoffHz_ only changes when the knob moves or a modulator writes it,
+    // and the graph applies a modulator once per block anyway. The per-sample read that
+    // was here existed to make audio-rate filter modulation work through the jack; a
+    // module that wants audio rate now declares an audio input instead.
+    svf_.SetFreq(clampf(cutoffHz_, 20.0f, 18000.0f));
     for (int32_t i = 0; i < frames; ++i) {
-        // Per sample, like the oscillator. This was once per block, on the grounds that
-        // Svf::SetFreq calls sinf and powf where Oscillator::SetFreq is a multiply --
-        // true, but measured at 0.098% of a core against 0.047%, which is twice almost
-        // nothing. The block-rate read was the engine's only control-rate behaviour, and
-        // it quietly meant audio-rate filter modulation did not work while audio-rate FM
-        // did. There is no control rate here; this was the one place pretending there was.
-        const float octaves = clampf(cutoff[i], -6.0f, 6.0f);
-        svf_.SetFreq(clampf(cutoffHz_ * std::exp2(octaves), 20.0f, 18000.0f));
         svf_.Process(in[i]);
         o[i] = svf_.Low();
     }
@@ -107,8 +61,9 @@ void FilterNode::process(int32_t frames) {
 
 void FilterNode::setParam(int32_t index, float value) {
     switch (index) {
-        // The knob sets where a cable's zero sits; the cable moves it in octaves from
-        // there, which is how a cutoff input behaves on hardware.
+        // Hertz outright. This used to be where a cable's zero sat, with the cable moving
+        // it in octaves from there, which is how a cutoff input behaves on hardware; with
+        // the jack gone, a modulator writes this directly through the range on the knob.
         case 0: cutoffHz_ = clampf(value, 20.0f, 18000.0f); break;
         case 1: svf_.SetRes(clampf(value, 0.0f, 0.95f)); break;
         default: break;
@@ -146,21 +101,6 @@ void EnvNode::setParam(int32_t index, float value) {
     }
 }
 
-// ---------------------------------------------------------------- VCA
-
-void VcaNode::process(int32_t frames) {
-    float *o = out(0);
-    const float *in = input(0);
-    const float *cv = input(1);
-    for (int32_t i = 0; i < frames; ++i) {
-        o[i] = in[i] * clampf(cv[i] + bias_, 0.0f, 1.0f);
-    }
-}
-
-void VcaNode::setParam(int32_t index, float value) {
-    if (index == 0) bias_ = clampf(value, 0.0f, 1.0f);
-}
-
 // ---------------------------------------------------------------- Steps
 
 /**
@@ -184,12 +124,6 @@ void StepsNode::setStep(int32_t index, int32_t degree, bool gate) {
     gate_[index] = gate;
 }
 
-float StepsNode::voicedOctaves() const {
-    const int32_t degree = degree_[voiced_];
-    return scales_ != nullptr ? scales_->tableAt(voicedBeat_).octavesOf(degree)
-                              : ScaleTable{}.octavesOf(degree);
-}
-
 void StepsNode::tick(int32_t offset, int64_t count) {
     if (pendingCount_ < kMaxPending) {
         pending_[pendingCount_].offset = offset;
@@ -209,17 +143,11 @@ void StepsNode::tick(int32_t offset, int64_t count) {
 constexpr double kGateFraction = 0.5;
 
 void StepsNode::process(int32_t frames) {
-    float *pitch = out(0);
-    float *gate = out(1);
-    NoteBuffer &notes = notesOut(2);
+    float *gate = out(0);
+    NoteBuffer &notes = notesOut(1);
     // Events do not persist the way sample buffers do -- see NoteBuffer.
     notes.clear();
     int32_t next = 0;
-
-    // Resolved per block and at each tick rather than per sample: a note's pitch only
-    // changes when a note starts or its step is edited, and an edit to the sounding note
-    // is still heard within the block rather than on the next lap.
-    float held = voicedOctaves();
 
     for (int32_t i = 0; i < frames; ++i) {
         while (next < pendingCount_ && pending_[next].offset <= i) {
@@ -227,12 +155,8 @@ void StepsNode::process(int32_t frames) {
             const int64_t count = pending_[next].count;
             const Interval step = interval();
             step_ = static_cast<int32_t>(((count % length) + length) % length);
-            // Only a sounding step moves the pitch. A rest is the absence of a note, so
-            // it has no pitch to offer -- it keeps the degree it remembers so that
-            // switching it back on restores what was there, but that degree is a note
-            // nobody can see and emitting it makes the pitch jump for no visible reason.
-            // Holding is also what a sequencer's pitch output does in hardware, where it
-            // is a sample-and-hold and a rest simply never clocks it.
+            // A rest is the absence of a note. It keeps the degree it remembers so that
+            // switching it back on restores what was there, but emits nothing.
             // Whatever is still sounding ends before anything else starts. At half a step
             // a note has always run out by the next tick, but a tempo or an interval
             // changed mid-note can leave one running, and a note with no Off hangs.
@@ -251,11 +175,10 @@ void StepsNode::process(int32_t frames) {
                 // not the transport's floating position: the note belongs to the boundary
                 // it ticked for, so which scale it gets is never decided by rounding.
                 voicedBeat_ = floorDiv(count * step.num, step.den);
-                held = voicedOctaves();
 
-                // The same note the pitch and gate outputs are about to describe, said
-                // once instead of continuously: a degree, the beat that decides its
-                // scale, and the transpose as cents against it.
+                // A degree, the beat that decides its scale, and the transpose as cents
+                // against it. This used to be the same thing the pitch output said
+                // continuously; it is now the only place the sequence says it at all.
                 NoteEvent on;
                 on.id = nextNoteId_++;
                 on.kind = NoteKind::On;
@@ -276,7 +199,6 @@ void StepsNode::process(int32_t frames) {
             ++next;
         }
 
-        pitch[i] = held + transposeCents_ / 1200.0f;
         gate[i] = (step_ >= 0 && gate_[step_] && gateRemaining_ > 0) ? 1.0f : 0.0f;
         if (running_ && gateRemaining_ > 0) {
             --gateRemaining_;
@@ -317,7 +239,7 @@ void StepsNode::setParam(int32_t index, float value) {
 
 // ---------------------------------------------------------------- Voice
 
-void VoiceNode::prepare(int32_t sampleRate) {
+void OscNode::prepare(int32_t sampleRate) {
     Node::prepare(sampleRate);
     for (auto &voice : voices_) {
         voice.osc.Init(static_cast<float>(sampleRate));
@@ -331,7 +253,7 @@ void VoiceNode::prepare(int32_t sampleRate) {
     }
 }
 
-void VoiceNode::start(const NoteEvent &event) {
+void OscNode::start(const NoteEvent &event) {
     // A note takes an idle voice, then the oldest one already released, and only then
     // steals one that is still held. Stealing a held voice restarts an oscillator
     // mid-cycle, which is a click -- so it is the last resort rather than the rule, and
@@ -376,7 +298,7 @@ void VoiceNode::start(const NoteEvent &event) {
     if (stolen) chosen->env.Retrigger(false);
 }
 
-void VoiceNode::release(uint32_t id, int32_t source) {
+void OscNode::release(uint32_t id, int32_t source) {
     for (auto &voice : voices_) {
         // Both, because ids belong to the source that chose them: two sequencers patched
         // to the same input are each counting from one.
@@ -384,14 +306,14 @@ void VoiceNode::release(uint32_t id, int32_t source) {
     }
 }
 
-void VoiceNode::notesCut(int32_t port, int32_t source) {
+void OscNode::notesCut(int32_t port, int32_t source) {
     (void) port; // one note input, so there is nothing to tell apart
     for (auto &voice : voices_) {
         if (voice.source == source) voice.gate = false;
     }
 }
 
-void VoiceNode::process(int32_t frames) {
+void OscNode::process(int32_t frames) {
     float *o = out(0);
     const NoteBuffer &notes = notesIn(0);
     int32_t next = 0;
@@ -431,7 +353,7 @@ void VoiceNode::process(int32_t frames) {
     }
 }
 
-void VoiceNode::setParam(int32_t index, float value) {
+void OscNode::setParam(int32_t index, float value) {
     switch (index) {
         case 0: {
             // Order mirrors kWaves in OscNode::setParam.
@@ -582,13 +504,11 @@ void InNode::setParam(int32_t index, float value) {
 
 Node *makeNode(NodeType type) {
     switch (type) {
-        case NodeType::Osc: return new OscNode();
         case NodeType::Filter: return new FilterNode();
         case NodeType::Env: return new EnvNode();
-        case NodeType::Vca: return new VcaNode();
         case NodeType::Steps: return new StepsNode();
         case NodeType::Mix: return new MixNode();
-        case NodeType::Voice: return new VoiceNode();
+        case NodeType::Osc: return new OscNode();
         case NodeType::Lfo: return new LfoNode();
         case NodeType::Out: return new OutNode();
         case NodeType::In: return new InNode();

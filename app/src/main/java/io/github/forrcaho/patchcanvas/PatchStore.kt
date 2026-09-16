@@ -24,8 +24,9 @@ import java.io.File
 /**
  * 2: the Clock module became the patch's tempo. 3: one scale became a list of them.
  * 4: parameters can be exposed for modulation, and cables can land on them.
+ * 5: CV and gate retired, taking the monophonic Osc and the VCA with them.
  */
-private const val FORMAT_VERSION = 4
+private const val FORMAT_VERSION = 5
 private const val TAG = "PatchStore"
 
 fun Patch.toJson(): String {
@@ -292,6 +293,16 @@ private fun upgrade(root: JSONObject): JSONObject? {
         // exposed, which is what an absent "mod" already reads as.
         version = 4
     }
+
+    // There is deliberately no step from 4 to 5, so every file older than the catalogue
+    // change is refused by the check below rather than half-converted.
+    //
+    // A 4 could have been walked most of the way up -- Voice renamed to Osc, the retired
+    // modules dropped, the cables on ports that no longer exist already dropped by the
+    // range check. What made that the wrong trade is that it is silent: a patch built
+    // around a VCA an envelope opened comes back as a filter fed by nothing, quieter than
+    // it was left, with the load reporting success. Refusing says so, and these are
+    // working files rather than an archive. Decided 2026-09-15.
 
     if (version != FORMAT_VERSION) {
         Log.w(TAG, "unsupported patch version ${root.optInt("version", -1)}")
