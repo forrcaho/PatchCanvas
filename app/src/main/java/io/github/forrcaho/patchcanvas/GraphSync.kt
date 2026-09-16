@@ -18,7 +18,8 @@ enum class NodeType(val id: Int) {
     // 8 was Clock, retired when the transport replaced it, and deliberately not reused.
     Mix(9),
     Voice(10),
-    Lfo(11);
+    Lfo(11),
+    Drone(12);
 
     companion object {
         fun of(type: ModuleType): NodeType = when (type.name) {
@@ -32,6 +33,7 @@ enum class NodeType(val id: Int) {
             "Mix" -> Mix
             "Voice" -> Voice
             "LFO" -> Lfo
+            "Drone" -> Drone
             else -> Unknown
         }
     }

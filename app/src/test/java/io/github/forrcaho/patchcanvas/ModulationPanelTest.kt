@@ -26,6 +26,42 @@ class ModulationPanelTest {
     private val panel = panelRect(frame)
     private val exposable = Types.palette.filter { it.rowParams.isNotEmpty() }
 
+    /**
+     * A finger on a drone's grid, at the reference device's size. The hit test and the
+     * drawing derive their geometry separately, so a cell that lights and a cell that
+     * toggles are two claims, and only one of them is testable without a screen.
+     */
+    @Test
+    fun `a tap on a drone's grid lands on the cell under it`() {
+        val patch = Patch()
+        val drone = patch.add(Types.Drone, Offset.Zero)!!
+        val scale = Scale.Chromatic
+        val area = panelGrid(panel, d, Types.Drone)
+        val rows = droneRows(area, d, scale)
+        val columns = droneColumns(scale)
+
+        // The middle of every cell must find that cell and no other.
+        repeat(rows) { row ->
+            repeat(columns) { column ->
+                val at = Offset(
+                    area.left + (column + 0.5f) * (area.width / columns),
+                    area.top + (row + 0.5f) * (area.height / rows),
+                )
+                val cell = panelCellAt(panel, d, drone, at, scale)
+                assertEquals(
+                    "row $row column $column",
+                    droneDegree(drone, row, column, rows, scale),
+                    cell?.first,
+                )
+                // A drone's cell is its own degree, which is what lets the tap that
+                // toggles a sequencer's step toggle a drone's cell unchanged.
+                assertEquals(cell?.first, cell?.second)
+            }
+        }
+
+        assertNull("above the grid is not a cell", panelCellAt(panel, d, drone, Offset(area.left + 1f, area.top - 20f), scale))
+    }
+
     @Test
     fun `every row's chip is inside the panel, beside its row and clear of the jack labels`() {
         exposable.forEach { type ->

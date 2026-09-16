@@ -1523,6 +1523,46 @@ keeps that difference visible. Each end gets a plug in the cable's colour, since
 would otherwise cover the jack's own dot. Crossing a label is better than vanishing behind a
 box -- that was the open half, and the phone answered it.
 
+### Drone, and what a test tone is made of
+
+**Added 2026-09-16, to unblock the catalogue change above.** Retiring the monophonic `Osc`
+takes away the engine's only free-running audio-rate source, and about fifteen graph tests
+are built on one -- `patchingDoesNotStep` measures a click against the saw's own worst step
+precisely so that no fixed threshold has to be invented, and the roadmap already records
+what happens when a threshold is invented instead. The LFO caps at 20Hz and is unipolar;
+driving the polyphonic voice needs a sequencer and a running transport, and gives an
+envelope-shaped signal whose baseline means something different.
+
+Three ways out were weighed: an `Osc` that drones when nothing is patched to it, tests that
+build a tone from `Steps` into `Osc`, and a source node compiled only into the test binary.
+The answer taken was none of them -- **a `Drone` module**, which is a real module rather than
+a fixture, and which the instrument wanted anyway. Every note source here was clocked, so
+there was nothing that simply sounds.
+
+**A cell is a degree, and the engine never learns there were rows.** The grid puts the
+scale's degrees up the rows and octaves across the columns, which works because
+`ScaleTable::octavesOf` already treats a degree as an unbounded integer that runs into the
+next period past the end of the table -- so cell (row, column) is degree `column * size + row`
+and the grid is a two-dimensional view of one axis. `setStep(index, degree, gate)` already
+had the right shape for a toggled cell, so the command, the JSON and the `GraphSync` diff
+all carried over untouched. The columns are bounded by the cells there are, so a scale with
+many degrees to a period trades columns for rows rather than running off the end.
+
+It is ticked at a quarter note and uses that for nothing but knowing the beat, because a
+note must name the beat it starts on or the wrong scale resolves it -- while a drone has to
+sound with the transport stopped, which is the property that makes it a tone source at all.
+
+**Two things only the emulator found.** A module's panel opened on
+`type.params.isNotEmpty()`, from when knobs were the only thing a panel held; a drone has a
+grid and no knobs, so it took the tap and did nothing, with the grid it exists for
+unreachable. And a grid with no knobs under it was still being given two thirds of the
+body, leaving a third of the screen saying nothing. Both are the sort of thing the suite
+was never going to notice.
+
+**Still to look at on the phone.** Ten of a twelve-degree scale's rows fit, so the top two
+want a scroll. Whether that reads as ordinary or as the grid being cut off is a question for
+a finger.
+
 ### Choosing from a library
 
 A flat grid of 5 columns by 6 rows is about 404x279dp on the reference device -- a

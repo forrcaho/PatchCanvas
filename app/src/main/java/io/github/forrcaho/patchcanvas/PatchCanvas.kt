@@ -292,6 +292,31 @@ internal fun initialModRange(param: Param, value: Float): ModRange {
 /** How far either side of the knob a new range reaches, in knob travel. */
 internal const val MOD_SPREAD = 0.2f
 
+/**
+ * What a module's grid means, or that it has none.
+ *
+ * Both grids put the scale's degrees up the rows, because pitch ascending up the screen is
+ * the one thing about a piano roll nobody has to be taught. They differ in what a column
+ * is and in how many cells a column may sound.
+ */
+enum class GridKind {
+    NONE,
+
+    /** Columns are steps in time and each holds one degree: a melody. */
+    SEQUENCE,
+
+    /**
+     * Columns are octaves and every cell is on or off by itself: a chord that holds.
+     *
+     * Rows are the scale's degrees within one period and a column is the next period up,
+     * so cell (row, column) is degree `column * size + row`. That works because
+     * `ScaleTable::octavesOf` already treats a degree as an unbounded integer that runs
+     * into the next period past the end of the table -- the grid is a two-dimensional view
+     * of that one axis, and the engine never learns there were rows.
+     */
+    DRONE,
+}
+
 data class ModuleType(
     val name: String,
     val inputs: List<Port>,
@@ -303,11 +328,23 @@ data class ModuleType(
      * has no stored position, and draws at constant size on a viewport edge.
      */
     val pinned: Edge? = null,
-    /** Non-zero only for sequencers; mirrors StepsNode::kSteps. */
+    /** How many cells the grid holds; mirrors StepsNode::kSteps or DroneNode::kCells. */
     val stepCount: Int = 0,
+    /** What those cells mean, and so which grid the panel draws. */
+    val grid: GridKind = GridKind.NONE,
 ) {
     /** Indices of the parameters drawn as rows of the panel; the rest live in its header. */
     val rowParams: List<Int> get() = params.indices.filter { !params[it].header }
+
+    /**
+     * Whether opening this module shows anything at all.
+     *
+     * Knobs were once the only thing a panel held, so "has parameters" stood in for this.
+     * A drone has a grid and no parameters, and the old test made its panel unopenable --
+     * the module took the tap and did nothing, with the grid it exists for unreachable.
+     * Found by tapping it on a screen; nothing else would have.
+     */
+    val hasPanel: Boolean get() = params.isNotEmpty() || grid != GridKind.NONE
 
     /** The parameter choosing a clocked module's interval, or -1 for one the transport does not drive. */
     val intervalParam: Int get() = params.indexOfFirst { it.choice == Choice.DIVISION }
@@ -392,6 +429,20 @@ object Types {
             ),
         ),
         stepCount = STEP_COUNT,
+        grid = GridKind.SEQUENCE,
+    )
+    /**
+     * Notes that stay on until they are turned off, laid out as degrees by octaves.
+     *
+     * No transport and no parameters: it is the plainest thing a note cable can carry, and
+     * the only note source here that sounds with the transport stopped. Order mirrors
+     * DroneNode, which knows only degrees.
+     */
+    val Drone = ModuleType(
+        "Drone", emptyList(), listOf(Port("notes", N)),
+        Color(0xFFE0B36F),
+        stepCount = DRONE_CELLS,
+        grid = GridKind.DRONE,
     )
     /**
      * Notes in, sound out, with the voices inside it.
@@ -450,7 +501,7 @@ object Types {
      * inputs as you like, since each input stores its own source. Only summing ever
      * needed a module, and that is Mix.
      */
-    val palette = listOf(Osc, Filter, Env, Lfo, Vca, Steps, Voice, Mix)
+    val palette = listOf(Osc, Filter, Env, Lfo, Vca, Steps, Drone, Voice, Mix)
 
     val byName: Map<String, ModuleType> =
         (palette + listOf(Out, In)).associateBy { it.name }
@@ -711,16 +762,21 @@ internal fun panelPort(panel: Rect, d: Float, dir: PortDirection, index: Int, co
  * Two thirds to the grid, because it is the thing being edited and the knobs are two
  * controls that were perfectly legible at half the height. A module with no sequence
  * gives its whole body to the knobs, which is what every panel did before.
+ *
+ * A grid with no knobs under it takes the whole body instead of leaving a third of the
+ * panel empty. A drone has no parameters at all, so without this a third of the screen
+ * said nothing while the thing being edited was squeezed above it.
  */
-internal fun panelGrid(panel: Rect, d: Float): Rect {
+internal fun panelGrid(panel: Rect, d: Float, type: ModuleType? = null): Rect {
     val body = panelBody(panel, d)
     val side = PatchModule.PANEL_SIDE * d
-    return Rect(panel.left + side, body.top, panel.right - side, body.top + body.height * 0.66f)
+    val share = if (type != null && type.rowParams.isEmpty()) 1f else 0.66f
+    return Rect(panel.left + side, body.top, panel.right - side, body.top + body.height * share)
 }
 
 private fun panelControls(panel: Rect, d: Float, type: ModuleType): Rect {
     val body = panelBody(panel, d)
-    return if (type.stepCount > 0) {
+    return if (type.grid != GridKind.NONE) {
         Rect(body.left, body.top + body.height * 0.66f, body.right, body.bottom)
     } else {
         body
@@ -1045,19 +1101,61 @@ internal const val SCALE_TILE_H = 56f
  * Degrees ascend up the screen because pitch does, which is the one thing about a piano
  * roll nobody has to be taught.
  */
-internal fun panelCellAt(panel: Rect, d: Float, module: PatchModule, at: Offset): Pair<Int, Int>? {
-    if (module.type.stepCount == 0) return null
-    val area = panelGrid(panel, d)
+internal fun panelCellAt(
+    panel: Rect, d: Float, module: PatchModule, at: Offset, scale: Scale = Scale.Chromatic,
+): Pair<Int, Int>? {
+    if (module.type.grid == GridKind.NONE) return null
+    val area = panelGrid(panel, d, module.type)
     if (!area.contains(at)) return null
 
     val rows = gridRows(area, d)
     if (rows <= 0) return null
+
+    if (module.type.grid == GridKind.DRONE) {
+        val shown = droneRows(area, d, scale)
+        val columns = droneColumns(scale)
+        val column = ((at.x - area.left) / (area.width / columns)).toInt().coerceIn(0, columns - 1)
+        val row = ((at.y - area.top) / (area.height / shown)).toInt().coerceIn(0, shown - 1)
+        val degree = droneDegree(module, row, column, shown, scale)
+        // A cell is its own index, because a drone's degrees are laid out in order and
+        // run no further than its cells do.
+        return degree to degree
+    }
+
     val rowHeight = area.height / rows
     val cellWidth = area.width / module.type.stepCount
 
     val column = ((at.x - area.left) / cellWidth).toInt().coerceIn(0, module.type.stepCount - 1)
     val row = ((at.y - area.top) / rowHeight).toInt().coerceIn(0, rows - 1)
     return column to (module.gridBottom + (rows - 1 - row))
+}
+
+/** A drone shows its scale's degrees, or as many of them as fit. */
+internal fun droneRows(area: Rect, d: Float, scale: Scale): Int =
+    minOf(gridRows(area, d), scale.size).coerceAtLeast(1)
+
+/**
+ * Octave columns. Bounded by the cells there are, so a scale with many degrees to a period
+ * trades columns for rows rather than running off the end of the grid.
+ */
+internal fun droneColumns(scale: Scale): Int =
+    (DRONE_CELLS / scale.size).coerceIn(1, DRONE_OCTAVES)
+
+/**
+ * The lowest degree on screen, clamped to one period.
+ *
+ * A sequencer's grid scrolls through every degree there is; a drone's rows are the scale
+ * itself, so scrolling past it would show the octave the next column already holds.
+ */
+internal fun droneBottom(module: PatchModule, rows: Int, scale: Scale): Int =
+    module.gridBottom.coerceIn(0, (scale.size - rows).coerceAtLeast(0))
+
+/** The degree at a row and column, which is also its cell. Degrees ascend up the screen. */
+internal fun droneDegree(
+    module: PatchModule, row: Int, column: Int, rows: Int, scale: Scale,
+): Int {
+    val within = droneBottom(module, rows, scale) + (rows - 1 - row)
+    return (column * scale.size + within).coerceIn(0, DRONE_CELLS - 1)
 }
 
 /** How many degrees fit. Whole rows only -- a half-height row at the bottom is a lie. */
@@ -1813,8 +1911,16 @@ fun PatchCanvas(
     }
     // What the grid's rows and the tuning marks show: the scale sounding now.
     val playing = patch.scales.getOrElse(playingEntry) { patch.scales.first() }.scale
-    LaunchedEffect(openModule?.id, openModule?.type?.stepCount) {
-        val id = openModule?.takeIf { it.type.stepCount > 0 }?.id
+
+    // Through rememberUpdatedState for the same reason `controls` is: a drone's grid is
+    // shaped by the scale -- how many rows it has and how many octaves fit beside them --
+    // so the hit test needs the scale sounding now, and the gesture loop below is keyed on
+    // Unit. A plain read would pin every drone tap to whichever scale the patch opened in.
+    val gridScale by rememberUpdatedState(playing)
+    LaunchedEffect(openModule?.id, openModule?.type?.grid) {
+        // A sequencer's only. A drone has no position to report, and polling one every
+        // frame for a -1 is a frame's work for nothing.
+        val id = openModule?.takeIf { it.type.grid == GridKind.SEQUENCE }?.id
         if (id == null) {
             playingStep = -1
             return@LaunchedEffect
@@ -1975,7 +2081,7 @@ fun PatchCanvas(
                             else panelKnobAt(panel, frame.density, open, down.position)
                         val cell =
                             if (onHistory || knob != null) null
-                            else panelCellAt(panel, frame.density, open, down.position)
+                            else panelCellAt(panel, frame.density, open, down.position, gridScale)
 
                         // Scrolling the grid is measured from where the drag began and
                         // in whole rows, so a slow drag moves the same distance as a fast
@@ -1984,7 +2090,7 @@ fun PatchCanvas(
                         // area evenly once their count is fixed, so the two differ by
                         // the remainder and a drag measured against the nominal value
                         // slides against the grid it is supposed to be moving.
-                        val gridArea = panelGrid(panel, frame.density)
+                        val gridArea = panelGrid(panel, frame.density, open.type)
                         val rowHeight = gridArea.height / gridRows(gridArea, frame.density)
                         val scrollFrom = open.gridBottom
                         var moved = false
@@ -2128,7 +2234,7 @@ fun PatchCanvas(
                             interaction = if (onButton) {
                                 Interaction.Idle
                             } else if (hitModule != null && hitModule.isPinned) {
-                                if (hitModule.type.params.isNotEmpty()) {
+                                if (hitModule.type.hasPanel) {
                                     patch.modules.forEach { it.expanded = false }
                                     hitModule.expanded = true
                                 }
@@ -2463,6 +2569,52 @@ private val GridPlaying = Color(0xFFF2F6FB)
  * nineteen or thirteen degrees is uncountable by eye -- and unlike a piano roll there are
  * no black keys to count against.
  */
+/**
+ * Degrees up the rows, octaves across the columns, each cell held on its own.
+ *
+ * No playhead and no dimming: nothing here is reached in turn, so there is no step being
+ * played and no cell outside a loop. A lit cell is a note that is sounding right now,
+ * which is the whole of what this grid says.
+ */
+private fun DrawScope.drawDroneGrid(
+    area: Rect,
+    d: Float,
+    module: PatchModule,
+    scale: Scale,
+    accent: Color,
+) {
+    val rows = droneRows(area, d, scale)
+    val columns = droneColumns(scale)
+    val cellW = area.width / columns
+    val cellH = area.height / rows
+    val inset = 1f * d
+    val radius = CornerRadius(3f * d, 3f * d)
+
+    repeat(rows) { row ->
+        repeat(columns) { column ->
+            val degree = droneDegree(module, row, column, rows, scale)
+            val on = module.steps.getOrNull(degree)?.on == true
+            // The tonic of each column, so the octaves read as octaves rather than as
+            // four columns of undifferentiated cells.
+            val tonic = degree.mod(scale.size) == 0
+            val cell = Rect(
+                Offset(area.left + column * cellW + inset, area.top + row * cellH + inset),
+                Size(cellW - inset * 2f, cellH - inset * 2f),
+            )
+            drawRoundRect(
+                color = when {
+                    on -> accent
+                    tonic -> GridTonic
+                    else -> GridCell
+                },
+                topLeft = cell.topLeft,
+                size = cell.size,
+                cornerRadius = radius,
+            )
+        }
+    }
+}
+
 private fun DrawScope.drawStepGrid(
     area: Rect,
     d: Float,
@@ -3271,7 +3423,7 @@ private fun handleTap(
         patch.hitModule(camera, frame, screen)?.let { module ->
             // Tapping a module's body opens its panel. One at a time: the panel takes the
             // screen, so there is nowhere for a second one to go.
-            if (!module.isPinned && module.type.params.isNotEmpty()) {
+            if (!module.isPinned && module.type.hasPanel) {
                 patch.modules.forEach { it.expanded = false }
                 module.expanded = true
                 return Interaction.Idle
@@ -3316,6 +3468,12 @@ internal const val MAX_PARAMS = 5
  */
 internal const val STEP_COUNT = 16
 
+/** Cells in a drone's grid; mirrors DroneNode::kCells, which is capped by a scale's degrees. */
+internal const val DRONE_CELLS = 64
+
+/** The most octave columns a drone offers, before its cells run out. */
+internal const val DRONE_OCTAVES = 4
+
 /** Mirrors kTuneRange in nodes.cpp: how far a tuning control reaches, in cents. */
 internal const val TUNE_RANGE = 2400f
 
@@ -3359,8 +3517,12 @@ internal val BEATS_PER_BAR = Param("beats per bar", 2f, 8f, 4f, curve = ParamCur
  */
 private val DEFAULT_PATTERN = listOf(0, 3, 7, 10, 12, 10, 7, 3)
 
-internal fun defaultSteps(type: ModuleType): List<Step> =
-    (0 until type.stepCount).map { Step(DEFAULT_PATTERN[it % DEFAULT_PATTERN.size]) }
+internal fun defaultSteps(type: ModuleType): List<Step> = when (type.grid) {
+    // A cell is its own degree, and a fresh drone sounds nothing: a module that started
+    // holding a chord nobody asked for would be a module you have to switch off.
+    GridKind.DRONE -> (0 until type.stepCount).map { Step(it, on = false) }
+    else -> (0 until type.stepCount).map { Step(DEFAULT_PATTERN[it % DEFAULT_PATTERN.size]) }
+}
 
 /** Column cap for the context menu, visible to tests. */
 internal const val MENU_COLS = 4
@@ -3798,10 +3960,15 @@ private fun DrawScope.drawPanel(
         return
     }
 
-    if (module.type.stepCount > 0) {
-        drawStepGrid(
-            panelGrid(panel, d), d, module, scale, module.type.accent, measurer, playingStep,
+    when (module.type.grid) {
+        GridKind.SEQUENCE -> drawStepGrid(
+            panelGrid(panel, d, module.type), d, module, scale, module.type.accent,
+            measurer, playingStep,
         )
+        GridKind.DRONE -> drawDroneGrid(
+            panelGrid(panel, d, module.type), d, module, scale, module.type.accent,
+        )
+        GridKind.NONE -> {}
     }
 
     // Knobs -- the rows only. Walking every parameter drew the interval, which lives in the

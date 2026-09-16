@@ -120,6 +120,110 @@ class PatchModelTest {
         assertTrue(p.connections.isEmpty())
     }
 
+    // ------------------------------------------------------------- the drone grid
+
+    /** The panel's grid area at the reference device's landscape size. */
+    private fun droneArea(): Rect = Rect(0f, 0f, 400f, 208f)
+
+    /**
+     * The gate was `params.isNotEmpty()`, from when knobs were the only thing a panel
+     * held. A drone has a grid and no knobs, so its panel would not open and the grid it
+     * exists for could not be reached -- the module took the tap and did nothing. Found by
+     * tapping it on a screen, which is the only thing that could have.
+     */
+    @Test
+    fun `a module with a grid and no knobs still opens`() {
+        assertTrue("a drone has nothing but its grid", Types.Drone.params.isEmpty())
+        assertTrue("and it must still open", Types.Drone.hasPanel)
+        Types.palette.forEach { type ->
+            assertEquals(
+                "${type.name} opens if and only if it has something to show",
+                type.params.isNotEmpty() || type.grid != GridKind.NONE,
+                type.hasPanel,
+            )
+        }
+    }
+
+    @Test
+    fun `a grid with no knobs under it takes the whole panel body`() {
+        val panel = Rect(0f, 0f, 800f, 400f)
+        // A third of the screen saying nothing, with the thing being edited squeezed
+        // above it, is what this avoids.
+        assertTrue(
+            "a drone's grid reaches further down than a sequencer's",
+            panelGrid(panel, 1f, Types.Drone).bottom > panelGrid(panel, 1f, Types.Steps).bottom,
+        )
+        assertEquals(
+            "and a sequencer's is unchanged",
+            panelGrid(panel, 1f).bottom,
+            panelGrid(panel, 1f, Types.Steps).bottom,
+        )
+    }
+
+    @Test
+    fun `a fresh drone sounds nothing and each cell is its own degree`() {
+        val p = Patch()
+        val drone = p.add(Types.Drone, Offset.Zero)!!
+        assertEquals(DRONE_CELLS, drone.steps.size)
+        assertTrue("a drone that started holding a chord would be one you switch off",
+            drone.steps.none { it.on })
+        drone.steps.forEachIndexed { i, step -> assertEquals(i, step.degree) }
+    }
+
+    @Test
+    fun `degrees ascend up the rows and octaves across the columns`() {
+        val p = Patch()
+        val drone = p.add(Types.Drone, Offset.Zero)!!
+        val area = droneArea()
+        val scale = Scale.Chromatic
+        val rows = droneRows(area, 1f, scale)
+
+        // The bottom row of the first column is the lowest degree on screen, and the row
+        // above it is one degree higher: pitch ascends up the screen.
+        val bottom = droneDegree(drone, rows - 1, 0, rows, scale)
+        val above = droneDegree(drone, rows - 2, 0, rows, scale)
+        assertEquals(above, bottom + 1)
+
+        // The same row one column right is the same degree an octave up, which is what
+        // makes a column an octave rather than just the next twelve degrees.
+        assertEquals(
+            bottom + scale.size,
+            droneDegree(drone, rows - 1, 1, rows, scale),
+        )
+    }
+
+    @Test
+    fun `a scale with many degrees trades columns for rows`() {
+        // 22 degrees to a period: four octaves of it is 88 cells and there are 64, so it
+        // gets two columns rather than running off the end of the grid.
+        assertEquals(DRONE_OCTAVES, droneColumns(Scale.Chromatic))
+        assertEquals(2, droneColumns(Scale.equal("22", 22)))
+        assertEquals(1, droneColumns(Scale.equal("40", 40)))
+        // Whatever the scale, no cell lands past the end.
+        listOf(5, 12, 22, 40).forEach { size ->
+            val scale = Scale.equal("$size", size)
+            val p = Patch()
+            val drone = p.add(Types.Drone, Offset.Zero)!!
+            val rows = droneRows(droneArea(), 1f, scale)
+            val top = droneDegree(drone, 0, droneColumns(scale) - 1, rows, scale)
+            assertTrue("$size-degree scale reached cell $top", top < DRONE_CELLS)
+        }
+    }
+
+    @Test
+    fun `a drone's rows stay inside one period however far it is scrolled`() {
+        val p = Patch()
+        val drone = p.add(Types.Drone, Offset.Zero)!!
+        val scale = Scale.Chromatic
+        val rows = droneRows(droneArea(), 1f, scale)
+
+        // Scrolling past the scale would show the octave the next column already holds.
+        drone.gridBottom = 900
+        assertEquals(scale.size - rows, droneBottom(drone, rows, scale))
+        drone.gridBottom = -900
+        assertEquals(0, droneBottom(drone, rows, scale))
+    }
+
     @Test
     fun `an output may fan out to several inputs`() {
         val p = Patch()

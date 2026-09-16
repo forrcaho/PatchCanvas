@@ -602,6 +602,11 @@ namespace {
 
 const NoteBuffer &notesOf(const DroneNode &drone) { return *drone.noteOutput(0); }
 
+// Mirrored by DRONE_CELLS in PatchCanvas.kt, which cannot see this. Kotlin sizes a
+// drone's cell list from its own copy and the engine drops anything past the end, so the
+// two drifting apart is the kind of mismatch that fails silently in production.
+static_assert(DroneNode::kCells == 64, "DRONE_CELLS in PatchCanvas.kt mirrors this");
+
 /** One block, with the transport running or not, and no tick in it. */
 void run(DroneNode &drone, bool running = false, int blocks = 1) {
     for (int i = 0; i < blocks; ++i) {
