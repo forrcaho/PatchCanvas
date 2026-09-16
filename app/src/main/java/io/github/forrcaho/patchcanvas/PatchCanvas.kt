@@ -104,27 +104,41 @@ enum class PortDirection { INPUT, OUTPUT, MOD }
 enum class Edge { LEFT, RIGHT }
 
 /**
- * What a port carries.
+ * What a port carries. Four kinds, and typing is enforced.
  *
- * Advisory among the signals, and not enforced: any signal output may patch to any signal
- * input. In hardware modular it is all just voltage, and patching audio into a CV input
- * is a technique rather than a mistake -- audio-rate modulation lives there. Blocking it
- * would make this less modular than the thing it is modelled on. The colour says what to
- * expect; the cable decides what happens.
+ * It was advisory while these were Eurorack's signals, because in hardware it is all
+ * voltage and patching audio into a CV input is a technique rather than a mistake. Not one
+ * of these four is a voltage: [MODULATION] drives a control between a low and a high stored
+ * on that control, in that control's own units, and [PULSE] and [NOTE] are events. Nothing
+ * sensible happens when one is read as another, so a mismatch is refused rather than
+ * coloured -- see [Patch.connect].
  *
- * [NOTE] is the exception, and the only one. An event is not a voltage: a note starts and
- * ends and something has to match the two, where a sample is only ever a number. Patching
- * a note output into a signal input would be silence with no visible cause, so it is
- * refused rather than coloured -- see [Patch.connect].
+ * Audio-rate modulation does not need the loophole enforcement would close. A module that
+ * wants it declares an audio input, where the rate is the whole point and the unit is a
+ * sample; [MODULATION] is applied once per block and could not carry it anyway.
+ *
+ * [MODULATION] and [PULSE] keep the colours of the CV and gate they replace, which is most
+ * of the argument that they are the same idea said properly.
  */
 enum class SignalKind(val cable: Color, val idle: Color) {
     AUDIO(Color(0xFF8A93A3), Color(0xFF6E7684)),
-    CV(Color(0xFFB98FE0), Color(0xFF8A6FA8)),
-    GATE(Color(0xFFE0A24B), Color(0xFFA8793A)),
+    MODULATION(Color(0xFFB98FE0), Color(0xFF8A6FA8)),
+    PULSE(Color(0xFFE0A24B), Color(0xFFA8793A)),
     NOTE(Color(0xFF7FD18A), Color(0xFF5E9A68));
 
-    /** Whether a cable may run from a port of this kind to one of [other]. */
-    fun patchesTo(other: SignalKind): Boolean = (this == NOTE) == (other == NOTE)
+    /**
+     * Whether a cable may run from a port of this kind to one of [other]. Like to like,
+     * and nothing else.
+     *
+     * The design allows exactly one conversion, [NOTE] into a [PULSE] input, because a
+     * note implies a trigger -- and refuses the reverse, because nothing about a pulse
+     * says what pitch it would be. **Designed, not built.** A pulse is still the gate
+     * buffer it was renamed from rather than an event, and the engine refuses note against
+     * non-note outright (see the Connect case in `graph.cpp`), so allowing it here would
+     * make a cable the model accepts, the engine drops, and nothing on screen explains.
+     * It arrives when a pulse carries events.
+     */
+    fun patchesTo(other: SignalKind): Boolean = this == other
 }
 
 data class Port(val name: String, val kind: SignalKind)
@@ -301,8 +315,8 @@ data class ModuleType(
 
 object Types {
     private val A = SignalKind.AUDIO
-    private val C = SignalKind.CV
-    private val G = SignalKind.GATE
+    private val M = SignalKind.MODULATION
+    private val P = SignalKind.PULSE
     private val N = SignalKind.NOTE
 
     private val LIN = ParamCurve.LINEAR
@@ -310,7 +324,7 @@ object Types {
     private val STEP = ParamCurve.STEPPED
 
     val Osc = ModuleType(
-        "Osc", listOf(Port("pitch", C), Port("fm", C)), listOf(Port("out", A)),
+        "Osc", listOf(Port("pitch", M), Port("fm", M)), listOf(Port("out", A)),
         Color(0xFF7FD1C1),
         params = listOf(
             // Cents rather than semitones: a semitone is a fact about twelve-tone equal
@@ -323,7 +337,7 @@ object Types {
         ),
     )
     val Filter = ModuleType(
-        "Filter", listOf(Port("in", A), Port("cutoff", C)), listOf(Port("out", A)),
+        "Filter", listOf(Port("in", A), Port("cutoff", M)), listOf(Port("out", A)),
         Color(0xFFE0A24B),
         params = listOf(
             // The knob sets where a cable's zero sits; the cable moves it in octaves
@@ -333,7 +347,7 @@ object Types {
         ),
     )
     val Env = ModuleType(
-        "Env", listOf(Port("gate", G)), listOf(Port("out", C)),
+        "Env", listOf(Port("gate", P)), listOf(Port("out", M)),
         Color(0xFFB98FE0),
         params = listOf(
             Param("A", 0.001f, 5f, 0.005f, "s", EXP),
@@ -345,10 +359,10 @@ object Types {
     /**
      * A slow wave, for turning knobs. Patched to a parameter's modulation port it sweeps
      * that parameter across the range stored there, which is why it is unipolar -- see
-     * LfoNode. Its output is CV until modulation has a kind of its own.
+     * LfoNode. Its output is modulation, which is now a kind in its own right.
      */
     val Lfo = ModuleType(
-        "LFO", emptyList(), listOf(Port("out", C)),
+        "LFO", emptyList(), listOf(Port("out", M)),
         Color(0xFFC9A8EE),
         params = listOf(
             // Order mirrors LfoNode::setParam.
@@ -357,7 +371,7 @@ object Types {
         ),
     )
     val Vca = ModuleType(
-        "VCA", listOf(Port("in", A), Port("cv", C)), listOf(Port("out", A)),
+        "VCA", listOf(Port("in", A), Port("cv", M)), listOf(Port("out", A)),
         Color(0xFFE07A9B),
         // Added to the control voltage, so a VCA with nothing patched can still open.
         params = listOf(Param("bias", 0f, 1f, 0f, "", LIN)),
@@ -367,7 +381,7 @@ object Types {
      * mirrors StepsNode::setParam -- length, transpose, interval.
      */
     val Steps = ModuleType(
-        "Steps", emptyList(), listOf(Port("pitch", C), Port("gate", G), Port("notes", N)),
+        "Steps", emptyList(), listOf(Port("pitch", M), Port("gate", P), Port("notes", N)),
         Color(0xFF6FA8E5),
         params = listOf(
             Param("len", 1f, STEP_COUNT.toFloat(), 8f, "", STEP),
@@ -1135,14 +1149,14 @@ class Patch {
     fun port(ref: PortRef): Port? {
         val module = module(ref.moduleId) ?: return null
         if (ref.dir != PortDirection.MOD) return module.ports(ref.dir).getOrNull(ref.index)
-        // A parameter's jack, which exists only while the parameter is exposed. CV, because
-        // CV is what modulation is until it has a kind of its own.
+        // A parameter's jack, which exists only while the parameter is exposed. Modulation
+        // by definition -- it is the one thing a knob knows how to be driven by.
         if (ref.index !in module.modRanges) return null
         val param = module.type.params.getOrNull(ref.index) ?: return null
-        return Port(param.short, SignalKind.CV)
+        return Port(param.short, SignalKind.MODULATION)
     }
 
-    /** What a cable leaving a port carries. Advisory: it colours, it does not gate. */
+    /** What a cable leaving a port carries. Enforced: see [SignalKind.patchesTo]. */
     fun kindOf(ref: PortRef): SignalKind = port(ref)?.kind ?: SignalKind.AUDIO
 
     /** Pinned types are never added; the rails exist for the life of the patch. */
@@ -1216,10 +1230,10 @@ class Patch {
         if (out.moduleId == inp.moduleId) return false // no self-patching for now
 
         // A parameter's jack takes one modulator, as a signal input takes one source, and
-        // only from a control output: CV is what becomes modulation, and audio or notes on a
-        // knob would pin it somewhere with nothing on screen saying why.
+        // only from a modulation output -- audio, notes or a pulse on a knob would pin it
+        // somewhere with nothing on screen saying why.
         if (inp.dir == PortDirection.MOD) {
-            if (port(inp) == null || kindOf(out) != SignalKind.CV) return false
+            if (port(inp) == null || kindOf(out) != SignalKind.MODULATION) return false
             connections.removeAll { it.to == inp }
             connections.add(Connection(out, inp))
             return true
@@ -3587,8 +3601,10 @@ private fun DrawScope.drawModuleBox(
             val ref = PortRef(module.id, dir, i)
             val at = portIn(rect, unit, dir, i, ports.size, module.portsBody * unit)
             val lit = ref == armed
-            // Idle colour comes from what the port carries, so audio, CV and gate are
-            // distinguishable at a glance without reading a label.
+            // Idle colour comes from what the port carries, so the four kinds are
+            // distinguishable at a glance without reading a label -- and since typing is
+            // enforced, the colour now says which cables will be accepted rather than
+            // merely which were expected.
             drawCircle(
                 color = (if (lit) module.type.accent else port.kind.idle).copy(alpha = alpha),
                 radius = (if (lit) PatchModule.PORT_RADIUS_ARMED else PatchModule.PORT_RADIUS) * unit,
@@ -3625,7 +3641,7 @@ private fun DrawScope.drawModuleBox(
             val at = modPortIn(rect, unit, module.type, index, module.portsBody * unit)
             val lit = ref == armed
             drawCircle(
-                color = (if (lit) module.type.accent else SignalKind.CV.idle).copy(alpha = alpha),
+                color = (if (lit) module.type.accent else SignalKind.MODULATION.idle).copy(alpha = alpha),
                 radius = (if (lit) PatchModule.PORT_RADIUS_ARMED else PatchModule.PORT_RADIUS) * unit,
                 center = at,
             )
@@ -3644,11 +3660,8 @@ private fun DrawScope.drawModuleBox(
     }
 }
 
-/**
- * The colour of modulation: CV's, which is what modulation is until it has a kind of its
- * own, and the colour the design keeps for it when CV retires.
- */
-private val ModulationColor = SignalKind.CV.cable
+/** The colour of modulation, which now has a kind of its own to take it from. */
+private val ModulationColor = SignalKind.MODULATION.cable
 
 /**
  * The two ends of a modulation range, drawn as the glyphs that name them: `[` at the low end
@@ -3758,7 +3771,7 @@ private fun DrawScope.drawPanel(
             )
         }
         drawCircle(
-            color = if (patched) ModulationColor else SignalKind.CV.idle,
+            color = if (patched) ModulationColor else SignalKind.MODULATION.idle,
             radius = (if (patched) 8f else 6f) * d,
             center = at,
         )

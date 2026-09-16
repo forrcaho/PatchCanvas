@@ -1304,6 +1304,33 @@ subpatch work spends any of it.
 **Blocked on the rest of this phase, in that order.** CV cannot be retired until a parameter
 can be modulated, and a parameter cannot be modulated until the mechanic below exists.
 
+---
+
+**The type system landed 2026-09-15, catalogue untouched, as the first of two commits.**
+Splitting it that way keeps the format bump and the module deletions off the same commit as
+the enforcement rules, so a regression has one obvious cause. 94 graph checks, 90 node
+checks, 208 JVM tests.
+
+**`patchesTo` is like-to-like, and the one designed conversion is not built.** Note into a
+pulse input was to be allowed. It is refused, because building it in the model alone would
+have made a cable the UI accepts and the engine silently drops: `graph.cpp`'s Connect case
+rejects note against non-note outright, and a pulse is still the *gate buffer* it was
+renamed from rather than an event. Both halves of that have to move together. A test pins
+the refusal and says why, so the next person to try it finds the reason rather than the
+gap.
+
+**The design's own example was wrong about the code.** "A module that wants audio-rate
+modulation declares an audio input, as `Osc`'s `fm` already does" is stated twice above and
+in `CLAUDE.md` -- but `fm` was declared `CV`, and audio reached it only because typing was
+advisory. So enforcement removed audio-rate FM rather than preserving it, which is the
+opposite of what the sentence promised. Recorded rather than quietly fixed: the argument
+that enforcement costs nothing was leaning on a module that did not do what it was said to
+do. FM is now deferred to a future FM voice, where the operators are internal and FM is
+what the module *is* rather than a jack bolted to a subtractive one -- decided 2026-09-15.
+
+**Nothing on the device yet.** Enforcement can only refuse patches that were previously
+accepted, and which of those a finger will miss is not something the desk can answer.
+
 ### Modulating a parameter
 
 **Expose it from inside; patch it from outside.** A parameter has no jack until you say so.

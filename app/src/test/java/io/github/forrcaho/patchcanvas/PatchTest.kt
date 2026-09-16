@@ -70,37 +70,54 @@ class PatchModelTest {
     }
 
     @Test
-    fun `notes and signals do not patch to each other`() {
+    fun `a cable runs only between ports of the same kind`() {
         val p = Patch()
         val steps = p.add(Types.Steps, Offset.Zero)!!
         val voice = p.add(Types.Voice, Offset.Zero)!!
         val osc = p.add(Types.Osc, Offset.Zero)!!
+        val env = p.add(Types.Env, Offset.Zero)!!
 
-        // The one place a cable is refused for what it carries. Signals stay advisory:
-        // an event is not a voltage, and a note cable into an audio input would be
-        // silence with no visible cause.
+        fun out(m: PatchModule, i: Int) = PortRef(m.id, PortDirection.OUTPUT, i)
+        fun into(m: PatchModule, i: Int) = PortRef(m.id, PortDirection.INPUT, i)
+        val outL = PortRef(OUT_ID, PortDirection.INPUT, 0)
+
+        // Steps: 0 pitch (modulation), 1 gate (pulse), 2 notes. Osc: 0 pitch, 1 fm, both
+        // modulation, out audio. Env: 0 gate (pulse), out modulation. Voice: 0 notes.
+        assertFalse("modulation is not a note", p.connect(out(steps, 0), into(voice, 0)))
+        assertFalse("nor is audio", p.connect(out(osc, 0), into(voice, 0)))
+        assertFalse("nor do notes go into audio", p.connect(out(steps, 2), outL))
+        // The three that only enforcement refuses -- each was legal while typing was
+        // advisory, and each is a different pair of kinds.
+        assertFalse("a pulse does not drive a knob", p.connect(out(steps, 1), into(osc, 0)))
+        assertFalse("nor does modulation trigger", p.connect(out(steps, 0), into(env, 0)))
+        assertFalse("nor does audio", p.connect(out(osc, 0), into(env, 0)))
+        assertFalse("and modulation is not audio", p.connect(out(env, 0), outL))
+        assertTrue("nothing above was patched", p.connections.isEmpty())
+
+        assertTrue("notes to notes", p.connect(out(steps, 2), into(voice, 0)))
+        assertTrue("pulse to pulse", p.connect(out(steps, 1), into(env, 0)))
+        assertTrue("modulation to modulation", p.connect(out(steps, 0), into(osc, 0)))
+        assertTrue("audio to audio", p.connect(out(osc, 0), outL))
+        assertEquals(4, p.connections.size)
+    }
+
+    /**
+     * Designed and deliberately not built: the engine refuses note against non-note
+     * outright, so a cable the model allowed here would be dropped on the other side of
+     * the queue with nothing on screen to say why. It arrives when a pulse is an event.
+     */
+    @Test
+    fun `note into a pulse input is refused until a pulse is an event`() {
+        val p = Patch()
+        val steps = p.add(Types.Steps, Offset.Zero)!!
+        val env = p.add(Types.Env, Offset.Zero)!!
         assertFalse(
-            "a pitch CV is not a note",
-            p.connect(PortRef(steps.id, PortDirection.OUTPUT, 0), PortRef(voice.id, PortDirection.INPUT, 0)),
-        )
-        assertFalse(
-            "and neither is audio",
-            p.connect(PortRef(osc.id, PortDirection.OUTPUT, 0), PortRef(voice.id, PortDirection.INPUT, 0)),
-        )
-        assertFalse(
-            "nor do notes go into an audio input",
-            p.connect(PortRef(steps.id, PortDirection.OUTPUT, 2), PortRef(OUT_ID, PortDirection.INPUT, 0)),
+            p.connect(
+                PortRef(steps.id, PortDirection.OUTPUT, 2),
+                PortRef(env.id, PortDirection.INPUT, 0),
+            ),
         )
         assertTrue(p.connections.isEmpty())
-
-        assertTrue(
-            "while the ports that agree still patch",
-            p.connect(PortRef(steps.id, PortDirection.OUTPUT, 2), PortRef(voice.id, PortDirection.INPUT, 0)),
-        )
-        assertTrue(
-            "as do two signals that do not agree, which stays advisory",
-            p.connect(PortRef(steps.id, PortDirection.OUTPUT, 1), PortRef(osc.id, PortDirection.INPUT, 0)),
-        )
     }
 
     @Test

@@ -148,15 +148,20 @@ the only one defined in code, and exists so the app still works when that folder
 unreadable. Tuning controls are in **cents**, never semitones: a semitone is a fact about 12-TET and
 means nothing in the tunings these knobs still have to work in.
 
-**Signal types were advisory, and are being retired.** Audio, CV and gate coloured the
-cable without constraining it, because in hardware it is all voltage. That was the
-Eurorack model and the project has left it: CV and gate become *modulation* and *pulse*,
-which are not voltages and do not interchange, so typing is enforced rather than
-advisory. Audio-rate modulation does not need the loophole — a module that wants it
-declares an audio input, as `Osc`'s `fm` already does. **Designed, not built**: the code
-below still carries `SignalKind.CV`/`GATE` and `patchesTo`, and the engine still has
-`Env`, `Vca` and `Steps`' pitch and gate outputs. See Phase 7 in `ROADMAP.md` before
-changing either side.
+**Signal types are enforced.** Audio, CV and gate used to colour the cable without
+constraining it, because in hardware it is all voltage. That was the Eurorack model and
+the project has left it: CV and gate are now *modulation* and *pulse*, which are not
+voltages and do not interchange, so `patchesTo` is like-to-like and a mismatch is refused.
+Audio-rate modulation does not need the loophole — a module that wants it declares an
+audio input, and `MODULATION` is applied once per block and could not carry it anyway.
+
+**Note into a pulse input is the one designed conversion, and is not built.** A note
+implies a trigger; the reverse is refused because nothing says what pitch a pulse would
+be. It is refused on both sides today because a pulse is still the *gate buffer* it was
+renamed from rather than an event, and `graph.cpp`'s Connect case rejects note against
+non-note outright — so allowing it in the model alone would make a cable the UI accepts and
+the engine silently drops. It arrives when a pulse carries events. The catalogue half of
+the retirement — `Env`, `Vca`, `Steps`' pitch and gate outputs — is tracked in Phase 7.
 
 **Inputs take one source.** A connect already replaces, so a replacement must send only
 the connect — sending a disconnect too makes the engine fade to silence and back, which
