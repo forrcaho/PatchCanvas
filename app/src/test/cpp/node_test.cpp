@@ -596,6 +596,135 @@ void theNotesOutputSaysWhatTheGateSays() {
     check(notesOf(steps).events[0].beat == 4, "on beat four, counted rather than measured");
 }
 
+// ---------------------------------------------------------------- drone
+
+namespace {
+
+const NoteBuffer &notesOf(const DroneNode &drone) { return *drone.noteOutput(0); }
+
+/** One block, with the transport running or not, and no tick in it. */
+void run(DroneNode &drone, bool running = false, int blocks = 1) {
+    for (int i = 0; i < blocks; ++i) {
+        drone.setTiming(running ? kBeatsPerFrame : 0.0, running);
+        drone.process(kBlockSize);
+    }
+}
+
+} // namespace
+
+void aDroneHoldsItsNoteWithTheTransportStopped() {
+    std::printf("a drone holds its note with the transport stopped\n");
+    DroneNode drone;
+    drone.prepare(kRate);
+
+    run(drone);
+    check(notesOf(drone).count == 0, "an untouched grid says nothing");
+
+    drone.setStep(3, 7, true);
+    run(drone);
+    check(notesOf(drone).count == 1, "a toggled cell starts one note");
+    const NoteEvent on = notesOf(drone).events[0];
+    check(on.kind == NoteKind::On, "and it is a note starting");
+    check(on.degree == 7, "carrying the cell's degree");
+    check(on.offset == 0, "at the top of the block, having no boundary of its own");
+    check(on.id != 0, "with an id an off can be matched against");
+
+    // The property the whole module exists for: nothing here is clocked, so the note is
+    // still sounding after a hundred blocks in which the transport never moved. This is
+    // also what makes it the graph suite's tone source.
+    run(drone, false, 100);
+    check(notesOf(drone).count == 0, "and says nothing more while it is held");
+
+    drone.setStep(3, 7, false);
+    run(drone);
+    check(notesOf(drone).count == 1, "untoggling ends it");
+    check(notesOf(drone).events[0].kind == NoteKind::Off, "with an off");
+    check(notesOf(drone).events[0].id == on.id, "for the note that started");
+
+    run(drone, false, 4);
+    check(notesOf(drone).count == 0, "and nothing after that");
+}
+
+void aDroneSoundsSeveralCellsAtOnce() {
+    std::printf("a drone sounds several cells at once\n");
+    DroneNode drone;
+    drone.prepare(kRate);
+
+    drone.setStep(0, 0, true);
+    drone.setStep(1, 4, true);
+    drone.setStep(2, 7, true);
+    run(drone);
+    check(notesOf(drone).count == 3, "three cells, three notes");
+
+    uint32_t ids[3] = {};
+    int32_t degrees[3] = {};
+    for (int32_t i = 0; i < 3; ++i) {
+        ids[i] = notesOf(drone).events[i].id;
+        degrees[i] = notesOf(drone).events[i].degree;
+    }
+    check(degrees[0] == 0 && degrees[1] == 4 && degrees[2] == 7, "each carrying its own degree");
+    check(ids[0] != ids[1] && ids[1] != ids[2] && ids[0] != ids[2], "and its own id");
+
+    // One cell off leaves the others alone, which is what a chord has to do and what a
+    // single held gate could never say.
+    drone.setStep(1, 4, false);
+    run(drone);
+    check(notesOf(drone).count == 1, "one off");
+    check(notesOf(drone).events[0].id == ids[1], "for the cell that was untoggled");
+}
+
+void aDroneNoteTakesTheBeatOfTheLastTick() {
+    std::printf("a drone note takes the beat of the last tick\n");
+    DroneNode drone;
+    drone.prepare(kRate);
+
+    // Ticked at a quarter, so the count is the beat. A note has to name the beat it
+    // starts on or the wrong scale resolves it -- and a drone learns the beat from the
+    // transport without its sounding depending on one.
+    drone.setTiming(kBeatsPerFrame, true);
+    drone.tick(0, 6);
+    drone.process(kBlockSize);
+
+    drone.setStep(0, 2, true);
+    run(drone, true);
+    check(notesOf(drone).count == 1, "the cell starts");
+    check(notesOf(drone).events[0].beat == 6, "on the beat the transport last ticked");
+}
+
+void aDroneSaysNothingTwiceForTheSameCell() {
+    std::printf("a drone says nothing twice for the same cell\n");
+    DroneNode drone;
+    drone.prepare(kRate);
+
+    drone.setStep(5, 5, true);
+    run(drone);
+    check(notesOf(drone).count == 1, "the first toggle starts it");
+
+    // Setting a cell that is already on must not re-trigger it. The interface resends a
+    // cell whenever anything about it changes, and a note restarted every time a finger
+    // moved elsewhere would be a stutter nothing on screen explained.
+    drone.setStep(5, 5, true);
+    run(drone);
+    check(notesOf(drone).count == 0, "and setting it again starts nothing");
+
+    drone.setStep(5, 5, false);
+    run(drone);
+    drone.setStep(5, 5, false);
+    run(drone);
+    check(notesOf(drone).count == 0, "as untoggling a silent cell ends nothing");
+}
+
+void aDroneIgnoresACellOutsideItsGrid() {
+    std::printf("a drone ignores a cell outside its grid\n");
+    DroneNode drone;
+    drone.prepare(kRate);
+    drone.setStep(-1, 0, true);
+    drone.setStep(DroneNode::kCells, 0, true);
+    drone.setStep(DroneNode::kCells + 99, 0, true);
+    run(drone);
+    check(notesOf(drone).count == 0, "nothing sounds and nothing is written past the end");
+}
+
 void aRestStartsNothing() {
     std::printf("a rest starts nothing\n");
     StepsNode steps;
@@ -865,5 +994,10 @@ int main() {
     aVoiceResolvesANoteAgainstItsOwnBeat();
     aNinthNoteStealsAVoice();
     anLfoStaysInsideItsRangeAtItsRate();
+    aDroneHoldsItsNoteWithTheTransportStopped();
+    aDroneSoundsSeveralCellsAtOnce();
+    aDroneNoteTakesTheBeatOfTheLastTick();
+    aDroneSaysNothingTwiceForTheSameCell();
+    aDroneIgnoresACellOutsideItsGrid();
     return testing::report("nodes");
 }

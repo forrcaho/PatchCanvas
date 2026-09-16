@@ -161,6 +161,58 @@ void VcaNode::setParam(int32_t index, float value) {
     if (index == 0) bias_ = clampf(value, 0.0f, 1.0f);
 }
 
+// ---------------------------------------------------------------- Drone
+
+/**
+ * Degree per cell, ascending, so a drone that is never told otherwise still lays the scale
+ * out in order. The interface sends every cell it has, so this only decides what an
+ * untouched node would sound if something asked it to.
+ */
+DroneNode::DroneNode() {
+    for (int32_t i = 0; i < kCells; ++i) degree_[i] = i;
+}
+
+void DroneNode::setStep(int32_t index, int32_t degree, bool gate) {
+    if (index < 0 || index >= kCells) return;
+    degree_[index] = degree;
+    on_[index] = gate;
+}
+
+void DroneNode::tick(int32_t offset, int64_t count) {
+    (void) offset;
+    beat_ = count;
+}
+
+void DroneNode::process(int32_t frames) {
+    (void) frames;
+    NoteBuffer &notes = notesOut(0);
+    // Events do not persist the way sample buffers do -- see NoteBuffer.
+    notes.clear();
+
+    for (int32_t i = 0; i < kCells; ++i) {
+        // Everything starts at offset 0: a cell is toggled by a finger, between blocks,
+        // and there is no boundary within the block it belongs to. Quantising a drone to
+        // anything would be the transport's job and a drone is not the transport's.
+        if (on_[i] && sounding_[i] == 0) {
+            NoteEvent on;
+            on.id = nextNoteId_++;
+            on.kind = NoteKind::On;
+            on.offset = 0;
+            on.degree = degree_[i];
+            on.beat = beat_;
+            on.cents = 0.0f;
+            on.velocity = 1.0f;
+            if (notes.push(on)) sounding_[i] = on.id;
+        } else if (!on_[i] && sounding_[i] != 0) {
+            NoteEvent off;
+            off.id = sounding_[i];
+            off.kind = NoteKind::Off;
+            off.offset = 0;
+            if (notes.push(off)) sounding_[i] = 0;
+        }
+    }
+}
+
 // ---------------------------------------------------------------- Steps
 
 /**
@@ -590,6 +642,7 @@ Node *makeNode(NodeType type) {
         case NodeType::Mix: return new MixNode();
         case NodeType::Voice: return new VoiceNode();
         case NodeType::Lfo: return new LfoNode();
+        case NodeType::Drone: return new DroneNode();
         case NodeType::Out: return new OutNode();
         case NodeType::In: return new InNode();
         default: return new NullNode(1, 1);

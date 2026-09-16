@@ -28,6 +28,7 @@ enum class NodeType : int32_t {
     Mix = 9,
     Voice = 10,
     Lfo = 11,
+    Drone = 12,
 };
 
 /**
@@ -191,6 +192,57 @@ private:
     /** Degrees of the patch's scale; which scale is decided when each note starts. */
     int32_t degree_[kSteps] = {};
     bool gate_[kSteps] = {};
+};
+
+/**
+ * Notes that stay on until they are turned off: a grid of held pitches.
+ *
+ * Every other note source here is clocked, which left the engine with nothing that simply
+ * sounds. A drone is the plainest thing a note cable can carry, and it is also what the
+ * graph tests use for a tone now that no oscillator drones by itself.
+ *
+ * A cell is a degree, and the interface lays the degrees out as a grid -- the scale's
+ * degrees up the rows, octaves across the columns -- because ScaleTable::octavesOf already
+ * treats a degree as an unbounded integer that runs into the next period past the end of
+ * the table. The grid is a two-dimensional view of that one axis and costs the engine
+ * nothing: a cell is a degree and nothing here knows about rows.
+ *
+ * It is ticked at a quarter note, which it uses for nothing but knowing the beat. A note
+ * has to name the beat it starts on so the right scale resolves it, and a drone must be
+ * able to sound with the transport stopped -- so the ticks tell it where the music is
+ * without its sounding depending on them. A note held across a scale change keeps the
+ * scale it started in, which is what every other held note here already does.
+ */
+class DroneNode : public Node {
+public:
+    /** Mirrored by DRONE_CELLS in PatchCanvas.kt, and capped by the degrees a scale can hold. */
+    static constexpr int32_t kCells = kMaxDegrees;
+
+    DroneNode();
+
+    int32_t inputCount() const override { return 0; }
+    int32_t outputCount() const override { return 1; }
+    uint32_t noteOutputs() const override { return 1u << 0; }
+    void process(int32_t frames) override;
+    void setStep(int32_t index, int32_t degree, bool gate) override;
+    Interval interval() const override { return {1, 1}; }
+    void tick(int32_t offset, int64_t count) override;
+
+private:
+    int32_t degree_[kCells] = {};
+    bool on_[kCells] = {};
+    /**
+     * The id each cell is sounding under, or 0 for one that is silent.
+     *
+     * This is what makes the node idempotent: process() emits only where on_ and this
+     * disagree, so a held note is sent once and nothing re-triggers it. A push that does
+     * not fit -- kMaxNoteEvents is 32 and the grid is larger -- simply leaves them
+     * disagreeing, and the rest go out on the next block.
+     */
+    uint32_t sounding_[kCells] = {};
+    uint32_t nextNoteId_ = 1;
+    /** The last quarter-note boundary seen, which is the beat a note starting now belongs to. */
+    int64_t beat_ = 0;
 };
 
 /**
