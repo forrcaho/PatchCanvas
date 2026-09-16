@@ -16,17 +16,20 @@
  */
 enum class NodeType : int32_t {
     Unknown = 0,
-    Osc = 1,
+    // 1 was the monophonic Osc, retired when every synth became polyphonic and the
+    // polyphonic one took its name. Left unused rather than reassigned, so nothing can
+    // mistake an old id for a new module -- as with 7 and 8.
     Filter = 2,
     Env = 3,
     Steps = 4,
     Out = 5,
     In = 6,
-    Vca = 7,
-    // 8 was Clock, retired when the transport replaced it. Left unused rather than
-    // reassigned, so nothing can mistake an old id for a new module.
+    // 7 was Vca, retired with CV: its entire reason was a control-voltage input, and what
+    // remained is a gain with a modulatable level, which is what Mix already is.
+    // 8 was Clock, retired when the transport replaced it.
     Mix = 9,
-    Voice = 10,
+    /** The polyphonic synth. Called Voice while a monophonic Osc still existed. */
+    Osc = 10,
     Lfo = 11,
     Drone = 12,
 };
@@ -70,25 +73,10 @@ private:
     int32_t outputs_;
 };
 
-/** Band-limited oscillator. A naive saw aliases audibly; PolyBLEP does not. */
-class OscNode : public Node {
-public:
-    int32_t inputCount() const override { return 2; }  // pitch, fm
-    int32_t outputCount() const override { return 1; }
-    void prepare(int32_t sampleRate) override;
-    void process(int32_t frames) override;
-    void setParam(int32_t index, float value) override;
-
-private:
-    daisysp::Oscillator osc_;
-    /** Cents, so a tuning with no semitone in it is still expressible. */
-    float tuneCents_ = 0.0f;
-};
-
 /** State-variable filter, lowpass tap. */
 class FilterNode : public Node {
 public:
-    int32_t inputCount() const override { return 2; }  // in, cutoff
+    int32_t inputCount() const override { return 1; }  // in
     int32_t outputCount() const override { return 1; }
     void prepare(int32_t sampleRate) override;
     void process(int32_t frames) override;
@@ -144,19 +132,6 @@ private:
     daisysp::Adsr adsr_;
 };
 
-/** Amplitude under control voltage. Closed with no CV, as hardware is. */
-class VcaNode : public Node {
-public:
-    int32_t inputCount() const override { return 2; }  // in, cv
-    int32_t outputCount() const override { return 1; }
-    void process(int32_t frames) override;
-    void setParam(int32_t index, float value) override;
-
-private:
-    /** Added to the control voltage, so a VCA with nothing patched can still be open. */
-    float bias_ = 0.0f;
-};
-
 /**
  * A sequence, stepped by the transport at the interval it is set to.
  *
@@ -171,17 +146,15 @@ public:
     StepsNode();
 
     int32_t inputCount() const override { return 0; }
-    int32_t outputCount() const override { return 2; } // pitch, notes
+    int32_t outputCount() const override { return 1; } // notes
     /**
-     * The gate output has gone with the envelope that read it.
-     *
-     * Env was the only thing taking it, and an envelope now takes notes -- a gate was a
-     * level, and the pulse it would have become is an event with no duration, so it could
-     * never have said when to release. Pitch stays until the monophonic Osc that reads it
-     * does; the notes output says the same thing as an event, and is the only one of the
-     * two that can carry a chord.
+     * Notes, and nothing else. This is the end of the "same sequence, said twice" that
+     * pitch and gate were: the gate went with the envelope that read it, and pitch with
+     * the monophonic Osc that was the only thing taking one. A note carries the degree,
+     * the beat that decides its scale and the transpose in a single event, and is the
+     * only one of the three that can hold a chord.
      */
-    uint32_t noteOutputs() const override { return 1u << 1; }
+    uint32_t noteOutputs() const override { return 1u << 0; }
     void process(int32_t frames) override;
     void setParam(int32_t index, float value) override;
     void setStep(int32_t index, int32_t degree, bool gate) override;
@@ -190,9 +163,6 @@ public:
     void tick(int32_t offset, int64_t count) override;
 
 private:
-    /** The sounding note's pitch: its degree, in the scale of the beat it started on. */
-    float voicedOctaves() const;
-
     /** More than one interval boundary per block would need an interval under a millisecond. */
     static constexpr int32_t kMaxPending = 4;
 
@@ -201,7 +171,7 @@ private:
 
     /** -1 until the first tick, which is what keeps a stopped sequencer from drawing a playhead. */
     int32_t step_ = -1;
-    /** The last step that actually sounded; what the pitch output holds through a rest. */
+    /** The last step that actually sounded, which is the one a note event describes. */
     int32_t voiced_ = 0;
     /**
      * The whole beat that note started on. Kept, not recomputed, so a note held through a
@@ -221,7 +191,7 @@ private:
      */
     uint32_t soundingId_ = 0;
     uint32_t nextNoteId_ = 1;
-    /** Cents. See OscNode::tuneCents_. */
+    /** Cents, so a tuning with no semitone in it is still expressible. */
     float transposeCents_ = 0.0f;
     /** Degrees of the patch's scale; which scale is decided when each note starts. */
     int32_t degree_[kSteps] = {};
@@ -291,7 +261,7 @@ private:
  * Patched voices, stamped out N times, are the other way to do this and are Phase 7's;
  * the two can coexist, and notes are the first step either way.
  */
-class VoiceNode : public Node {
+class OscNode : public Node {
 public:
     /**
      * Eight. A sixteen-note column would be a chord nobody plays, and every voice costs

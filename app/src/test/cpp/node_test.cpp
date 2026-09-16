@@ -54,6 +54,66 @@ int countCycles(const std::vector<float> &samples) {
     return cycles;
 }
 
+/** One note, as the graph would deliver it: an On or an Off at the top of the block. */
+NoteBuffer noteAt(NoteKind kind, uint32_t id, int32_t source = 0, int32_t degree = 0) {
+    NoteBuffer buffer;
+    NoteEvent event;
+    event.id = id;
+    event.kind = kind;
+    event.offset = 0;
+    event.source = source;
+    event.degree = degree;
+    event.velocity = 1.0f;
+    buffer.push(event);
+    return buffer;
+}
+
+const NoteBuffer kNoNotes{};
+
+/**
+ * An oscillator sounding one degree, with a flat envelope so the tone is steady.
+ *
+ * Nothing here drones any more: the monophonic oscillator that did was retired when every
+ * synth became polyphonic, so a tone is a note that is being held.
+ */
+void holdDegree(OscNode &osc, int32_t degree, const NoteBuffer &note) {
+    osc.prepare(kRate);
+    osc.setParam(1, 0.0005f); // attack
+    osc.setParam(2, 0.0005f); // decay
+    osc.setParam(3, 1.0f);    // sustain, so the note holds at full level
+    osc.setNoteInput(0, &note);
+    osc.process(kBlockSize);
+    osc.setNoteInput(0, &kNoNotes);
+    (void) degree;
+}
+
+/** What a sequencer said in the block just rendered. */
+const NoteBuffer &stepNotes(const StepsNode &steps) { return *steps.noteOutput(0); }
+
+/** The note it started in that block, or a zeroed event if it started none. */
+NoteEvent startedNote(const StepsNode &steps) {
+    const NoteBuffer &notes = stepNotes(steps);
+    for (int32_t i = 0; i < notes.count; ++i) {
+        if (notes.events[i].kind == NoteKind::On) return notes.events[i];
+    }
+    return NoteEvent{};
+}
+
+/**
+ * What a note will sound as, in octaves from middle C, resolved exactly as OscNode
+ * resolves it.
+ *
+ * The sequencer used to do this itself and put the answer on a pitch output. It now sends
+ * the degree and the beat that chooses the scale, and the resolving happens in the
+ * oscillator -- so a test that used to read a pitch reads the note and resolves it here,
+ * against the same table and through the same call.
+ */
+float soundsAs(const NoteEvent &note, const ScaleList *scales) {
+    const float base = scales != nullptr ? scales->tableAt(note.beat).octavesOf(note.degree)
+                                         : ScaleTable{}.octavesOf(note.degree);
+    return base + note.cents / 1200.0f;
+}
+
 float peak(const std::vector<float> &samples) {
     float worst = 0.0f;
     for (float s : samples) worst = std::max(worst, std::fabs(s));
@@ -64,39 +124,32 @@ float peak(const std::vector<float> &samples) {
 
 void oscPlaysTheRequestedPitch() {
     std::printf("osc plays the requested pitch\n");
-    const auto zero = constantBuffer(0.0f);
-    const auto oneOctave = constantBuffer(1.0f);
 
+    // With no scale list the engine reads twelve equal steps, so degree 0 is middle C and
+    // degree 12 is an octave above it. Driven by a note now rather than a pitch buffer,
+    // which is the only way an oscillator is asked for a pitch at all.
     OscNode osc;
-    osc.prepare(kRate);
-    osc.setInput(0, zero.data());
-    osc.setInput(1, zero.data());
+    const auto middleC = noteAt(NoteKind::On, 1, 0, 0);
+    holdDegree(osc, 0, middleC);
     const auto atZero = run(osc, kRate / kBlockSize); // one second
 
-    // Pitch 0 is middle C by definition, and one second of it should contain that many
-    // cycles. Counting the waveform's own resets measures the frequency the oscillator
-    // actually produced rather than the one it was told.
     const int cycles = countCycles(atZero);
-    check(std::abs(cycles - 262) <= 2, "pitch 0 is middle C, got " + std::to_string(cycles));
+    check(std::abs(cycles - 262) <= 2, "degree 0 is middle C, got " + std::to_string(cycles));
 
     OscNode up;
-    up.prepare(kRate);
-    up.setInput(0, oneOctave.data());
-    up.setInput(1, zero.data());
+    const auto octaveUp = noteAt(NoteKind::On, 1, 0, 12);
+    holdDegree(up, 12, octaveUp);
     const int doubled = countCycles(run(up, kRate / kBlockSize));
-    check(std::abs(doubled - 523) <= 4, "pitch 1.0 is an octave up, got " + std::to_string(doubled));
+    check(std::abs(doubled - 523) <= 4, "degree 12 is an octave up, got " + std::to_string(doubled));
 }
 
 void oscStaysBandLimited() {
     std::printf("osc stays band limited\n");
-    const auto zero = constantBuffer(0.0f);
-    // High enough that a naive saw would alias badly.
-    const auto high = constantBuffer(4.0f); // ~4.2kHz
 
+    // Four octaves up, ~4.2kHz, where a naive saw would alias badly.
     OscNode osc;
-    osc.prepare(kRate);
-    osc.setInput(0, high.data());
-    osc.setInput(1, zero.data());
+    const auto high = noteAt(NoteKind::On, 1, 0, 48);
+    holdDegree(osc, 48, high);
     const auto samples = run(osc, 64);
 
     // Both halves matter: silence would satisfy the ceiling on its own.
@@ -111,17 +164,17 @@ void oscStaysBandLimited() {
     check(true, "all samples finite");
 }
 
-void filterTracksCutoffAtAudioRate() {
-    std::printf("filter tracks cutoff at audio rate\n");
+/**
+ * The cutoff jack has gone with CV, so the knob is the only thing that moves the cutoff --
+ * that, or a modulator writing the same parameter once per block. The test that was here
+ * proved the opposite property, that an audio-rate cutoff buffer reached the filter
+ * per sample; there is no such buffer now, and a module wanting audio rate declares an
+ * audio input instead.
+ */
+void filterCutoffFollowsItsKnob() {
+    std::printf("filter cutoff follows its knob\n");
 
-    // A cutoff that alternates every sample. Its value at index 0 is the same in every
-    // block, so a filter reading cutoff[0] once per block cannot tell this apart from a
-    // constant -- which is exactly the bug this guards.
-    std::array<float, kBlockSize> alternating{};
-    for (int32_t i = 0; i < kBlockSize; ++i) alternating[i] = (i % 2 == 0) ? 1.0f : -1.0f;
-    const auto constant = constantBuffer(1.0f);
-
-    // Something with content to filter.
+    // Noise, so there is something at every frequency for a lowpass to take away.
     std::array<float, kBlockSize> noise{};
     unsigned seed = 22222;
     for (int32_t i = 0; i < kBlockSize; ++i) {
@@ -129,43 +182,21 @@ void filterTracksCutoffAtAudioRate() {
         noise[i] = static_cast<float>(seed >> 8 & 0xFFFF) / 32768.0f - 1.0f;
     }
 
-    FilterNode modulated;
-    modulated.prepare(kRate);
-    modulated.setInput(0, noise.data());
-    modulated.setInput(1, alternating.data());
-    const auto varying = run(modulated, 32);
+    FilterNode open;
+    open.prepare(kRate);
+    open.setInput(0, noise.data());
+    open.setParam(0, 18000.0f);
+    const auto wide = run(open, 32);
 
-    FilterNode steady;
-    steady.prepare(kRate);
-    steady.setInput(0, noise.data());
-    steady.setInput(1, constant.data());
-    const auto fixed = run(steady, 32);
+    FilterNode shut;
+    shut.prepare(kRate);
+    shut.setInput(0, noise.data());
+    shut.setParam(0, 100.0f);
+    const auto narrow = run(shut, 32);
 
-    double difference = 0.0;
-    for (std::size_t i = 0; i < varying.size(); ++i) {
-        difference += std::fabs(varying[i] - fixed[i]);
-    }
-    check(difference > 1.0, "audio-rate cutoff modulation actually reaches the filter");
+    check(peak(wide) > 0.1f, "the filter passes something when it is open");
+    check(peak(narrow) < peak(wide) * 0.5f, "and a low cutoff takes the top off the noise");
 }
-
-namespace {
-
-/** One note, as the graph would deliver it: an On or an Off at the top of the block. */
-NoteBuffer noteAt(NoteKind kind, uint32_t id, int32_t source = 0) {
-    NoteBuffer buffer;
-    NoteEvent event;
-    event.id = id;
-    event.kind = kind;
-    event.offset = 0;
-    event.source = source;
-    event.velocity = 1.0f;
-    buffer.push(event);
-    return buffer;
-}
-
-const NoteBuffer kNoNotes{};
-
-} // namespace
 
 void envFollowsTheNotesItIsHolding() {
     std::printf("env follows the notes it is holding\n");
@@ -289,20 +320,32 @@ void envMatchesAnOffAgainstItsOwnSource() {
     check(run(env, 2048).back() > 0.3f, "the note nobody lifted is still holding it open");
 }
 
-void vcaIsShutWithoutControl() {
-    std::printf("vca is shut without control\n");
+/**
+ * What the VCA's test used to say, against the module that replaced it.
+ *
+ * A Mix channel is `in * level`, which is a VCA with the level on a knob instead of a
+ * jack -- so Mix shut at zero and open at one is the same claim, and is why retiring the
+ * VCA cost the catalogue nothing.
+ */
+void aMixChannelIsAGainThatCanBeShut() {
+    std::printf("a mix channel is a gain that can be shut\n");
     const auto signal = constantBuffer(1.0f);
-    const auto none = constantBuffer(0.0f);
-    const auto full = constantBuffer(1.0f);
+    // Named, not a temporary: setInput keeps the pointer, and a buffer built inline dies
+    // at the end of the statement that made it.
+    const auto quiet = constantBuffer(0.0f);
 
-    VcaNode vca;
-    vca.prepare(kRate);
-    vca.setInput(0, signal.data());
-    vca.setInput(1, none.data());
-    check(peak(run(vca, 4)) == 0.0f, "closed with no CV, as hardware is");
+    MixNode mix;
+    mix.prepare(kRate);
+    mix.setInput(0, signal.data());
+    mix.setInput(1, quiet.data());
+    mix.setInput(2, quiet.data());
+    mix.setInput(3, quiet.data());
 
-    vca.setInput(1, full.data());
-    check(std::fabs(peak(run(vca, 4)) - 1.0f) < 0.001f, "open at full CV");
+    mix.setParam(0, 0.0f);
+    check(peak(run(mix, 4)) == 0.0f, "shut at a level of nothing");
+
+    mix.setParam(0, 1.0f);
+    check(std::fabs(peak(run(mix, 4)) - 1.0f) < 0.001f, "and open at full");
 }
 
 /** 120bpm at 48k: 24000 frames a beat, so the default 1/8 step is 12000. */
@@ -352,18 +395,18 @@ void stepsPlayTheirOwnPattern() {
     // One octave up on step 1, which no default pattern contains.
     steps.setStep(1, 12, true);
     tickAt(steps, 1);
-    check(std::fabs(steps.output(0)[0] - 1.0f) < 0.0001f,
-          "the pitch written to a step is the pitch it plays");
+    check(std::fabs(soundsAs(startedNote(steps), nullptr) - 1.0f) < 0.0001f,
+          "the degree written to a step is the pitch it plays");
 
     // Out of range in both directions must be ignored rather than corrupt a neighbour.
+    // Checked by coming round to step 1 again, since a sequencer only says anything at a
+    // tick now -- there is no held output to re-read between them.
     steps.setStep(-1, 108, true);
     steps.setStep(StepsNode::kSteps, 108, true);
-    check(std::fabs(steps.output(0)[0] - 1.0f) < 0.0001f,
+    tickAt(steps, 9); // step 1 again, a lap later
+    check(std::fabs(soundsAs(startedNote(steps), nullptr) - 1.0f) < 0.0001f,
           "an out-of-range step changes nothing");
 }
-
-/** What a sequencer said in the block just rendered. */
-const NoteBuffer &stepNotes(const StepsNode &steps) { return *steps.noteOutput(1); }
 
 void aClosedGateIsARestNotASkip() {
     std::printf("a closed gate is a rest, not a skip\n");
@@ -377,16 +420,10 @@ void aClosedGateIsARestNotASkip() {
     tickAt(steps, 1);                // the rest
     check(stepNotes(steps).count == 1 && stepNotes(steps).events[0].kind == NoteKind::Off,
           "a closed step starts nothing, and ends what was sounding");
-    // The remembered degree exists so switching the step back on restores what was
-    // there. It is not a note, nobody can see it, and emitting it makes the pitch jump
-    // for no visible reason -- so the output holds whatever last actually sounded.
-    check(std::fabs(steps.output(0)[0] - 0.5f) < 0.0001f,
-          "and the pitch holds the last note rather than the rest's own");
-
     tickAt(steps, 2);
     check(stepNotes(steps).count == 1 && stepNotes(steps).events[0].kind == NoteKind::On,
           "the next open step still fires");
-    check(std::fabs(steps.output(0)[0] - 0.75f) < 0.0001f,
+    check(std::fabs(soundsAs(startedNote(steps), nullptr) - 0.75f) < 0.0001f,
           "so a rest costs a step rather than being skipped");
 }
 
@@ -404,7 +441,8 @@ void aRestKeepsTheNoteItRemembers() {
 
     tickAt(steps, 0);
     tickAt(steps, 1);                 // the rest
-    check(std::fabs(steps.output(0)[0] - 0.5f) < 0.0001f, "held while it is a rest");
+    check(stepNotes(steps).count == 1 && stepNotes(steps).events[0].kind == NoteKind::Off,
+          "the rest starts nothing");
 
     steps.setStep(1, 3, true);        // switch it back on
     tickAt(steps, 2);                 // step 0
@@ -412,8 +450,8 @@ void aRestKeepsTheNoteItRemembers() {
     check(stepNotes(steps).count >= 1 &&
                   stepNotes(steps).events[stepNotes(steps).count - 1].kind == NoteKind::On,
           "it fires once it is open again");
-    check(std::fabs(steps.output(0)[0] - 0.25f) < 0.0001f,
-          "with the pitch it was holding on to all along");
+    check(std::fabs(soundsAs(startedNote(steps), nullptr) - 0.25f) < 0.0001f,
+          "with the degree it was holding on to all along");
 }
 
 void aNoteLastsHalfItsStep() {
@@ -471,11 +509,10 @@ void aTickLandsOnItsOwnSample() {
     // Inside the block rather than at its start: the transport knows the frame, and a
     // sequencer that rounded to the block would be up to 32 frames late on every note.
     tickAt(steps, 1, 10);
-    const float *pitch = steps.output(0);
     check(stepNotes(steps).count == 1 && stepNotes(steps).events[0].offset == 10,
           "the note starts on the tick's own sample");
-    check(std::fabs(pitch[9]) < 0.0001f && std::fabs(pitch[10] - 1.0f) < 0.0001f,
-          "and the pitch moves on the same sample");
+    check(std::fabs(soundsAs(startedNote(steps), nullptr) - 1.0f) < 0.0001f,
+          "carrying that step's own degree");
 }
 
 /** Four beats of 12-TET, then four of diatonic major. Built as the JNI bridge builds one. */
@@ -510,40 +547,23 @@ void aNoteTakesTheScaleOfTheBeatItStartsOn() {
     steps.setStep(8, 2, true);
 
     tickAt(steps, 7, 0, &chromaticThenMajor());
-    check(std::fabs(steps.output(0)[0] - 2.0f / 12.0f) < 0.0001f, "the eighth before the switch is 12-TET");
+    check(std::fabs(soundsAs(startedNote(steps), &chromaticThenMajor()) - 2.0f / 12.0f) < 0.0001f,
+          "the eighth before the switch is 12-TET");
     tickAt(steps, 8, 0, &chromaticThenMajor());
-    check(std::fabs(steps.output(0)[0] - 4.0f / 12.0f) < 0.0001f, "the eighth on the switch beat is major");
+    check(std::fabs(soundsAs(startedNote(steps), &chromaticThenMajor()) - 4.0f / 12.0f) < 0.0001f,
+          "the eighth on the switch beat is major");
 }
 
-/**
- * A held note keeps the scale it started in. Step 8 is a rest in major; the pitch holds
- * step 7's note, and must hold it as it was played -- in 12-TET -- not re-read in major.
+/*
+ * "A note held through a switch keeps its pitch" was here, and went with the pitch output
+ * it was about. It guarded a sample-and-hold: the held pitch had to stay the one worked
+ * out at the tick rather than be re-read against whatever scale had since arrived. Nothing
+ * holds a pitch now -- a note is two events and carries the beat that chooses its scale,
+ * so there is no second reading to get wrong. What survives of it is
+ * aRestKeepsTheNoteItRemembers, which is the other half: a rest keeps its degree so that
+ * switching it back on restores the note that was there.
  */
-void aNoteHeldThroughASwitchKeepsItsPitch() {
-    std::printf("a note held through a switch keeps its pitch\n");
-    StepsNode steps;
-    steps.prepare(kRate);
-    steps.setParam(0, 16.0f);
-    steps.setStep(7, 2, true);
-    steps.setStep(8, 5, false);
 
-    tickAt(steps, 7, 0, &chromaticThenMajor());
-    tickAt(steps, 8, 0, &chromaticThenMajor());
-    check(std::fabs(steps.output(0)[0] - 2.0f / 12.0f) < 0.0001f,
-          "the held pitch is still the 12-TET one after the switch");
-    // And a block later, when the pitch is worked out afresh from what was stored at the
-    // tick -- a rest that overwrote the stored beat would only be heard from here on.
-    steps.setTiming(kBeatsPerFrame, true, &chromaticThenMajor());
-    steps.process(kBlockSize);
-    check(std::fabs(steps.output(0)[kBlockSize - 1] - 2.0f / 12.0f) < 0.0001f,
-          "and still the 12-TET one a block after that");
-}
-
-/**
- * The case rounding would get wrong: an eighth-note triplet on the switch beat. Count 12
- * of 1/3 is exactly beat 4, which floating arithmetic could leave a hair short of 4 --
- * so it is worked out in integers, and must be major.
- */
 void aTripletOnTheSwitchBeatTakesTheNewScale() {
     std::printf("a triplet on the switch beat takes the new scale\n");
     StepsNode steps;
@@ -554,9 +574,11 @@ void aTripletOnTheSwitchBeatTakesTheNewScale() {
     steps.setStep(12, 2, true);
 
     tickAt(steps, 11, 0, &chromaticThenMajor());
-    check(std::fabs(steps.output(0)[0] - 2.0f / 12.0f) < 0.0001f, "the triplet before beat 4 is 12-TET");
+    check(std::fabs(soundsAs(startedNote(steps), &chromaticThenMajor()) - 2.0f / 12.0f) < 0.0001f,
+          "the triplet before beat 4 is 12-TET");
     tickAt(steps, 12, 0, &chromaticThenMajor());
-    check(std::fabs(steps.output(0)[0] - 4.0f / 12.0f) < 0.0001f, "the triplet on beat 4 is major");
+    check(std::fabs(soundsAs(startedNote(steps), &chromaticThenMajor()) - 4.0f / 12.0f) < 0.0001f,
+          "the triplet on beat 4 is major");
 }
 
 /** Four beats of 12-TET in C, then four in G. A change of key is a change of entry. */
@@ -586,21 +608,11 @@ void aKeyChangeLandsOnItsBeat() {
     steps.setStep(8, 0, true);
 
     tickAt(steps, 7, 0, &cThenG());
-    check(std::fabs(steps.output(0)[0]) < 0.0001f, "degree 0 before the change is C");
+    check(std::fabs(soundsAs(startedNote(steps), &cThenG())) < 0.0001f,
+          "degree 0 before the change is C");
     tickAt(steps, 8, 0, &cThenG());
-    check(std::fabs(steps.output(0)[0] - 7.0f / 12.0f) < 0.0001f, "and on the change beat is G");
-
-    StepsNode held;
-    held.prepare(kRate);
-    held.setParam(0, 16.0f);
-    held.setStep(7, 0, true);
-    held.setStep(8, 0, false);
-    tickAt(held, 7, 0, &cThenG());
-    tickAt(held, 8, 0, &cThenG());
-    held.setTiming(kBeatsPerFrame, true, &cThenG());
-    held.process(kBlockSize);
-    check(std::fabs(held.output(0)[kBlockSize - 1]) < 0.0001f,
-          "a note held through the change stays in C");
+    check(std::fabs(soundsAs(startedNote(steps), &cThenG()) - 7.0f / 12.0f) < 0.0001f,
+          "and on the change beat is G");
 }
 
 void theIntervalIsChosenByParameter() {
@@ -697,7 +709,7 @@ void outProtectsTheListener() {
 // ---------------------------------------------------------------- notes
 
 /** The events one block left behind, for reading what a sequencer said. */
-const NoteBuffer &notesOf(const StepsNode &steps) { return *steps.noteOutput(1); }
+const NoteBuffer &notesOf(const StepsNode &steps) { return *steps.noteOutput(0); }
 
 void theNotesOutputSaysWhatTheGateSays() {
     std::printf("the notes output says what the gate says\n");
@@ -918,7 +930,7 @@ NoteEvent noteOff(uint32_t id, int32_t source = 0) {
 }
 
 /** Runs the voice for some blocks with nothing new arriving. */
-std::vector<float> voiceIdle(VoiceNode &voice, int blocks, const ScaleList *scales = nullptr) {
+std::vector<float> voiceIdle(OscNode &voice, int blocks, const ScaleList *scales = nullptr) {
     static const NoteBuffer empty{};
     voice.setNoteInput(0, &empty);
     voice.setTiming(0.0, false, scales);
@@ -936,14 +948,14 @@ std::vector<float> voiceIdle(VoiceNode &voice, int blocks, const ScaleList *scal
  * measures the peak of whatever part of the waveform it happened to land on -- the same
  * held note read 0.65 and 0.14 four blocks apart.
  */
-std::vector<float> voiceAfter(VoiceNode &voice, int blocks, const ScaleList *scales = nullptr) {
+std::vector<float> voiceAfter(OscNode &voice, int blocks, const ScaleList *scales = nullptr) {
     voiceIdle(voice, blocks, scales);
     return voiceIdle(voice, 16, scales);
 }
 
 void aVoiceSoundsAChordAndLetsItGo() {
     std::printf("a voice sounds a chord and lets it go\n");
-    VoiceNode voice;
+    OscNode voice;
     voice.prepare(kRate);
 
     NoteBuffer chord;
@@ -974,7 +986,7 @@ void aVoiceSoundsAChordAndLetsItGo() {
 
 void anIdBelongsToTheSourceThatChoseIt() {
     std::printf("an id belongs to the source that chose it\n");
-    VoiceNode voice;
+    OscNode voice;
     voice.prepare(kRate);
 
     // Two sources, both counting from one, which is what every source does: it has no
@@ -1004,7 +1016,7 @@ void anIdBelongsToTheSourceThatChoseIt() {
 
 void unpatchingASourceEndsItsNotes() {
     std::printf("unpatching a source ends its notes\n");
-    VoiceNode voice;
+    OscNode voice;
     voice.prepare(kRate);
 
     NoteBuffer both;
@@ -1032,7 +1044,7 @@ void aVoiceResolvesANoteAgainstItsOwnBeat() {
     const float expected[2] = {2.0f / 12.0f, 4.0f / 12.0f};
     const int64_t beats[2] = {0, 4};
     for (int i = 0; i < 2; ++i) {
-        VoiceNode voice;
+        OscNode voice;
         voice.prepare(kRate);
         voice.setParam(0, 3.0f); // a sine, which crosses zero once a cycle and no more
 
@@ -1053,11 +1065,11 @@ void aVoiceResolvesANoteAgainstItsOwnBeat() {
 
 void aNinthNoteStealsAVoice() {
     std::printf("a ninth note steals a voice\n");
-    VoiceNode voice;
+    OscNode voice;
     voice.prepare(kRate);
 
     NoteBuffer all;
-    for (uint32_t i = 0; i < VoiceNode::kVoices + 1; ++i) {
+    for (uint32_t i = 0; i < OscNode::kVoices + 1; ++i) {
         all.push(noteOn(i + 1, static_cast<int32_t>(i)));
     }
     voice.setNoteInput(0, &all);
@@ -1110,12 +1122,12 @@ void anLfoStaysInsideItsRangeAtItsRate() {
 int main() {
     oscPlaysTheRequestedPitch();
     oscStaysBandLimited();
-    filterTracksCutoffAtAudioRate();
+    filterCutoffFollowsItsKnob();
     envFollowsTheNotesItIsHolding();
     envSustainsUnderAChordAndWaitsForTheLastNote();
     envEndsTheNotesOfASourceThatWasUnpatched();
     envMatchesAnOffAgainstItsOwnSource();
-    vcaIsShutWithoutControl();
+    aMixChannelIsAGainThatCanBeShut();
     stepsTakeTheirStepFromTheCount();
     stepsPlayTheirOwnPattern();
     aClosedGateIsARestNotASkip();
@@ -1125,7 +1137,6 @@ int main() {
     aTickLandsOnItsOwnSample();
     theIntervalIsChosenByParameter();
     aNoteTakesTheScaleOfTheBeatItStartsOn();
-    aNoteHeldThroughASwitchKeepsItsPitch();
     aTripletOnTheSwitchBeatTakesTheNewScale();
     aKeyChangeLandsOnItsBeat();
     mixSumsRatherThanAverages();

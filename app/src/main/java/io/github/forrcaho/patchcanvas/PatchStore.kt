@@ -24,8 +24,9 @@ import java.io.File
 /**
  * 2: the Clock module became the patch's tempo. 3: one scale became a list of them.
  * 4: parameters can be exposed for modulation, and cables can land on them.
+ * 5: CV and gate retired, taking the monophonic Osc and the VCA with them.
  */
-private const val FORMAT_VERSION = 4
+private const val FORMAT_VERSION = 5
 private const val TAG = "PatchStore"
 
 fun Patch.toJson(): String {
@@ -263,51 +264,26 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
 }
 
 /**
- * Brings an older file up to the current format, or returns null for one this build
- * cannot read -- a newer format, or no version at all.
+ * The file if this build can read it, or null if it cannot.
  *
- * One step per format change, applied in order, so each step only has to know the format
- * immediately before it and a file several versions old walks up through all of them.
+ * There is no migration any more, and that is the point rather than an omission. Format 5
+ * retired the monophonic Osc, the VCA, Filter's cutoff jack and Steps' pitch and gate
+ * outputs, and a format 4 file could only have been walked up to it *silently*: a patch
+ * built around a VCA an envelope opened would come back as a filter fed by nothing,
+ * quieter than it was left, with the load reporting success. So every older file is
+ * refused, and [PatchStore.load] moves a refused file to patch.rejected.json rather than
+ * letting the demo patch overwrite it -- refusing costs the file nothing. Decided
+ * 2026-09-15.
+ *
+ * The ladder that was here walked 1 to 2 to 3 to 4, one step per change, and went with
+ * them: every one of those steps ended at a version this build now refuses, so none of
+ * them could ever run again. The next format change writes a fresh one, and the shape to
+ * copy is in this file's history.
  */
 private fun upgrade(root: JSONObject): JSONObject? {
-    var version = root.optInt("version", -1)
-
-    if (version == 1) {
-        // The Clock module became the transport. Only its tempo needs moving: the module
-        // itself is no longer a type and is skipped like any unknown one, and the cable
-        // into Steps' old clock input points at a port that no longer exists, so it is
-        // dropped by the same check that drops any out-of-range cable.
-        val modules = root.optJSONArray("modules") ?: JSONArray()
-        for (i in 0 until modules.length()) {
-            val m = modules.optJSONObject(i) ?: continue
-            val bpm = m.optJSONObject("params")?.takeIf { m.optString("type") == "Clock" && it.has("bpm") }
-                ?: continue
-            root.put("tempo", bpm.optDouble("bpm"))
-            break
-        }
-        version = 2
-    }
-
-    if (version == 2) {
-        // One scale became a list of them. The scale there was becomes the only entry,
-        // whose length does not matter while it is the only one.
-        val name = root.optString("scale", Scale.Chromatic.name)
-        root.put(
-            "scales",
-            JSONArray().put(JSONObject().put("name", name).put("bars", 4).put("beats", 0)),
-        )
-        root.remove("scale")
-        version = 3
-    }
-
-    if (version == 3) {
-        // Modulation arrived. Nothing to convert: a file from before it has no parameter
-        // exposed, which is what an absent "mod" already reads as.
-        version = 4
-    }
-
+    val version = root.optInt("version", -1)
     if (version != FORMAT_VERSION) {
-        Log.w(TAG, "unsupported patch version ${root.optInt("version", -1)}")
+        Log.w(TAG, "unsupported patch version $version")
         return null
     }
     return root

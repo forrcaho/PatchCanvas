@@ -59,6 +59,28 @@ bool nearSilent(const float *buffer, int32_t frames) {
     return energy(buffer, frames) < 0.03f;
 }
 
+/**
+ * A steady tone at [id]: an oscillator holding one note, fed by a drone.
+ *
+ * Nothing drones by itself any more. The monophonic oscillator these tests used as a
+ * source was retired when every synth became polyphonic, and a tone is now a note that is
+ * being held -- which is a good part of why Drone exists. The envelope is flattened so the
+ * tone is steady within a block rather than still decaying while it is measured.
+ *
+ * The oscillator is added first so that it, rather than its drone, takes the lowest free
+ * slot: one test is about what happens to a freed slot, and wants the audible node in it.
+ * The drone takes id + 1000, so a test still names its source by the id it chose.
+ */
+void addTone(Graph &graph, int64_t id) {
+    graph.postAdd(id, NodeType::Osc);
+    graph.postAdd(id + 1000, NodeType::Drone);
+    graph.postSetStep(id + 1000, 0, 0, true);
+    graph.postSetParam(id, 1, 0.0005f); // attack
+    graph.postSetParam(id, 2, 0.0005f); // decay
+    graph.postSetParam(id, 3, 1.0f);    // sustain, so the note holds at full level
+    graph.postConnect(id + 1000, 0, id, 0);
+}
+
 bool finite(const float *buffer, int32_t frames) {
     for (int32_t i = 0; i < frames; ++i) {
         if (!std::isfinite(buffer[i])) return false;
@@ -73,7 +95,7 @@ void signalReachesTheOutputWithinOneBlock() {
     Graph graph;
     graph.setSampleRate(48000);
 
-    graph.postAdd(1, NodeType::Osc);
+    addTone(graph, 1);
     graph.postAdd(2, NodeType::Out);
     graph.postConnect(1, 0, 2, 0);
     graph.applyCommands();
@@ -91,7 +113,7 @@ void unpatchingFadesTheSignalNotADcLevel() {
     Graph graph;
     graph.setSampleRate(48000);
 
-    graph.postAdd(1, NodeType::Osc);
+    addTone(graph, 1);
     graph.postAdd(2, NodeType::Out);
     graph.postConnect(1, 0, 2, 0);
     graph.applyCommands();
@@ -117,8 +139,8 @@ void replacingASourceCrossfades() {
     Graph graph;
     graph.setSampleRate(48000);
 
-    graph.postAdd(1, NodeType::Osc);
-    graph.postAdd(2, NodeType::Osc);
+    addTone(graph, 1);
+    addTone(graph, 2);
     graph.postAdd(3, NodeType::Out);
     graph.postConnect(1, 0, 3, 0);
     graph.applyCommands();
@@ -142,7 +164,7 @@ void aChainIsOrderedEndToEnd() {
     Graph graph;
     graph.setSampleRate(48000);
 
-    graph.postAdd(1, NodeType::Osc);
+    addTone(graph, 1);
     graph.postAdd(2, NodeType::Filter);
     graph.postAdd(3, NodeType::Out);
     graph.postConnect(1, 0, 2, 0);
@@ -159,7 +181,7 @@ void disconnectingSilencesTheOutput() {
     Graph graph;
     graph.setSampleRate(48000);
 
-    graph.postAdd(1, NodeType::Osc);
+    addTone(graph, 1);
     graph.postAdd(2, NodeType::Out);
     graph.postConnect(1, 0, 2, 0);
     graph.applyCommands();
@@ -170,7 +192,12 @@ void disconnectingSilencesTheOutput() {
     graph.applyCommands();
     // Silence arrives after the declick ramp, not on the next sample. That delay is the
     // feature; asserting immediate silence would be asserting the click back.
-    render(graph, 64);
+    // 400 blocks, not 64. The 30ms fade is long over by then; what takes the time is Out's
+    // DC blocker, whose one-pole tail is charged by cutting the waveform wherever it was.
+    // Measured, that tail is a clean exponential -- 0.069 at 100 blocks, 0.038 at 200,
+    // 0.020 at 300, 0.010 at 400 -- so it crosses the 0.03 threshold around 250 and the
+    // assertion is put well clear of that rather than just past it.
+    render(graph, 400);
     check(nearSilent(graph.outputL(), kBlockSize), "silent once the ramp has run");
 }
 
@@ -179,7 +206,7 @@ void patchingDoesNotStep() {
     Graph graph;
     graph.setSampleRate(48000);
 
-    graph.postAdd(1, NodeType::Osc);
+    addTone(graph, 1);
     graph.postAdd(2, NodeType::Out);
     graph.postConnect(1, 0, 2, 0);
     graph.applyCommands();
@@ -214,7 +241,7 @@ void aReusedSlotDoesNotInheritOldCables() {
     Graph graph;
     graph.setSampleRate(48000);
 
-    graph.postAdd(1, NodeType::Osc);
+    addTone(graph, 1);
     graph.postAdd(2, NodeType::Out);
     graph.postConnect(1, 0, 2, 0);
     graph.applyCommands();
@@ -223,15 +250,18 @@ void aReusedSlotDoesNotInheritOldCables() {
 
     graph.postRemove(1);
     graph.applyCommands();
-    render(graph, 64);
+    render(graph, 400); // past the DC blocker's tail, as above
     check(nearSilent(graph.outputL(), kBlockSize), "silent once the source is gone");
 
     // The interesting half. Slots are reused, so a reference left pointing at the old
     // index would not dangle -- it would quietly reconnect to whatever moved in, which
     // is worse than a crash because it looks like it works.
-    graph.postAdd(3, NodeType::Osc);
+    // A tone rather than a bare oscillator: a polyphonic one with nothing patched to it
+    // is silent anyway, so this check would pass whether the slot had been reconnected or
+    // not. It has to be able to make a sound for its silence to mean anything.
+    addTone(graph, 3);
     graph.applyCommands();
-    render(graph, 64);
+    render(graph, 400);
     check(nearSilent(graph.outputL(), kBlockSize),
           "a new node in the freed slot is NOT silently patched in");
 
@@ -263,13 +293,16 @@ void everyNodeInACycleStillRuns() {
     Graph graph;
     graph.setSampleRate(48000);
 
-    graph.postAdd(1, NodeType::Osc);
-    graph.postAdd(2, NodeType::Filter);
+    addTone(graph, 1);
+    graph.postAdd(2, NodeType::Mix);
     graph.postAdd(3, NodeType::Out);
     graph.postConnect(1, 0, 2, 0);
     graph.postConnect(2, 0, 3, 0);
-    // Filter's cutoff fed from its own output: a self-loop, so it is in a cycle and
-    // cannot be topologically ordered, but it must still be evaluated.
+    // A mix channel fed from its own output: a self-loop, so it is in a cycle and cannot
+    // be topologically ordered, but it must still be evaluated. Filter's cutoff jack used
+    // to be this loop and went with CV. Half gain on the back edge, so what the cycle
+    // costs is one block of delay rather than a signal that grows without bound.
+    graph.postSetParam(2, 1, 0.5f);
     graph.postConnect(2, 0, 2, 1);
     graph.applyCommands();
     graph.process(kBlockSize);
@@ -304,7 +337,7 @@ void commandsSurviveAPartialBlock() {
     Graph graph;
     graph.setSampleRate(48000);
 
-    graph.postAdd(1, NodeType::Osc);
+    addTone(graph, 1);
     graph.postAdd(2, NodeType::Out);
     graph.postConnect(1, 0, 2, 0);
     graph.applyCommands();
@@ -642,10 +675,10 @@ void aNoteCableSoundsAndOrdersTheGraph() {
     // That is the whole point: with nothing ordering them, the sweep that builds the
     // evaluation order emits them in slot order and the voice would run first. Adding
     // them the other way round would pass whether note cables order the graph or not.
-    graph.postAdd(1, NodeType::Voice);
+    graph.postAdd(1, NodeType::Osc);
     graph.postAdd(2, NodeType::Steps);
     graph.postAdd(3, NodeType::Out);
-    graph.postConnect(2, 1, 1, 0); // notes out -> notes in
+    graph.postConnect(2, 0, 1, 0); // notes out -> notes in
     graph.postConnect(1, 0, 3, 0);
     graph.postSetTempo(300.0f);
     graph.applyCommands();
@@ -667,14 +700,14 @@ void notesAndSignalsDoNotPatchToEachOther() {
     graph.setSampleRate(48000);
 
     graph.postAdd(1, NodeType::Steps);
-    graph.postAdd(2, NodeType::Voice);
+    graph.postAdd(2, NodeType::Osc);
     graph.postAdd(3, NodeType::Out);
     graph.postAdd(4, NodeType::Osc);
     // Every wrong way round: the sequencer's pitch CV into the voice's note input, an
     // oscillator into the same, and the note output into the sink's audio input.
     graph.postConnect(1, 0, 2, 0);
     graph.postConnect(4, 0, 2, 0);
-    graph.postConnect(1, 1, 3, 0);
+    graph.postConnect(1, 0, 3, 0);
     graph.postConnect(2, 0, 3, 1);
     graph.postSetTempo(300.0f);
     graph.applyCommands();
@@ -691,7 +724,7 @@ void notesAndSignalsDoNotPatchToEachOther() {
           "and a note cable carries nothing into an audio input");
     // The right way round still works on the same graph, so the refusal is about the
     // kinds and not about the patch having been poisoned.
-    graph.postConnect(1, 1, 2, 0);
+    graph.postConnect(1, 0, 2, 0);
     graph.applyCommands();
     // Past the next tick. A 1/8 at 300bpm is 4800 frames, and nothing sounds until one:
     // patching mid-note joins at the next note rather than the one already playing, since
@@ -706,9 +739,9 @@ void aRemovedSourceEndsTheNotesItStarted() {
     graph.setSampleRate(48000);
 
     graph.postAdd(1, NodeType::Steps);
-    graph.postAdd(2, NodeType::Voice);
+    graph.postAdd(2, NodeType::Osc);
     graph.postAdd(3, NodeType::Out);
-    graph.postConnect(1, 1, 2, 0);
+    graph.postConnect(1, 0, 2, 0);
     graph.postConnect(2, 0, 3, 0);
     // Whole notes at 60bpm: four seconds a step, so the note under test is still held
     // rather than having ended on its own while the test was looking away.
@@ -734,10 +767,10 @@ void twoSequencersMergeIntoOneVoice() {
 
     graph.postAdd(1, NodeType::Steps);
     graph.postAdd(2, NodeType::Steps);
-    graph.postAdd(3, NodeType::Voice);
+    graph.postAdd(3, NodeType::Osc);
     graph.postAdd(4, NodeType::Out);
-    graph.postConnect(1, 1, 3, 0);
-    graph.postConnect(2, 1, 3, 0); // the same input: a note input merges rather than replaces
+    graph.postConnect(1, 0, 3, 0);
+    graph.postConnect(2, 0, 3, 0); // the same input: a note input merges rather than replaces
     graph.postConnect(3, 0, 4, 0);
     graph.postSetParam(2, 1, 700.0f); // a fifth up, so the two are not the same note
     graph.postSetTempo(300.0f);       // and fast, so both keep starting notes throughout
@@ -774,10 +807,10 @@ void anIdIsOnlyUniqueToItsOwnSource() {
     // to different intervals so their events interleave rather than landing together.
     graph.postAdd(1, NodeType::Steps);
     graph.postAdd(2, NodeType::Steps);
-    graph.postAdd(3, NodeType::Voice);
+    graph.postAdd(3, NodeType::Osc);
     graph.postAdd(4, NodeType::Out);
-    graph.postConnect(1, 1, 3, 0);
-    graph.postConnect(2, 1, 3, 0);
+    graph.postConnect(1, 0, 3, 0);
+    graph.postConnect(2, 0, 3, 0);
     graph.postConnect(3, 0, 4, 0);
     graph.postSetParam(1, 2, 1.0f); // half notes: one long note held across many short ones
     graph.postSetParam(2, 2, 5.0f); // 1/32, starting and ending inside it over and over
@@ -836,12 +869,19 @@ std::vector<float> levels(Graph &graph, int windows, int blocks = 8) {
 }
 
 /**
- * A sine through a VCA to the output, and a stopped sequencer whose pitch output is used
- * as a constant: with the transport stopped it holds degree zero, so its transpose alone
- * sets the level -- 1200 cents is exactly 1.0, 600 is 0.5. A modulator that holds still is
- * what lets a test ask what value a parameter landed on.
+ * A sine through a gain to the output, with a held envelope as the modulator.
  *
- * Measured through Out, whose limiter is transparent only well below full scale: a bias of
+ * Both halves had to be rebuilt when CV retired. The VCA is a Mix channel, which is what a
+ * VCA always was here -- `o = in * level` -- and the constant modulator is an envelope
+ * rather than a stopped sequencer's pitch output, which went with the monophonic
+ * oscillator that was the only thing reading it.
+ *
+ * An envelope held open by a drone sits at its sustain level for as long as you like, so
+ * its sustain is the knob that says what the modulator is worth. Attack and decay are set
+ * to nothing so it arrives there at once, and callers still render past the change before
+ * measuring, because the sustain segment glides rather than jumps.
+ *
+ * Measured through Out, whose limiter is transparent only well below full scale: a level of
  * 0.2 reads back as 0.198, but 0.6 already settles at 0.543. So a test that compares two
  * levels keeps both below 0.4, and one that has to go higher judges against what it measured.
  */
@@ -849,17 +889,37 @@ struct ModPatch {
     Graph graph;
     ModPatch() {
         graph.setSampleRate(48000);
+        graph.postAdd(5, NodeType::Drone);
         graph.postAdd(1, NodeType::Osc);
-        graph.postAdd(2, NodeType::Vca);
+        graph.postAdd(2, NodeType::Mix);
         graph.postAdd(3, NodeType::Out);
-        graph.postAdd(4, NodeType::Steps);
-        graph.postSetParam(1, 1, 3.0f); // sine, so a step in level is not hidden by the wave's own edges
+        graph.postAdd(4, NodeType::Env);
+        graph.postSetStep(5, 0, 0, true); // one note, held for the whole test
+        // A sine, so a step in level is not hidden by the wave's own edges, and a flat
+        // envelope on it so the tone is steady rather than still decaying while measured.
+        graph.postSetParam(1, 0, 3.0f);
+        graph.postSetParam(1, 1, 0.001f);
+        graph.postSetParam(1, 2, 0.001f);
+        graph.postSetParam(1, 3, 1.0f);
+        graph.postSetParam(4, 0, 0.001f); // the modulator's own attack
+        graph.postSetParam(4, 1, 0.001f); // and decay, so it reaches its sustain at once
+        graph.postConnect(5, 0, 1, 0);
+        graph.postConnect(5, 0, 4, 0);
         graph.postConnect(1, 0, 2, 0);
         graph.postConnect(2, 0, 3, 0);
         graph.applyCommands();
     }
-    void level(float octaves) {
-        graph.postSetParam(4, 1, octaves * 1200.0f);
+    /**
+     * What the modulator is worth, 0 to 1: the sustain the held envelope sits at.
+     *
+     * Floored just above zero, which is not fussiness. DaisySP's envelope decaying toward
+     * a sustain of exactly zero crosses below it and latches to idle, and idle is only
+     * left on a rising gate -- which a note held for the whole test never gives. Set to
+     * nothing once, the modulator could never be raised again, and every measurement after
+     * the first would read the low end whatever the range said.
+     */
+    void level(float value) {
+        graph.postSetParam(4, 2, std::max(value, 0.002f));
         graph.applyCommands();
     }
 };
@@ -951,30 +1011,46 @@ void aModulatorIsEvaluatedBeforeTheKnobItTurns() {
     std::printf("a modulator is evaluated before the knob it turns\n");
     Graph graph;
     graph.setSampleRate(48000);
-    // Slots chosen so nothing else orders them: the VCA's audio source takes the lowest
-    // slot and the sequencer the highest, so without the modulation edge the VCA is ready,
-    // and emitted, before the sequencer has been reached.
+    // Slots chosen so nothing else orders them: the gain takes a low slot and the envelope
+    // that modulates it a high one, so without the modulation edge the gain is ready, and
+    // emitted, before the envelope has been reached.
     graph.postAdd(1, NodeType::Osc);
-    graph.postAdd(2, NodeType::Vca);
+    graph.postAdd(2, NodeType::Mix);
     graph.postAdd(3, NodeType::Out);
     graph.postAdd(4, NodeType::Steps);
-    graph.postSetParam(1, 1, 3.0f);
+    graph.postAdd(5, NodeType::Env);
+    graph.postAdd(6, NodeType::Drone);
+
+    // A steady sine to be gated, held by a drone since nothing drones by itself.
+    graph.postSetStep(6, 0, 0, true);
+    graph.postSetParam(1, 0, 3.0f);
+    graph.postSetParam(1, 1, 0.001f);
+    graph.postSetParam(1, 2, 0.001f);
+    graph.postSetParam(1, 3, 1.0f);
+    graph.postConnect(6, 0, 1, 0);
     graph.postConnect(1, 0, 2, 0);
     graph.postConnect(2, 0, 3, 0);
+
+    // The sequencer rests on its first step and sounds on its second, so the envelope --
+    // and with it the gain -- is shut until that second step lands.
+    graph.postSetStep(4, 0, 0, false);
+    graph.postSetStep(4, 1, 0, true);
+    graph.postSetParam(5, 0, 0.001f); // an instant attack, so the note is heard at once
+    graph.postConnect(4, 0, 5, 0);
+    graph.postSetParam(2, 0, 0.0f);
     graph.postSetModRange(2, 0, 0.0f, 1.0f, false);
-    graph.postConnectMod(4, 0, 2, 0);
+    graph.postConnectMod(5, 0, 2, 0);
     graph.postSetTempo(300.0f);
     graph.applyCommands();
     graph.setTransportRunning(true);
 
-    // A 1/8 at 300bpm is 4800 frames, exactly 150 blocks: the first step (degree 0, pitch
-    // 0) holds the VCA shut until the second step lands on the first sample of block 150
-    // and raises the pitch to a quarter of an octave.
+    // A 1/8 at 300bpm is 4800 frames, exactly 150 blocks: the rest on the first step holds
+    // the gain shut until the second lands on the first sample of block 150.
     render(graph, 150);
-    check(nearSilent(graph.outputL(), kBlockSize), "shut while the first step holds");
+    check(nearSilent(graph.outputL(), kBlockSize), "shut while the first step rests");
     graph.process(kBlockSize);
-    // Evaluated after the sequencer, the VCA hears the new step in the block it lands.
-    // Before, it would read the previous block's pitch and stay shut for one more.
+    // Evaluated after the envelope, the gain hears the new note in the block it lands.
+    // Before, it would read the previous block's value and stay shut for one more.
     check(!nearSilent(graph.outputL(), kBlockSize), "open in the very block the step lands");
 }
 

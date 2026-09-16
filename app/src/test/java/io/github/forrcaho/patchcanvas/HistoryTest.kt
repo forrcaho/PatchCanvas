@@ -412,25 +412,27 @@ class RestoreChangeSetTest {
     fun `a cable flags both of the modules it touches`() {
         val live = demoPatch()
         val osc = live.free.first { it.type.name == "Osc" }.id
-        val vca = live.free.first { it.type.name == "VCA" }.id
+        // A second filter, because the demo already patches the oscillator into its
+        // first one and re-making a cable that is already there changes nothing.
+        val filter = live.add(Types.Filter, Offset(700f, 300f))!!.id
 
         val flagged = changesAfter {
             connect(
                 PortRef(osc, PortDirection.OUTPUT, 0),
-                PortRef(vca, PortDirection.INPUT, 0),
+                PortRef(filter, PortDirection.INPUT, 0),
             )
         }
 
         // The replaced cable's old source counts too: it lost a connection.
         assertTrue("the new source", osc in flagged)
-        assertTrue("the destination", vca in flagged)
+        assertTrue("the destination", filter in flagged)
     }
 
     @Test
     fun `a module that appears on restore is flagged`() {
         val live = demoPatch()
         val snapshot = live.toJson()
-        val doomed = live.free.first { it.type.name == "Env" }
+        val doomed = live.free.first { it.type.name == "Filter" }
         live.remove(doomed)
 
         assertTrue(doomed.id in live.replaceWith(patchFromJson(snapshot)!!))

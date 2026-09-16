@@ -8,16 +8,19 @@ import android.util.Log
  */
 enum class NodeType(val id: Int) {
     Unknown(0),
-    Osc(1),
+    // 1 was the monophonic Osc, retired when every synth became polyphonic and the
+    // polyphonic one took its name. Not reused, as with 7 and 8.
     Filter(2),
     Env(3),
     Steps(4),
     Out(5),
     In(6),
-    Vca(7),
-    // 8 was Clock, retired when the transport replaced it, and deliberately not reused.
+    // 7 was Vca, retired with CV: its entire reason was a control-voltage input, and a
+    // gain with a modulatable level is what Mix already is.
+    // 8 was Clock, retired when the transport replaced it.
     Mix(9),
-    Voice(10),
+    /** The polyphonic synth, called Voice while a monophonic Osc still existed. */
+    Osc(10),
     Lfo(11),
     Drone(12);
 
@@ -29,9 +32,7 @@ enum class NodeType(val id: Int) {
             "Steps" -> Steps
             "Out" -> Out
             "In" -> In
-            "VCA" -> Vca
             "Mix" -> Mix
-            "Voice" -> Voice
             "LFO" -> Lfo
             "Drone" -> Drone
             else -> Unknown

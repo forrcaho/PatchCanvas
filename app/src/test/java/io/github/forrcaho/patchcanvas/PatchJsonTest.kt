@@ -118,13 +118,13 @@ class PatchJsonTest {
     @Test
     fun `a cable whose kinds no longer agree refuses the whole file`() {
         val root = JSONObject(sample().toJson())
-        // The oscillator's audio output into the envelope's gate input, which is what a
-        // file written under advisory typing can contain. Both ports still exist, so
-        // neither the missing-module check nor the port-range one catches it.
+        // The filter's audio output into the oscillator's note input, which is what a file
+        // written under advisory typing can contain. Both ports still exist, so neither the
+        // missing-module check nor the port-range one catches it.
+        val filter = sample().free.first { it.type.name == "Filter" }
         val osc = sample().free.first { it.type.name == "Osc" }
-        val env = sample().free.first { it.type.name == "Env" }
         root.getJSONArray("connections").put(
-            JSONObject().put("from", osc.id).put("fromPort", 0).put("to", env.id).put("toPort", 0),
+            JSONObject().put("from", filter.id).put("fromPort", 0).put("to", osc.id).put("toPort", 0),
         )
 
         assertNull("a file with an illegal cable is refused whole", patchFromJson(root.toString()))
@@ -165,36 +165,6 @@ class PatchJsonTest {
         assertEquals(BEATS_PER_BAR.min.toInt(), restored.beatsPerBar)
     }
 
-    /**
-     * Format 1 had a Clock module where format 2 has a tempo. Nothing saved in format 1
-     * was worth keeping, but a working upgrade is the pattern the next format change
-     * copies -- and without it every older file silently became the demo patch.
-     */
-    @Test
-    fun `a format 1 file takes its tempo from its Clock and drops the Clock`() {
-        val root = JSONObject(sample().toJson()).put("version", 1)
-        root.remove("tempo")
-        val steps = sample().free.first { it.type.stepCount > 0 }
-        root.getJSONArray("modules").put(
-            JSONObject()
-                .put("id", 500L)
-                .put("type", "Clock")
-                .put("x", 0.0)
-                .put("y", 0.0)
-                .put("params", JSONObject().put("bpm", 90.0)),
-        )
-        root.getJSONArray("connections").put(
-            JSONObject().put("from", 500L).put("fromPort", 0).put("to", steps.id).put("toPort", 0),
-        )
-
-        val restored = patchFromJson(root.toString())
-        assertNotNull("a format 1 file must still load", restored)
-        assertEquals(90f, restored!!.tempo, 0.0001f)
-        assertNull("the Clock is gone", restored.module(500L))
-        assertTrue("and so is its cable", restored.connections.none { it.from.moduleId == 500L })
-        assertEquals(sample().free.size, restored.free.size)
-    }
-
     /** Files from before keys existed carry no root, and were all in C. */
     @Test
     fun `an entry with no root is in C, and an absurd one is clamped`() {
@@ -207,21 +177,22 @@ class PatchJsonTest {
         assertEquals(listOf(0f, TUNE_RANGE), restored.scales.map { it.rootCents })
     }
 
-    /** Format 2 had one scale where format 3 has a list; the scale there was becomes the only entry. */
+    /**
+     * Every older format is refused, not converted.
+     *
+     * Format 5 retired modules rather than renaming fields, and a 4 could only have been
+     * walked up to it silently -- a patch built around a VCA an envelope opened comes back
+     * as a filter fed by nothing, quieter than it was left, reporting success. The 1, 2
+     * and 3 ladders ended at 4, so they could never complete either. What makes refusing
+     * affordable is that PatchStore.load sets the file aside rather than letting the demo
+     * patch overwrite it.
+     */
     @Test
-    fun `a format 2 file's scale becomes a list of one`() {
-        val library = ScaleLibrary.of(java.io.File("src/main/assets/scales"))
-        val root = JSONObject(sample().toJson()).put("version", 2).put("scale", "Major")
-        root.remove("scales")
-
-        val restored = patchFromJson(root.toString(), library)!!
-        assertEquals(listOf("Major"), restored.scales.map { it.scale.name })
-    }
-
-    @Test
-    fun `a format 1 file with no Clock loads at the default tempo`() {
-        val root = JSONObject(sample().toJson()).put("version", 1)
-        root.remove("tempo")
-        assertEquals(TEMPO.default, patchFromJson(root.toString())!!.tempo, 0.0001f)
+    fun `every format older than this one is refused`() {
+        (1..4).forEach { version ->
+            val root = JSONObject(sample().toJson()).put("version", version)
+            assertNull("format $version must not load", patchFromJson(root.toString()))
+        }
+        assertNotNull("and the current one still does", patchFromJson(sample().toJson()))
     }
 }

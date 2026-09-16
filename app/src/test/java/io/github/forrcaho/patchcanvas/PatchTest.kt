@@ -47,7 +47,7 @@ class PatchModelTest {
         val p = Patch()
         val a = p.add(Types.Steps, Offset.Zero)!!
         val b = p.add(Types.Steps, Offset.Zero)!!
-        val voice = p.add(Types.Voice, Offset.Zero)!!
+        val voice = p.add(Types.Osc, Offset.Zero)!!
         val target = PortRef(voice.id, PortDirection.INPUT, 0)
 
         // Single source exists to stop signals summing where nobody asked for it. Merging
@@ -64,7 +64,7 @@ class PatchModelTest {
     fun `patching a note cable that is already there takes it back`() {
         val p = Patch()
         val steps = p.add(Types.Steps, Offset.Zero)!!
-        val voice = p.add(Types.Voice, Offset.Zero)!!
+        val voice = p.add(Types.Osc, Offset.Zero)!!
         val src = notesOut(steps)
         val target = PortRef(voice.id, PortDirection.INPUT, 0)
 
@@ -79,31 +79,31 @@ class PatchModelTest {
     fun `a cable runs only between ports of the same kind`() {
         val p = Patch()
         val steps = p.add(Types.Steps, Offset.Zero)!!
-        val voice = p.add(Types.Voice, Offset.Zero)!!
+        val voice = p.add(Types.Osc, Offset.Zero)!!
         val osc = p.add(Types.Osc, Offset.Zero)!!
         val filter = p.add(Types.Filter, Offset.Zero)!!
         val env = p.add(Types.Env, Offset.Zero)!!
+        val lfo = p.add(Types.Lfo, Offset.Zero)!!
 
         fun out(m: PatchModule, i: Int) = PortRef(m.id, PortDirection.OUTPUT, i)
         fun into(m: PatchModule, i: Int) = PortRef(m.id, PortDirection.INPUT, i)
         val outL = PortRef(OUT_ID, PortDirection.INPUT, 0)
 
-        // Steps: 0 pitch (modulation), 1 notes. Osc: 0 pitch and 1 fm, both modulation,
-        // out audio. Filter: 0 in, audio. Env: 0 notes, out modulation. Voice: 0 notes.
-        assertFalse("modulation is not a note", p.connect(out(steps, 0), into(voice, 0)))
-        assertFalse("nor is audio", p.connect(out(osc, 0), into(voice, 0)))
-        assertFalse("nor do notes go into audio", p.connect(out(steps, 1), outL))
+        // Steps: 0 notes. Osc: 0 notes in, audio out. Filter: 0 in, audio. Env: 0 notes in,
+        // modulation out. Lfo: modulation out.
+        assertFalse("audio is not a note", p.connect(out(osc, 0), into(voice, 0)))
+        assertFalse("nor is modulation", p.connect(out(env, 0), into(voice, 0)))
+        assertFalse("nor do notes go into audio", p.connect(out(steps, 0), outL))
         // Each of these was legal while typing was advisory.
         assertFalse("modulation is not audio", p.connect(out(env, 0), into(filter, 0)))
-        assertFalse("nor does audio turn a knob", p.connect(out(osc, 0), into(osc, 1)))
-        assertFalse("and modulation is not audio at the rail either", p.connect(out(env, 0), outL))
+        assertFalse("and not at the rail either", p.connect(out(lfo, 0), outL))
+        assertFalse("audio does not open an envelope", p.connect(out(filter, 0), into(env, 0)))
         assertTrue("nothing above was patched", p.connections.isEmpty())
 
-        assertTrue("notes to notes", p.connect(out(steps, 1), into(voice, 0)))
-        assertTrue("and an envelope is opened by them too", p.connect(out(steps, 1), into(env, 0)))
-        assertTrue("modulation to modulation", p.connect(out(steps, 0), into(osc, 0)))
+        assertTrue("notes to notes", p.connect(out(steps, 0), into(voice, 0)))
+        assertTrue("and an envelope is opened by them too", p.connect(out(steps, 0), into(env, 0)))
         assertTrue("audio to audio", p.connect(out(osc, 0), into(filter, 0)))
-        assertEquals(4, p.connections.size)
+        assertEquals(3, p.connections.size)
     }
 
     /**
@@ -370,10 +370,12 @@ class PortGeometryTest {
 
     @Test
     fun `height grows with port count and never crowds below the pitch`() {
-        val one = PatchModule.heightFor(Types.Env)
-        val two = PatchModule.heightFor(Types.Osc)
-        assertTrue(two > one)
-        assertEquals(PatchModule.HEADER + 2 * PatchModule.PORT_PITCH, two, 0.001f)
+        // Drone has one port and Mix has four, which is the widest spread the catalogue
+        // still offers now that every synth is one note input and one audio output.
+        val one = PatchModule.heightFor(Types.Drone)
+        val four = PatchModule.heightFor(Types.Mix)
+        assertTrue(four > one)
+        assertEquals(PatchModule.HEADER + 4 * PatchModule.PORT_PITCH, four, 0.001f)
     }
 
     @Test

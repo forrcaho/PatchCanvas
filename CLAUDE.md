@@ -109,6 +109,15 @@ from a captured value instead stops the waveform dead and glides DC to zero, whi
 thump rather than a click. A removed node therefore lingers until the fades reading it
 finish.
 
+**A patch file is refused, never migrated, and never destroyed.** Format 5 retired
+modules rather than renaming fields, so an older file could only have been converted
+*silently* -- a patch built around a VCA an envelope opened comes back as a filter fed by
+nothing, quieter than it was left, reporting success. So `upgrade` is a version check and
+nothing more; the migration ladder that walked 1 to 4 went with the formats it served. What
+makes that affordable is that `PatchStore.load` moves a refused file to
+`patch.rejected.json` before the demo patch can be autosaved over it. **A refusal must
+never be a delete** -- check that still holds before adding another one.
+
 **Undo restores through the model, in one snapshot.** A snapshot is the autosave JSON;
 restoring it parses back to a `Patch` and `replaceWith` copies it into the live one, so
 the ordinary `snapshotFlow` -> `GraphSync` path carries it to the engine and undo is not a
@@ -154,6 +163,14 @@ the project has left it: CV and gate are now *modulation* and *pulse*, which are
 voltages and do not interchange, so `patchesTo` is like-to-like and a mismatch is refused.
 Audio-rate modulation does not need the loophole — a module that wants it declares an
 audio input, and `MODULATION` is applied once per block and could not carry it anyway.
+
+**The catalogue is seven modules, and every synth is polyphonic.** `Osc` is the
+polyphonic one -- what was called `Voice` -- and the monophonic oscillator is gone, which
+settled the worst naming collision in the project: "voice" now means only one of the eight
+slots inside an `Osc`. `Vca` retired with CV, since a `Mix` channel is `in * level` and was
+always a VCA with its level on a knob. `Filter` lost its cutoff jack and `Steps` its pitch
+and gate outputs, so a sequencer says a note once rather than the same thing three ways.
+Node ids 1, 7 and 8 are retired and never reused; `Osc` is id 10, where `Voice` was.
 
 **Nothing carries a pulse yet, and the kind stays anyway.** `Env` was the last thing taking
 a gate and it takes *notes* now: a pulse is an event with no duration, so it could never

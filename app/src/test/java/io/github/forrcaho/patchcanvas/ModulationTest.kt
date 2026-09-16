@@ -111,7 +111,7 @@ class ModulationTest {
     @Test
     fun `exposing a parameter never moves a jack already on the module`() {
         val patch = Patch()
-        val voice = patch.add(Types.Voice, Offset(40f, 60f))!!
+        val voice = patch.add(Types.Osc, Offset(40f, 60f))!!
         fun sides() = listOf(PortDirection.INPUT, PortDirection.OUTPUT).flatMap { dir ->
             val ports = voice.ports(dir)
             ports.indices.map { portIn(voice.bounds, 1f, dir, it, ports.size, voice.portsBody) }
@@ -140,7 +140,7 @@ class ModulationTest {
     @Test
     fun `the band grows downward, never wider`() {
         val patch = Patch()
-        val voice = patch.add(Types.Voice, Offset(40f, 60f))!!
+        val voice = patch.add(Types.Osc, Offset(40f, 60f))!!
         val closed = voice.bounds
         patch.expose(voice, 4, ModRange(0.1f, 1f))
 
@@ -154,7 +154,7 @@ class ModulationTest {
     @Test
     fun `the deepest row of the band lies on the module's bottom edge`() {
         val patch = Patch()
-        val voice = patch.add(Types.Voice, Offset(40f, 60f))!!
+        val voice = patch.add(Types.Osc, Offset(40f, 60f))!!
         patch.expose(voice, 3, ModRange(0f, 1f)) // S: the second row
         val at = modPortIn(voice.bounds, 1f, voice.type, 3, voice.portsBody)
         assertEquals(voice.bounds.bottom, at.y, 0.001f)
@@ -269,9 +269,12 @@ class ModulationJsonTest {
     }
 
     @Test
-    fun `a format 3 file loads with nothing exposed`() {
+    fun `a file with no mod section loads with nothing exposed`() {
+        // Written by hand rather than aged into an older version: a format 3 file is
+        // refused outright now, and what this is really about is that an absent "mod"
+        // reads as "nothing exposed" rather than as a parse failure.
         val patch = Patch().apply { add(Types.Filter, Offset.Zero) }
-        val root = JSONObject(patch.toJson()).put("version", 3)
+        val root = JSONObject(patch.toJson())
         root.getJSONArray("modules").getJSONObject(0).remove("mod")
         val restored = patchFromJson(root.toString())
         assertNotNull(restored)

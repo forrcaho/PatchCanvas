@@ -271,7 +271,7 @@ class GraphSyncTest {
     private fun withVoice(): Triple<Patch, PatchModule, PatchModule> {
         val patch = demoPatch()
         val steps = patch.free.first { it.type.stepCount > 0 }
-        val voice = patch.add(Types.Voice, Offset.Zero)!!
+        val voice = patch.add(Types.Osc, Offset.Zero)!!
         patch.connect(notesOut(steps), notesIn(voice))
         return Triple(patch, steps, voice)
     }

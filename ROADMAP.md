@@ -1523,6 +1523,51 @@ keeps that difference visible. Each end gets a plug in the cable's colour, since
 would otherwise cover the jack's own dot. Crossing a label is better than vanishing behind a
 box -- that was the open half, and the phone answered it.
 
+### CV is retired, and the catalogue is seven modules
+
+**Built 2026-09-16**, as the second of the two commits the type system was split from.
+94 graph checks, 115 node checks, 214 JVM tests.
+
+`Voice` is `Osc` and keeps node id 10; the monophonic `Osc` is deleted and id 1 retired
+unused, beside 7 (`Vca`) and 8 (`Clock`). `Vca` retires outright -- a `Mix` channel is
+`in * level`, which is a VCA with its level on a knob, and the node test that proved a VCA
+shut at zero and open at one now proves it of `Mix`. `Filter` drops its cutoff jack and
+`Steps` its pitch output. Format 5, with every older file refused.
+
+**Retiring things took their test fixtures with them**, which was most of the work and
+none of the design. Three separate fixtures had to be rebuilt out of surviving modules:
+
+- **A tone.** Fifteen graph tests measured against an oscillator that simply ran. A drone
+  holding one note into an `Osc` with a flattened envelope is that tone, which is what
+  `Drone` was added for a commit earlier.
+- **A settable constant modulator.** The modulation tests used a stopped sequencer's pitch
+  output, set by its transpose. An envelope held open by a drone sits at its sustain for as
+  long as you like, so its sustain is the dial. It has to be floored just above zero:
+  DaisySP's envelope decaying toward a sustain of exactly zero crosses below it and latches
+  to idle, and idle is only left on a rising gate that a held note never gives -- so a
+  modulator set to nothing once could never be raised again.
+- **A gain to modulate.** `Mix`, for the reason above.
+
+**A pitch output is a sample-and-hold, and several tests were about the holding.** "A note
+held through a switch keeps its pitch" guarded against the held pitch being re-read against
+a scale that arrived after the note started. Nothing holds a pitch now -- a note is two
+events carrying the beat that chooses its scale -- so that test went with the output, while
+its other half, that a rest keeps the degree it remembers, stayed. The scale tests that read
+pitches now read the note and resolve it through `octavesOf`, which is the same call the
+oscillator makes.
+
+**Two thresholds had to be re-measured rather than kept.** Silence after a disconnect now
+takes 400 blocks rather than 64: the 30ms fade was never what took the time, and Out's DC
+blocker, charged by cutting the waveform wherever it was, decays as a clean exponential that
+crosses the 0.03 threshold around block 250. The assertion is put well clear of it rather
+than just past it. And ASan caught a dangling buffer in a test written the same hour --
+`constantBuffer(0).data()` keeps a pointer into a temporary that dies at the end of the
+statement.
+
+**Not on the phone.** Verified on the emulator: the demo patch is Steps into Osc into
+Filter into the rails and plays an articulated sequence; the palette is seven tiles; a
+format 4 file is refused with its reason logged and kept at `patch.rejected.json`.
+
 ### The envelope takes notes, and the gate goes
 
 **Decided and built 2026-09-16.** The design had `Env` become a modulator opened by a

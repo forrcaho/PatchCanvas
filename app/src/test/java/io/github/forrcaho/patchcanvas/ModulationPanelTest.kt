@@ -148,7 +148,7 @@ class ModulationPanelTest {
         // A new range puts [ at the very end for any knob in the bottom fifth of its travel,
         // and a finger aiming at it from outside lands a little past the bar.
         val patch = Patch()
-        val voice = patch.add(Types.Voice, Offset.Zero)!!
+        val voice = patch.add(Types.Osc, Offset.Zero)!!
         val attack = voice.type.params[1]
         patch.expose(voice, 1, initialModRange(attack, attack.default))
         val row = panelRow(panel, d, voice.type, 1)
@@ -169,14 +169,14 @@ class ModulationPanelTest {
 
     @Test
     fun `an exposed bar reads its range in its own units`() {
-        assertEquals("[0.017s \u2013 0.522s]", rangeReading(Types.Voice.params[1], ModRange(0.017f, 0.522f)))
+        assertEquals("[0.017s \u2013 0.522s]", rangeReading(Types.Osc.params[1], ModRange(0.017f, 0.522f)))
         assertEquals("[300Hz \u2013 3000Hz]", rangeReading(Types.Filter.params[0], ModRange(300f, 3000f)))
     }
 
     @Test
     fun `a range of one option still has its two brackets apart`() {
-        val row = panelRow(panel, d, Types.Voice, 0)
-        val wave = Types.Voice.params[0]
+        val row = panelRow(panel, d, Types.Osc, 0)
+        val wave = Types.Osc.params[0]
         val low = panelBracketX(row, d, wave, 2f, closing = false)
         val high = panelBracketX(row, d, wave, 2f, closing = true)
         assertTrue(high - low >= 40f * d)

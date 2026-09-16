@@ -360,25 +360,13 @@ object Types {
     private val EXP = ParamCurve.EXPONENTIAL
     private val STEP = ParamCurve.STEPPED
 
-    val Osc = ModuleType(
-        "Osc", listOf(Port("pitch", M), Port("fm", M)), listOf(Port("out", A)),
-        Color(0xFF7FD1C1),
-        params = listOf(
-            // Cents rather than semitones: a semitone is a fact about twelve-tone equal
-            // temperament and means nothing in 19-TET or Bohlen-Pierce, where this knob
-            // still has to work. Cents are a logarithmic unit of pitch and belong to no
-            // tuning in particular, which is the property wanted here.
-            Param("tune", -TUNE_RANGE, TUNE_RANGE, 0f, "\u00A2", LIN, marks = true),
-            // Order mirrors kWaves in nodes.cpp: saw, square, triangle, sine.
-            Param("wave", 0f, 3f, 0f, "", STEP, Choice.WAVE),
-        ),
-    )
     val Filter = ModuleType(
-        "Filter", listOf(Port("in", A), Port("cutoff", M)), listOf(Port("out", A)),
+        "Filter", listOf(Port("in", A)), listOf(Port("out", A)),
         Color(0xFFE0A24B),
         params = listOf(
-            // The knob sets where a cable's zero sits; the cable moves it in octaves
-            // from there, which is how a cutoff input behaves on hardware.
+            // Hertz outright. This was once where a cable's zero sat, with a cutoff jack
+            // moving it in octaves from there; with the jack gone it is an ordinary knob,
+            // and a modulator sweeps it through the range exposed on the knob itself.
             Param("cutoff", 20f, 18000f, 1000f, "Hz", EXP),
             Param("res", 0f, 0.95f, 0.3f, "", LIN),
         ),
@@ -412,18 +400,12 @@ object Types {
             Param("wave", 0f, 3f, 3f, "", STEP, Choice.WAVE),
         ),
     )
-    val Vca = ModuleType(
-        "VCA", listOf(Port("in", A), Port("cv", M)), listOf(Port("out", A)),
-        Color(0xFFE07A9B),
-        // Added to the control voltage, so a VCA with nothing patched can still open.
-        params = listOf(Param("bias", 0f, 1f, 0f, "", LIN)),
-    )
     /**
      * No clock input: the transport steps it, at the interval chosen in its header. Order
      * mirrors StepsNode::setParam -- length, transpose, interval.
      */
     val Steps = ModuleType(
-        "Steps", emptyList(), listOf(Port("pitch", M), Port("notes", N)),
+        "Steps", emptyList(), listOf(Port("notes", N)),
         Color(0xFF6FA8E5),
         params = listOf(
             Param("len", 1f, STEP_COUNT.toFloat(), 8f, "", STEP),
@@ -452,14 +434,15 @@ object Types {
     /**
      * Notes in, sound out, with the voices inside it.
      *
-     * The name is provisional and known to be the worst of the collisions the roadmap's
-     * naming pass has to settle: "voice" is both this and one of the eight copies within
-     * it. It is still the word a finger at the picker reaches for.
+     * Called Voice until the monophonic oscillator was retired, which settled the worst
+     * naming collision in the project: "voice" was both this module and one of the eight
+     * inside it. Every synth is polyphonic now, so there is no other oscillator for the
+     * name to be ambiguous against, and "voice" is left meaning only the slot.
      */
-    val Voice = ModuleType(
-        "Voice", listOf(Port("notes", N)), listOf(Port("out", A)),
+    val Osc = ModuleType(
+        "Osc", listOf(Port("notes", N)), listOf(Port("out", A)),
         Color(0xFF8FD48A),
-        // Order mirrors VoiceNode::setParam. Five, where every other module has at most
+        // Order mirrors OscNode::setParam. Five, where every other module has at most
         // four: an envelope needs all of A, D, S and R for a note to have a shape, and
         // the waveform is the fifth. The panel divides its body by the rows it has.
         params = listOf(
@@ -506,7 +489,7 @@ object Types {
      * inputs as you like, since each input stores its own source. Only summing ever
      * needed a module, and that is Mix.
      */
-    val palette = listOf(Osc, Filter, Env, Lfo, Vca, Steps, Drone, Voice, Mix)
+    val palette = listOf(Osc, Drone, Steps, Filter, Env, Lfo, Mix)
 
     val byName: Map<String, ModuleType> =
         (palette + listOf(Out, In)).associateBy { it.name }
@@ -4057,26 +4040,26 @@ private fun DrawScope.drawPanel(
 fun rememberDemoPatch(): Patch = remember { demoPatch() }
 
 /**
- * The patch a fresh install opens with: a complete voice, so the first thing you hear is
- * an instrument rather than a test tone. The transport steps Steps, Steps plays Osc and
- * fires Env, Env opens the VCA, and the VCA feeds both output channels.
+ * The patch a fresh install opens with: a complete instrument, so the first thing you
+ * hear is music rather than a test tone. The transport steps Steps, Steps sends notes to
+ * Osc, and Osc feeds the filter and both output channels.
+ *
+ * Shorter than it was by two modules and three cables. The old demo needed a VCA that an
+ * envelope opened, because a Eurorack oscillator drones until something shapes it; Osc is
+ * polyphonic and carries an envelope per voice, so a note already has a shape by the time
+ * it reaches the filter.
  */
 fun demoPatch(): Patch =
     Patch().apply {
         val steps = add(Types.Steps, Offset(165f, 40f))!!
-        val osc = add(Types.Osc, Offset(310f, 40f))!!
-        val filter = add(Types.Filter, Offset(455f, 40f))!!
-        val vca = add(Types.Vca, Offset(600f, 40f))!!
-        val env = add(Types.Env, Offset(455f, 220f))!!
+        val osc = add(Types.Osc, Offset(330f, 40f))!!
+        val filter = add(Types.Filter, Offset(495f, 40f))!!
 
         fun out(m: PatchModule, i: Int) = PortRef(m.id, PortDirection.OUTPUT, i)
         fun into(m: PatchModule, i: Int) = PortRef(m.id, PortDirection.INPUT, i)
 
-        connect(out(steps, 0), into(osc, 0))   // pitch
-        connect(out(steps, 1), into(env, 0))   // notes, which is what opens the envelope
+        connect(out(steps, 0), into(osc, 0))   // notes
         connect(out(osc, 0), into(filter, 0))
-        connect(out(filter, 0), into(vca, 0))
-        connect(out(env, 0), into(vca, 1))     // envelope opens the VCA
-        connect(out(vca, 0), PortRef(OUT_ID, PortDirection.INPUT, 0))
-        connect(out(vca, 0), PortRef(OUT_ID, PortDirection.INPUT, 1))
+        connect(out(filter, 0), PortRef(OUT_ID, PortDirection.INPUT, 0))
+        connect(out(filter, 0), PortRef(OUT_ID, PortDirection.INPUT, 1))
     }
