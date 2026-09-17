@@ -194,6 +194,12 @@ turns it into a stutter. An Off is matched against *the source that sent it* as 
 id: ids are each source's own and restart at 1 when a node is rebuilt, so two sequencers on
 one envelope are both holding a note called 1 almost at once.
 
+**A note cable connected while notes are held delivers them.** A source says each start
+once, so the graph marks a new note cable *fresh* and, on its first block, asks the source
+for `heldNotes` and hands those over as starts -- skipping any note the source is starting
+in that same block. Without it a drone patched to a new oscillator is silent until its
+cells are toggled. A node that can hold a note indefinitely must implement `heldNotes`.
+
 **Inputs take one source.** A connect already replaces, so a replacement must send only
 the connect — sending a disconnect too makes the engine fade to silence and back, which
 steps. This is why `Mix` exists and why there is no `Mult`: outputs already fan out.

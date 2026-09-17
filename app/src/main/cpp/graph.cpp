@@ -241,6 +241,7 @@ void Graph::addNoteSource(int32_t dst, int32_t port, int32_t src, int32_t srcPor
         if (source.index < 0) {
             source.index = src;
             source.port = srcPort;
+            source.fresh = true;
             return;
         }
     }
@@ -270,6 +271,30 @@ const NoteBuffer &Graph::mergeNotes(const Record &record, int32_t port) {
         const NoteSource &source = record.noteSources[port][s];
         if (source.index < 0 || !nodes_[source.index].used) continue;
         const NoteBuffer *from = nodes_[source.index].node->noteOutput(source.port);
+
+        // A cable connected while its source holds notes: start them here first, at the
+        // top of the block, or this destination never hears them begin. A note the source
+        // is starting in this very block is already in its buffer and is skipped, so it
+        // does not start twice.
+        if (source.fresh) {
+            source.fresh = false;
+            held_.clear();
+            nodes_[source.index].node->heldNotes(source.port, held_);
+            for (int32_t h = 0; h < held_.count; ++h) {
+                bool startingNow = false;
+                for (int32_t e = 0; e < from->count; ++e) {
+                    if (from->events[e].kind == NoteKind::On && from->events[e].id == held_.events[h].id) {
+                        startingNow = true;
+                        break;
+                    }
+                }
+                if (startingNow) continue;
+                NoteEvent event = held_.events[h];
+                event.source = static_cast<uint8_t>(s);
+                if (!into.push(event)) break;
+            }
+        }
+
         for (int32_t e = 0; e < from->count; ++e) {
             NoteEvent event = from->events[e];
             // Stamped here rather than by the source, which has no idea it is one of

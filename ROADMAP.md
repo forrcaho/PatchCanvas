@@ -1590,6 +1590,33 @@ E-flat at 622Hz in Harmonic minor and A at 440Hz in 12-TET, and the capture turn
 to the other 3.1 seconds in, with the pitch moving over about 30ms. `find_clicks.py` finds no
 discontinuity, and the largest sample step at the turn is the same as in the steady tone.
 
+### A new cable hears notes already held
+
+**Found on the phone, 2026-09-16.** A drone holding a chord, patched to an oscillator added
+after its cells were turned on, stayed silent. Nothing downstream was wrong: a source says
+each note's start exactly once, and a drone's notes never end, so a destination connected
+later never heard any of them begin. Toggling the cells off and on again was the only cure,
+which is not something anyone would guess.
+
+So a note cable now arrives *fresh*, and on the first block after it is connected the graph
+asks the source what it is holding (`Node::heldNotes`) and delivers those as starts at the
+top of the block. A note the source is starting in that very block is already in its
+buffer and is skipped, or it would take two voices. Held notes carry the beat whose scale
+they are sounding in now, so a newcomer starts at the pitch the other destinations already
+glided to. The same path covers an oscillator re-created by undo or reconnected by hand.
+
+Only `Drone` reports held notes. A sequencer's note lasts half a step at most, so a cable
+connected mid-note misses only its tail; whether it should start late instead is left for
+the phone to say.
+
+Two graph tests: a destination patched to a held drone sounds, and a note starting as its
+cable connects is no louder than one arriving the ordinary way. Mutation-checked -- the
+second only once `startingNow` was left compiling, since removing its one use failed the
+build rather than a test, which is exactly the false positive the Env work already warned
+about. **Heard on the phone** in the patch that found it: with Drone -> Osc disconnected and
+reconnected by hand while the drone held its chord, the capture is silent until the
+reconnect and then carries degrees 3, 7 and 9 for the rest of it.
+
 ### A module's color is the kind it sends
 
 **Decided 2026-09-16.** There was no scheme; each accent was picked when its module was

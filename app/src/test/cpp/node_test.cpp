@@ -1251,6 +1251,37 @@ void aChangeForANoteNobodyHoldsMovesNothing() {
     check(std::abs(cycles - 466) <= 3, "the note that is held stays put, got " + std::to_string(cycles));
 }
 
+void aDroneReportsTheNotesItIsHolding() {
+    std::printf("a drone reports the notes it is holding\n");
+    DroneNode drone;
+    drone.prepare(kRate);
+    drone.setStep(4, 4, true);
+    drone.setStep(9, 9, true);
+    tickDrone(drone, 3, 0, chromaticThenMajor());
+    uint32_t ids[2] = {};
+    const NoteBuffer &started = *drone.noteOutput(0);
+    for (int32_t i = 0; i < started.count && i < 2; ++i) ids[i] = started.events[i].id;
+
+    drone.setStep(4, 4, false);
+    tickDrone(drone, 4, 0, chromaticThenMajor()); // degree 4 ends; the scale turns to major
+
+    NoteBuffer held;
+    drone.heldNotes(0, held);
+    check(held.count == 1, "only the cell still on");
+    if (held.count == 1) {
+        check(held.events[0].kind == NoteKind::On, "as a start");
+        check(held.events[0].id == ids[1], "under the id it has been sounding by");
+        check(held.events[0].degree == 9, "with its degree");
+        check(held.events[0].beat == 4, "and the beat whose scale it is sounding in now");
+    }
+
+    DroneNode silent;
+    silent.prepare(kRate);
+    NoteBuffer none;
+    silent.heldNotes(0, none);
+    check(none.count == 0, "an untouched drone holds nothing");
+}
+
 int main() {
     oscPlaysTheRequestedPitch();
     oscStaysBandLimited();
@@ -1293,5 +1324,6 @@ int main() {
     aReplacedScaleListRetunesADroneWithTheTransportStopped();
     aHeldNoteGlidesToItsNewPitch();
     aChangeForANoteNobodyHoldsMovesNothing();
+    aDroneReportsTheNotesItIsHolding();
     return testing::report("nodes");
 }

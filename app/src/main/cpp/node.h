@@ -143,6 +143,24 @@ public:
     void setNoteInput(int32_t port, const NoteBuffer *buffer) { noteInputs_[port] = buffer; }
     const NoteBuffer *noteOutput(int32_t port) const { return &noteOutputs_[port]; }
 
+    /**
+     * The notes this node is holding on note output [port], written into [into] as Ons.
+     *
+     * For a destination that has just been patched and missed their starts. A note is two
+     * events and a source says each once, so a cable connected while a note is held carries
+     * only its end -- found on the phone, where a drone patched to a new oscillator stayed
+     * silent until its cells were toggled again, because its notes never end and so never
+     * start again either. The graph asks this once, in the first block after the connect.
+     *
+     * The events carry the beat whose scale the note is sounding in now, so the destination
+     * starts it at the pitch every other destination already has. Audio thread; must not
+     * allocate. Nothing by default: a node that holds no notes has none to give.
+     */
+    virtual void heldNotes(int32_t port, NoteBuffer &into) const {
+        (void) port;
+        (void) into;
+    }
+
 protected:
     const float *input(int32_t port) const { return inputs_[port]; }
     float *out(int32_t port) { return outputs_[port].data(); }

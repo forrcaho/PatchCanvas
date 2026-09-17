@@ -705,6 +705,80 @@ void aDroneFollowsTheScaleThroughTheGraph() {
     graph.collectGarbage();
 }
 
+/**
+ * Found on the phone: a drone already holding a chord, patched to an oscillator added
+ * after the cells were toggled, stayed silent. A source says a note's start once, and a
+ * drone's notes never end -- so a new destination never heard one begin. The graph now
+ * asks the source for what it is holding on the first block after the connect.
+ */
+void aNewDestinationHearsWhatADroneIsAlreadyHolding() {
+    std::printf("a new destination hears what a drone is already holding\n");
+    Graph graph;
+    graph.setSampleRate(48000);
+    graph.postAdd(3, NodeType::Drone);
+    graph.postAdd(2, NodeType::Out);
+    graph.postSetStep(3, 0, 0, true);
+    graph.applyCommands();
+    render(graph, 32); // holding degree 0 with nothing listening
+
+    addTone(graph, 1); // an oscillator of its own, fed by its own drone at 1001...
+    graph.postRemove(1001); // ...which goes, so the only notes it can hear are drone 3's
+    graph.postConnect(1, 0, 2, 0);
+    graph.postConnect(3, 0, 1, 0);
+    graph.applyCommands();
+    render(graph, 16);
+    check(!nearSilent(graph.outputL(), kBlockSize), "a destination patched to a held drone sounds its note");
+    graph.collectGarbage();
+}
+
+/**
+ * The other half of the same fix: a note that starts in the very block its cable is
+ * connected is in the source's buffer already, and must not be handed over a second time
+ * as a held note. Two starts of one note take two voices, and at a quiet output level that
+ * is simply twice as loud as the same note arriving the ordinary way.
+ */
+void aNoteStartingAsItsCableConnectsStartsOnce() {
+    std::printf("a note starting as its cable connects starts once\n");
+    auto peakOf = [](const std::vector<float> &samples) {
+        float peak = 0.0f;
+        for (float v : samples) peak = std::max(peak, std::fabs(v));
+        return peak;
+    };
+    auto build = [](Graph &graph) {
+        graph.setSampleRate(48000);
+        graph.postAdd(1, NodeType::Osc);
+        graph.postAdd(2, NodeType::Out);
+        graph.postAdd(3, NodeType::Drone);
+        graph.postSetParam(1, 0, 3.0f); // sine
+        graph.postSetParam(1, 1, 0.0005f);
+        graph.postSetParam(1, 2, 0.0005f);
+        graph.postSetParam(1, 3, 1.0f);
+        graph.postSetParam(2, 0, 0.2f); // quiet, so Out's limiter stays out of the comparison
+        graph.postConnect(1, 0, 2, 0);
+    };
+
+    Graph ordinary;
+    build(ordinary);
+    ordinary.postConnect(3, 0, 1, 0);
+    ordinary.applyCommands();
+    render(ordinary, 4);
+    ordinary.postSetStep(3, 0, 0, true); // the cable was there first
+    ordinary.applyCommands();
+    render(ordinary, 64);
+    const float once = peakOf(render(ordinary, 64));
+
+    Graph together;
+    build(together);
+    together.postSetStep(3, 0, 0, true); // the note and its cable in the same block
+    together.postConnect(3, 0, 1, 0);
+    together.applyCommands();
+    render(together, 64);
+    const float same = peakOf(render(together, 64));
+
+    check(once > 0.05f, "the note sounds the ordinary way");
+    check(std::fabs(same - once) < 0.1f * once, "and no louder when it starts as its cable connects");
+}
+
 void resetStartsOnTheFirstFrameOfBarOne() {
     std::printf("reset starts on the first frame of bar one\n");
     Transport transport;
@@ -1211,6 +1285,8 @@ int main() {
     aScaleListSwitchesOnWholeBeatsAndLoops();
     aReplacedScaleListIsHandedBackAndFreed();
     aDroneFollowsTheScaleThroughTheGraph();
+    aNewDestinationHearsWhatADroneIsAlreadyHolding();
+    aNoteStartingAsItsCableConnectsStartsOnce();
     aNoteCableSoundsAndOrdersTheGraph();
     notesAndSignalsDoNotPatchToEachOther();
     aRemovedSourceEndsTheNotesItStarted();

@@ -217,6 +217,12 @@ private:
     struct NoteSource {
         int32_t index = -1;
         int32_t port = 0;
+        /**
+         * Connected since the last merge, so the notes the source is already holding
+         * have not reached this destination. Mutable because it is spent during the merge,
+         * which otherwise only reads.
+         */
+        mutable bool fresh = false;
     };
     static constexpr int32_t kMaxNoteSources = 4;
 
@@ -347,6 +353,8 @@ private:
     // Likewise one per port index: a note input's sources are merged into this and the
     // node reads it during its own process(), which is the only time it is valid.
     std::array<NoteBuffer, kMaxPorts> merged_{};
+    /** Where a fresh source's held notes are gathered, a member so the merge never grows the stack. */
+    NoteBuffer held_{};
 
     SpscQueue<Command, kCommandCapacity> commands_;
     SpscQueue<Node *, kCommandCapacity> garbage_;

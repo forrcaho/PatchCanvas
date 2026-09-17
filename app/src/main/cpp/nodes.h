@@ -238,6 +238,7 @@ public:
     void setStep(int32_t index, int32_t degree, bool gate) override;
     Interval interval() const override { return {1, 1}; }
     void tick(int32_t offset, int64_t count) override;
+    void heldNotes(int32_t port, NoteBuffer &into) const override;
 
 private:
     int32_t degree_[kCells] = {};

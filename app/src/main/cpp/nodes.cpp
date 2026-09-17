@@ -165,6 +165,24 @@ void DroneNode::tick(int32_t offset, int64_t count) {
     retuneOffset_ = static_cast<uint16_t>(offset);
 }
 
+void DroneNode::heldNotes(int32_t port, NoteBuffer &into) const {
+    (void) port; // one note output
+    for (int32_t i = 0; i < kCells; ++i) {
+        if (!on_[i] || sounding_[i] == 0) continue;
+        NoteEvent on;
+        on.id = sounding_[i];
+        on.kind = NoteKind::On;
+        on.offset = 0;
+        on.degree = degree_[i];
+        // The beat every retune so far has been worked out against, so a newcomer starts
+        // at the pitch the others are already at rather than the one the note began on.
+        on.beat = beat_;
+        on.cents = 0.0f;
+        on.velocity = 1.0f;
+        if (!into.push(on)) return;
+    }
+}
+
 float DroneNode::octavesAt(int64_t beat, int32_t degree) const {
     return scales_ != nullptr ? scales_->tableAt(beat).octavesOf(degree)
                               : ScaleTable{}.octavesOf(degree);
