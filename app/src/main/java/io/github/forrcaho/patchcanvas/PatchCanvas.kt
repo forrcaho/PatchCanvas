@@ -329,7 +329,12 @@ data class ModuleType(
      * Each is a distinct shade of its family rather than the cable color itself, so a
      * module still reads as a module and neighbors in a family can be told apart.
      * `ModuleColorTest` pins the rule: the cable color nearest each accent is the kind
-     * that module sends, and no accent is a cable color.
+     * that module sends, no accent is a cable color, and any two modules' borders differ
+     * visibly *as drawn* -- a first set of shades that measured apart in plain RGB looked
+     * identical on the phone once the border's opacity had halved the difference. The
+     * shades were then chosen by search, for the largest perceptual gap between any two
+     * borders on screen with each accent still clearly nearest its own cable.
+     * Widened 2026-09-16.
      *
      * There was no scheme before -- the accents were accidents of when each module was
      * added. Env was exactly the modulation cable's purple, Filter exactly the old gate's
@@ -378,7 +383,7 @@ object Types {
 
     val Filter = ModuleType(
         "Filter", listOf(Port("in", A)), listOf(Port("out", A)),
-        Color(0xFF8FB8BF),
+        Color(0xFF6D908B),
         params = listOf(
             // Hertz outright. This was once where a cable's zero sat, with a cutoff jack
             // moving it in octaves from there; with the jack gone it is an ordinary knob,
@@ -394,7 +399,7 @@ object Types {
      */
     val Env = ModuleType(
         "Env", listOf(Port("notes", N)), listOf(Port("out", M)),
-        Color(0xFF9E7BD9),
+        Color(0xFF9A85D7),
         params = listOf(
             Param("A", 0.001f, 5f, 0.005f, "s", EXP),
             Param("D", 0.001f, 5f, 0.12f, "s", EXP),
@@ -409,7 +414,7 @@ object Types {
      */
     val Lfo = ModuleType(
         "LFO", emptyList(), listOf(Port("out", M)),
-        Color(0xFFCFB0F0),
+        Color(0xFFEC7AEF),
         params = listOf(
             // Order mirrors LfoNode::setParam.
             Param("rate", 0.02f, 20f, 1f, "Hz", EXP),
@@ -422,7 +427,7 @@ object Types {
      */
     val Steps = ModuleType(
         "Steps", emptyList(), listOf(Port("notes", N)),
-        Color(0xFF5DBB7C),
+        Color(0xFF40CEA1),
         params = listOf(
             Param("len", 1f, STEP_COUNT.toFloat(), 8f, "", STEP),
             Param("transp", -TUNE_RANGE, TUNE_RANGE, 0f, "\u00A2", LIN, marks = true, short = "trn"),
@@ -443,7 +448,7 @@ object Types {
      */
     val Drone = ModuleType(
         "Drone", emptyList(), listOf(Port("notes", N)),
-        Color(0xFFA6D98A),
+        Color(0xFF91DA58),
         stepCount = DRONE_CELLS,
         grid = GridKind.DRONE,
     )
@@ -457,7 +462,7 @@ object Types {
      */
     val Osc = ModuleType(
         "Osc", listOf(Port("notes", N)), listOf(Port("out", A)),
-        Color(0xFF7FA6CC),
+        Color(0xFF6090C3),
         // Order mirrors OscNode::setParam. Five, where every other module has at most
         // four: an envelope needs all of A, D, S and R for a note to have a shape, and
         // the waveform is the fifth. The panel divides its body by the rows it has.
@@ -473,7 +478,7 @@ object Types {
         "Mix",
         listOf(Port("a", A), Port("b", A), Port("c", A), Port("d", A)),
         listOf(Port("out", A)),
-        Color(0xFF9AA6B5),
+        Color(0xFFD2D4D8),
         params = listOf(
             Param("a", 0f, 2f, 1f, "", LIN),
             Param("b", 0f, 2f, 1f, "", LIN),
@@ -2623,6 +2628,16 @@ private fun DrawScope.drawFlash(rect: Rect, unit: Float, alpha: Float, strokeWid
 
 // ------------------------------------------------------------------ the step grid
 
+/** A module's body. Shared with ModuleColorTest, which judges accents as they land on it. */
+internal val ModuleFill = Color(0xFF232830)
+
+/**
+ * How much of its accent a module's border shows. At 0.55 over [ModuleFill], two accents
+ * lose close to half their difference on the way to the screen -- which is why accents that
+ * measured apart still looked alike on the phone, and why the test measures after this.
+ */
+internal const val MODULE_BORDER_ALPHA = 0.55f
+
 private val GridLine = Color(0xFF232A33)
 private val GridCell = Color(0xFF12151A)
 private val GridTonic = Color(0xFF26333F)
@@ -3838,13 +3853,13 @@ private fun DrawScope.drawModuleBox(
     val corner = CornerRadius(PatchModule.CORNER * unit, PatchModule.CORNER * unit)
 
     drawRoundRect(
-        color = Color(0xFF232830).copy(alpha = alpha),
+        color = ModuleFill.copy(alpha = alpha),
         topLeft = rect.topLeft,
         size = rect.size,
         cornerRadius = corner,
     )
     drawRoundRect(
-        color = module.type.accent.copy(alpha = 0.55f * alpha),
+        color = module.type.accent.copy(alpha = MODULE_BORDER_ALPHA * alpha),
         topLeft = rect.topLeft,
         size = rect.size,
         cornerRadius = corner,

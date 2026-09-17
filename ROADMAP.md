@@ -1613,10 +1613,19 @@ and five rows up in Harmonic minor. The scroll bar's thumb does change size and 
 each switch, because how far a drone can scroll depends on the scale's length -- it tells
 the truth, but it is the one part of the panel that still moves.
 
-The color families read clearly on the device. The shades *within* a family do not: at
-module size Osc and Filter are hard to tell apart, and so are Steps and Drone.
-`ModuleColorTest`'s floor on how far apart two accents must be is a number, not an eye, and
-it is too low to guarantee that.
+The color families read clearly on the device. The shades *within* a family did not: at
+module size Osc and Filter were hard to tell apart, and so were Steps and Drone.
+
+**Widened, and measured as drawn.** The test had judged accents by plain RGB distance, and
+a border shows its accent at 55% over the module's fill, which throws away close to half of
+any difference before it reaches the screen. Measured perceptually (CIE Lab delta E) on the
+border as composited, the closest pair was 7.0 -- Filter and Mix -- with Osc and Filter at
+11. New shades were chosen by search: the largest smallest gap between any two borders,
+with each accent still at least 10 nearer its own cable than any other and every border
+keeping 2.2:1 contrast against the fill. The closest pair is now 16.9 on screen, and the
+test holds every pair to 15. Steps is teal-green and Drone lime; Osc a clear blue, Filter a
+gray-teal and Mix a light gray; Env a muted violet and LFO magenta. On the phone the pairs
+separate, Osc and Filter least of them.
 
 ### CV is retired, and the catalogue is seven modules
 
