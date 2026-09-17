@@ -1573,7 +1573,17 @@ kept deliberately clear of every cable color, and one neutral accent for all mod
 `ModuleColorTest` holds the rule: the nearest cable color to each accent is the kind that
 module sends, no accent is a cable color, and no two palette modules look alike.
 
-**Not yet seen on the phone.** It was locked by the time the build was installed.
+**Seen on the phone, 2026-09-16.** With the Drone scrolled three rows and the list
+alternating 12-TET and Harmonic minor, every frame was one of exactly two pictures: eleven
+rows of the same height with degree 3 on the bottom, the tonic tint near the top in 12-TET
+and five rows up in Harmonic minor. The scroll bar's thumb does change size and place at
+each switch, because how far a drone can scroll depends on the scale's length -- it tells
+the truth, but it is the one part of the panel that still moves.
+
+The color families read clearly on the device. The shades *within* a family do not: at
+module size Osc and Filter are hard to tell apart, and so are Steps and Drone.
+`ModuleColorTest`'s floor on how far apart two accents must be is a number, not an eye, and
+it is too low to guarantee that.
 
 ### CV is retired, and the catalogue is seven modules
 
