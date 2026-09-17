@@ -1719,17 +1719,48 @@ sealed interface Interaction {
      * long-pressed, or null for empty canvas, which decides what the menu offers.
      */
     data class Menu(val anchor: Offset, val targetId: Long?) : Interaction
+
+    /**
+     * Choosing modules to group. A tap on a module adds or removes it; the Group and Cancel
+     * buttons at the bottom end it. A mode rather than a gesture, because every gesture the
+     * canvas has is already spoken for -- and a lasso would be one more outcome for the
+     * gesture loop to tell apart on the first move.
+     */
+    data class Selecting(val ids: Set<Long>) : Interaction
 }
 
 sealed interface MenuItem {
     data class Add(val type: ModuleType) : MenuItem
     data class Duplicate(val moduleId: Long) : MenuItem
     data class Delete(val moduleId: Long) : MenuItem
+    data object StartGroup : MenuItem
+    data class Ungroup(val moduleId: Long) : MenuItem
 }
 
-private fun menuItems(targetId: Long?): List<MenuItem> =
-    if (targetId == null) Types.palette.map { MenuItem.Add(it) }
-    else listOf(MenuItem.Duplicate(targetId), MenuItem.Delete(targetId))
+private fun menuItems(patch: Patch, targetId: Long?): List<MenuItem> = when {
+    targetId == null -> Types.palette.map { MenuItem.Add(it) } + MenuItem.StartGroup
+    patch.module(targetId)?.type == Types.Group ->
+        listOf(MenuItem.Duplicate(targetId), MenuItem.Delete(targetId), MenuItem.Ungroup(targetId))
+    else -> listOf(MenuItem.Duplicate(targetId), MenuItem.Delete(targetId))
+}
+
+/** The groups from the top down to the one being looked at, [TOP] first. */
+internal fun Patch.scopePath(): List<Long> {
+    val path = mutableListOf<Long>()
+    var at = scopeOrTop
+    while (at != TOP) {
+        path += at
+        at = module(at)?.parent ?: TOP
+        if (path.size > 64) break
+    }
+    return listOf(TOP) + path.reversed()
+}
+
+/** Looks inside a group, or back out: closing any panel, which belongs to where you were. */
+internal fun Patch.enterScope(id: Long) {
+    modules.forEach { it.expanded = false }
+    scope = id
+}
 
 /**
  * Camera. World is dp; screen is px. `screen = world * density * zoom + pan`.
@@ -1901,6 +1932,34 @@ internal class Frame(
     /** The page one entry's root is set on, in the same place as the picker. */
     fun scaleRootPage(): Rect = scalePicker()
 
+    /**
+     * One step of the breadcrumb, [level] 0 being the patch itself.
+     *
+     * In the top row beside the scale chip, because that row is where the patch-wide
+     * controls already live and "where am I" is one of them. Shown only inside a group:
+     * at the top level there is nowhere else to be.
+     */
+    fun breadcrumbChip(level: Int): Rect {
+        val d = density
+        val start = scaleChip().right + 16f * d
+        return Rect(
+            Offset(start + level * (CRUMB_W + CRUMB_GAP) * d, transportChip().top),
+            Size(CRUMB_W * d, TRANSPORT_CHIP_H * d),
+        )
+    }
+
+    /** Group (done) and Cancel, centered along the bottom while modules are being chosen. */
+    fun selectionButton(done: Boolean): Rect {
+        val d = density
+        val w = SELECT_BUTTON_W * d
+        val h = TRANSPORT_CHIP_H * d
+        val gap = 12f * d
+        val centerX = insetLeft + (canvas.width - insetLeft - insetRight) / 2f
+        val top = canvas.height - insetBottom - RAIL_MARGIN * d - h
+        val left = if (done) centerX - w - gap / 2f else centerX + gap / 2f
+        return Rect(Offset(left, top), Size(w, h))
+    }
+
     companion object {
         const val RAIL_MARGIN = 8f
         const val HISTORY_SIDE = 44f
@@ -1916,6 +1975,9 @@ internal class Frame(
         const val SCALE_CARD_FOOT = 54f
         const val SCALE_ROW = 44f
         const val SCALE_PICKER_W = 830f
+        const val CRUMB_W = 96f
+        const val CRUMB_GAP = 6f
+        const val SELECT_BUTTON_W = 120f
     }
 }
 
@@ -2595,6 +2657,9 @@ fun PatchCanvas(
                             // holding is the way in to its panel.
                             interaction = if (onButton) {
                                 Interaction.Idle
+                            } else if (interaction is Interaction.Selecting) {
+                                // Choosing is taps; a finger that rests does not end it.
+                                interaction
                             } else if (hitModule != null && hitModule.isPinned) {
                                 if (hitModule.type.hasPanel) {
                                     patch.modules.forEach { it.expanded = false }
@@ -2668,7 +2733,8 @@ fun PatchCanvas(
             translate(camera.pan.x, camera.pan.y)
             scale(camera.worldToScreen, camera.worldToScreen, pivot = Offset.Zero)
         }) {
-            patch.free.forEach { module ->
+            val selecting = (interaction as? Interaction.Selecting)?.ids.orEmpty()
+            patch.shownFree.forEach { module ->
                 drawModuleBox(
                     module = module,
                     rect = module.bounds,
@@ -2685,10 +2751,19 @@ fun PatchCanvas(
                 if (module.id in flash.ids && pulse.value > 0f) {
                     drawFlash(module.bounds, 1f, pulse.value, 3f / camera.zoom)
                 }
+                if (module.id in selecting) {
+                    drawRoundRect(
+                        color = SelectedColor,
+                        topLeft = module.bounds.topLeft,
+                        size = module.bounds.size,
+                        cornerRadius = CornerRadius(PatchModule.CORNER, PatchModule.CORNER),
+                        style = Stroke(width = 3f / camera.zoom),
+                    )
+                }
             }
         }
 
-        patch.pinned.forEach { rail ->
+        patch.shownRails.forEach { rail ->
             // Both rails dim when they are not passing anything, so "this is a switch and
             // it is off" reads the same way on each. A correctly patched canvas that made
             // no sound, with nothing on screen saying why, was the single most confusing
@@ -2698,6 +2773,10 @@ fun PatchCanvas(
                 OUT_ID -> outputActive
                 else -> true
             }
+            // A group's rails are not switches, so they get neither the dimming nor the
+            // switched-on outline -- the outline would say "this is live, tap to turn it
+            // off" about something with no off.
+            val switch = rail.id == IN_ID || rail.id == OUT_ID
             drawModuleBox(
                 module = rail,
                 rect = frame.railRect(rail),
@@ -2716,7 +2795,7 @@ fun PatchCanvas(
             // are the same kind of control and reading as different ones was confusing.
             // In is red: a live microphone is a record light everywhere else, and the
             // one rail that can embarrass you should be the one that looks urgent.
-            if (live) {
+            if (live && switch) {
                 val r = frame.railRect(rail)
                 drawRoundRect(
                     color = if (rail.id == IN_ID) RecordRed else rail.type.accent,
@@ -2741,6 +2820,10 @@ fun PatchCanvas(
         // In screen space, because a cable can run from a world module to a rail and so have
         // one endpoint in each space. Resolving both through portScreen() keeps that a non-case.
         patch.connections.forEach { conn ->
+            // Only a cable with both ends in this scope. A cable into a group ends at the
+            // group's box out here and starts again at its rail inside; either half alone is
+            // the whole of what can be seen from where you are.
+            if (!patch.shown(conn.from.moduleId) || !patch.shown(conn.to.moduleId)) return@forEach
             val a = portScreen(patch, conn.from, camera, frame) ?: return@forEach
             val b = portScreen(patch, conn.to, camera, frame) ?: return@forEach
             val dim = !patch.portUsable(conn.from) || !patch.portUsable(conn.to)
@@ -2792,13 +2875,39 @@ fun PatchCanvas(
         // Over the panel for the same reason as the buttons, and before the context menu,
         // which is transient and should cover everything while it is up.
         drawTransport(frame, d, patch, card == FloatingCard.Transport, transportBeat, screenMeasurer)
+        // Not over an open panel: its header is where the chips would land, the "Osc" of
+        // an Osc panel was the thing they covered on the emulator, and a panel's taps go to
+        // its own loop, so the breadcrumb would be a picture of a control that did nothing.
+        if (patch.scopeOrTop != TOP && patch.modules.none { it.expanded }) {
+            val path = patch.scopePath()
+            path.forEachIndexed { level, id ->
+                drawChip(
+                    frame.breadcrumbChip(level), d,
+                    if (id == TOP) "Patch" else "Group",
+                    open = id == path.last(),
+                    accent = Types.Group.accent,
+                    measurer = screenMeasurer,
+                )
+            }
+        }
+        (interaction as? Interaction.Selecting)?.let { choosing ->
+            val count = choosing.ids.size
+            drawChip(
+                frame.selectionButton(done = true), d,
+                if (count == 0) "Tap modules" else "Group $count",
+                open = count > 0,
+                accent = Types.Group.accent,
+                measurer = screenMeasurer,
+            )
+            drawChip(frame.selectionButton(done = false), d, "Cancel", false, Types.Group.accent, screenMeasurer)
+        }
         drawScales(
             frame, d, patch, scales, playingEntry, card == FloatingCard.Scales, scaleView,
             screenMeasurer,
         )
 
         (interaction as? Interaction.Menu)?.let { menu ->
-            drawMenu(menuLayout(menuItems(menu.targetId), menu.anchor, d, size), d, screenMeasurer)
+            drawMenu(menuLayout(menuItems(patch, menu.targetId), menu.anchor, d, size), d, screenMeasurer)
         }
     }
 }
@@ -2856,7 +2965,8 @@ private fun Patch.hitPort(
     val worldRadius = effectiveTouchRadius(camera, radiusPx)
     val railRadius = min(radiusPx, PatchModule.PORT_PITCH * frame.density * 0.5f)
 
-    modules.forEach { module ->
+    val at = scopeOrTop
+    modules.filter { it.parent == at }.forEach { module ->
         val limit = if (module.isPinned) railRadius else worldRadius
         PortDirection.entries.forEach { dir ->
             module.ports(dir).indices.forEach { i ->
@@ -2885,9 +2995,9 @@ private fun Patch.hitPort(
 }
 
 private fun Patch.hitModule(camera: Camera, frame: Frame, screen: Offset): PatchModule? {
-    pinned.firstOrNull { frame.railRect(it).contains(screen) }?.let { return it }
+    shownRails.firstOrNull { frame.railRect(it).contains(screen) }?.let { return it }
     val world = camera.toWorld(screen)
-    return free.lastOrNull { it.bounds.contains(world) }
+    return shownFree.lastOrNull { it.bounds.contains(world) }
 }
 
 /**
@@ -2899,6 +3009,9 @@ private const val FLASH_MS = 450
 
 /** Warm white rather than the module's accent: this means "changed", not "is a filter". */
 private val FlashColor = Color(0xFFE8EEF5)
+
+/** A module chosen for a group. Bright and steady, where the flash fades. */
+private val SelectedColor = Color(0xFFF2F5F9)
 
 private fun DrawScope.drawFlash(rect: Rect, unit: Float, alpha: Float, strokeWidth: Float) {
     drawRoundRect(
@@ -3781,7 +3894,7 @@ private fun handleTap(
     controls: CanvasControls,
 ): Interaction {
     if (current is Interaction.Menu) {
-        val layout = menuLayout(menuItems(current.targetId), current.anchor, frame.density, frame.canvas)
+        val layout = menuLayout(menuItems(patch, current.targetId), current.anchor, frame.density, frame.canvas)
         val chosen = layout.tiles.firstOrNull { it.first.contains(screen) }?.second
             ?: return Interaction.Idle // tapped away: dismiss
         when (chosen) {
@@ -3798,6 +3911,8 @@ private fun handleTap(
             }
             is MenuItem.Duplicate -> patch.module(chosen.moduleId)?.let { patch.duplicate(it) }
             is MenuItem.Delete -> patch.module(chosen.moduleId)?.let { patch.remove(it) }
+            is MenuItem.StartGroup -> return Interaction.Selecting(emptySet())
+            is MenuItem.Ungroup -> patch.module(chosen.moduleId)?.let { patch.ungroup(it) }
         }
         return Interaction.Idle
     }
@@ -3807,11 +3922,38 @@ private fun handleTap(
     // wait its turn behind an armed connection would be exactly backwards.
     if (controls.tapHistory(frame, screen)) return Interaction.Idle
 
+    // The breadcrumb, before anything under it: it is how you get back out, so it must
+    // never lose a tap to whatever happens to be beneath it on the canvas.
+    if (patch.scopeOrTop != TOP) {
+        patch.scopePath().forEachIndexed { level, id ->
+            if (frame.breadcrumbChip(level).contains(screen)) {
+                if (id != patch.scopeOrTop) patch.enterScope(id)
+                return Interaction.Idle
+            }
+        }
+    }
+
+    if (current is Interaction.Selecting) {
+        if (frame.selectionButton(done = true).contains(screen)) {
+            // Nothing chosen is not an error to announce; the mode simply stays until it is
+            // given something or cancelled.
+            if (current.ids.isEmpty()) return current
+            patch.group(current.ids)
+            return Interaction.Idle
+        }
+        if (frame.selectionButton(done = false).contains(screen)) return Interaction.Idle
+        val module = patch.hitModule(camera, frame, screen)?.takeIf { !it.isPinned }
+            ?: return current
+        return Interaction.Selecting(
+            if (module.id in current.ids) current.ids - module.id else current.ids + module.id,
+        )
+    }
+
     val port = patch.hitPort(camera, frame, screen, touchPx)
 
     // A rail's body is its switch. Only while idle, so it never eats the tap that
     // cancels an armed connection.
-    if (port == null && current is Interaction.Idle) {
+    if (port == null && current is Interaction.Idle && patch.scopeOrTop == TOP) {
         patch.module(OUT_ID)?.let { out ->
             if (frame.railRect(out).contains(screen)) {
                 controls.onToggleOutput()
@@ -3824,8 +3966,16 @@ private fun handleTap(
                 return Interaction.Idle
             }
         }
+    }
 
+    if (port == null && current is Interaction.Idle) {
         patch.hitModule(camera, frame, screen)?.let { module ->
+            // A group's body is its way in. Opening a composite is going inside it, as
+            // opening a primitive shows its controls.
+            if (module.type == Types.Group) {
+                patch.enterScope(module.id)
+                return Interaction.Idle
+            }
             // Tapping a module's body opens its panel. One at a time: the panel takes the
             // screen, so there is nowhere for a second one to go.
             if (!module.isPinned && module.type.hasPanel) {
@@ -3853,6 +4003,9 @@ private fun handleTap(
                 if (patch.connect(current.source, port)) Interaction.Idle else current
             else -> Interaction.Connecting(port)                   // same side: re-arm
         }
+        // Both returned above: a menu is always resolved first, and choosing modules has
+        // its own branch.
+        is Interaction.Menu, is Interaction.Selecting -> Interaction.Idle
     }
 }
 
@@ -3977,12 +4130,15 @@ private fun MenuItem.label(): String = when (this) {
     is MenuItem.Add -> type.name
     is MenuItem.Duplicate -> "Duplicate"
     is MenuItem.Delete -> "Delete"
+    is MenuItem.StartGroup -> "Group\u2026"
+    is MenuItem.Ungroup -> "Ungroup"
 }
 
 private fun MenuItem.tint(): Color = when (this) {
     is MenuItem.Add -> type.accent
     is MenuItem.Duplicate -> Color(0xFF8A93A3)
     is MenuItem.Delete -> Color(0xFFE07A6B)
+    is MenuItem.StartGroup, is MenuItem.Ungroup -> Types.Group.accent
 }
 
 private fun DrawScope.drawMenu(layout: MenuLayout, d: Float, measurer: TextMeasurer) {

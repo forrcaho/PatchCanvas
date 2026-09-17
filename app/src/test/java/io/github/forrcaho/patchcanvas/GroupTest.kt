@@ -1,6 +1,7 @@
 package io.github.forrcaho.patchcanvas
 
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -217,6 +218,49 @@ class GroupTest {
         root.getJSONArray("modules").getJSONObject(0).put("parent", f.osc.id) // not a group
         val restored = patchFromJson(root.toString())!!
         assertTrue(restored.modules.filter { !it.isPinned }.all { it.parent == TOP })
+    }
+
+    @Test
+    fun `the breadcrumb runs from the patch down to where you are`() {
+        val f = GroupFixture()
+        val inner = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+        val outer = f.patch.group(setOf(inner.id, f.lfo.id))!!
+        assertEquals(listOf(TOP), f.patch.scopePath())
+        f.patch.enterScope(inner.id)
+        assertEquals(listOf(TOP, outer.id, inner.id), f.patch.scopePath())
+
+        f.osc.expanded = true
+        f.patch.enterScope(outer.id)
+        assertFalse("a panel belongs to where you were", f.osc.expanded)
+        assertEquals(listOf(TOP, outer.id), f.patch.scopePath())
+    }
+
+    /** The reference device in landscape, as ModulationPanelTest measures it. */
+    private val frame = Frame(
+        canvas = Size(2404f, 1080f),
+        density = 2.4375f,
+        insetLeft = 160f,
+        insetTop = 54f,
+        insetRight = 0f,
+        insetBottom = 58f,
+    )
+
+    @Test
+    fun `the breadcrumb and the group buttons clear the controls already on screen`() {
+        (0 until 3).forEach { level ->
+            val chip = frame.breadcrumbChip(level)
+            assertFalse("crumb $level over the scale chip", chip.overlaps(frame.scaleChip()))
+            assertFalse("crumb $level over the transport chip", chip.overlaps(frame.transportChip()))
+            assertTrue("crumb $level on screen", chip.right <= frame.canvas.width)
+        }
+        val done = frame.selectionButton(done = true)
+        val cancel = frame.selectionButton(done = false)
+        assertFalse("group and cancel apart", done.overlaps(cancel))
+        for (button in listOf(done, cancel)) {
+            assertFalse(button.overlaps(frame.historyRect(redo = false)))
+            assertFalse(button.overlaps(frame.historyRect(redo = true)))
+            assertTrue("above the gesture bar", button.bottom <= frame.canvas.height - frame.insetBottom)
+        }
     }
 
     @Test

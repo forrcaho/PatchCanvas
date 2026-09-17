@@ -1566,6 +1566,53 @@ snapshot list, which compares by identity -- a test comparing the box's ports wi
 passed only because they were the same list, and failed the first time two equal lists were
 different ones.
 
+### Groups: on screen
+
+**Built the same night, checked on the emulator, not yet on the phone.**
+
+**Choosing is a mode.** Long-pressing empty canvas offers "Group..." after the palette;
+it turns taps into choosing -- each chosen module outlined -- with Group and Cancel
+centered along the bottom. The Group button counts what it will take ("Group 2") and says
+"Tap modules" while it would take nothing. A long press while choosing is ignored, and a
+drag pans rather than moving a module. A lasso was the alternative and was passed over,
+being one more thing for the gesture loop to decide on the first move.
+
+**Opening a group is tapping it**, as opening a module shows its controls. Inside, the
+group's ports are its rails, and a breadcrumb beside the scale chip ("Patch > Group") is
+the way back out, a chip per level. A group's long-press menu adds Ungroup to Duplicate
+and Delete. Adding a module from the menu inside a group puts it inside that group.
+
+**Only what is in this scope is drawn, hit or tapped.** A cable into a group is drawn out
+here to the box and inside from the rail, never both; the top level's two rails switch only
+at the top level, since a group's right rail occupies the same place as Out.
+
+**Checked on the emulator, end to end:** grouping Osc and Filter out of the demo patch
+sent the engine no commands at all (the PatchSync log stayed empty), as did ungrouping,
+undoing the ungroup, and nesting that group with Steps inside another. Restarted, the
+engine was given exactly the flat patch -- Steps, Osc and Filter cabled straight through,
+no node for either group. An LFO added inside a group was saved inside it; a module's panel
+opens inside a group; the breadcrumb reached three levels.
+
+**Two things the emulator changed.** The breadcrumb was drawn over an open panel and hid its
+title, and a panel's taps go to its own loop, so it was a picture of a control that did
+nothing there: it is hidden while a panel is open. And a group's rails wore the outline
+that on In and Out means "switched on", about something that has no off: rails that are not
+switches no longer get it.
+
+**Left for the phone and for later:**
+- **Groups have no names.** Every box and every crumb says "Group", so three levels read
+  "Patch > Group > Group". Naming needs text entry, which nothing else here has yet.
+- **A port can only come from grouping.** An empty rail -- the outer group's left rail when
+  nothing came in -- has no way to gain one. "Patch to the rail's edge to add a port" is the
+  intended gesture and is not built.
+- **A new group lands where the chosen modules' top-left corner was,** which can put its box
+  under the top row of chips, as grouping near the top of the demo patch did.
+- **A parameter cannot yet be exposed through a group's boundary** (Phase 7's "promote a
+  port"). A modulation cable crossing the edge when grouping does become a group port and
+  works; exposing a knob later from outside does not exist.
+- Whether choosing modules by tapping reads as a mode, and whether the rails inside a group
+  read as its ports.
+
 ### Grids say how much of them there is
 
 **2026-09-16, from the first use of Drone on the phone.** Both grids now carry a scroll bar
