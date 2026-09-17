@@ -1656,9 +1656,44 @@ selected, the new name on the box, in the file, and gone again after one undo; a
 named "Group 1" beside an older unnamed one, and the breadcrumb reading "Patch > Group 1".
 Not yet checked on the phone.
 
-**Still open:** a number keypad on panel values, which is the same problem in a different
-shape and the next thing asked for; and whether 16 characters is the right ceiling for a
-name on a box that does not grow.
+**Still open:** whether 16 characters is the right ceiling for a name on a box that does
+not grow.
+
+### A number can be typed
+
+**2026-09-17, asked for in the same breath as naming.** Tapping a number opens a keypad on
+it: any knob's reading on an open panel, either end of an exposed parameter's range, and
+the tempo on the transport card. Dragging the bar under it is untouched -- the reading is
+where a value is written down, the bar is where it is swept, and they are a finger's width
+apart in the same row.
+
+**The keypad is this app's own, not the system's numeric IME.** The name field takes the
+IME because a name is text; a numeric IME would resize the window, and the panel whose
+value is being typed would slide out from under the keypad as it opened. So the keys are
+composables on a scrim, in the control's own color -- the module's accent for a knob, the
+modulation purple for a range, the transport's yellow for the tempo -- and the header says
+what is being typed: "cutoff", "cutoff from", "cutoff to".
+
+**The entry starts empty with the current value in its place**, so the first digit replaces
+rather than appends: typing a number says "this value", it does not amend the one there.
+Tapping away cancels, where the name field commits -- a half-typed number is not a value
+anyone meant, and C, backspace and ± are on the pad for the rest. A number past the end of
+a knob is clamped rather than refused: 20000 on a cutoff that stops at 12000 is asking for
+as high as it goes, and refusing it would leave the knob where it was with nothing said.
+
+**The hit test measures the text it is testing.** A row's reading is right-aligned and
+"[200Hz \u2013 1715Hz]" has two numbers in it, so the zone is the string as drawn and the split
+between its ends is where the dash actually falls. The gesture loop has the measurer
+already, which is what makes that affordable. A stepped row offers nothing: its lit button
+is its reading.
+
+**Checked on the emulator:** the tempo typed to 96 and saved; a filter's cutoff typed to
+440Hz; the low end of an exposed cutoff typed to 200Hz, the high end opening its own pad
+and cancelling clean when tapped away. Not yet on the phone.
+
+**Still open:** the sequencer's grid and the scale card have numbers that are not typeable
+yet, and neither is a group's port count. Whether the pad wants an arrow to nudge by one is
+a question for the phone.
 
 ### Grids say how much of them there is
 

@@ -10,7 +10,11 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -999,6 +1004,52 @@ internal fun panelBracketAt(panel: Rect, d: Float, module: PatchModule, index: I
     return if (toLow == toHigh) at.x > high else toHigh < toLow
 }
 
+/** What a tap on a row's reading is aimed at: the knob's value, or one end of its range. */
+enum class ValueTarget { VALUE, LOW, HIGH }
+
+/**
+ * Which number a tap on the panel takes hold of, if any.
+ *
+ * The reading is the target, not the row: a row's bar is a knob you drag, and the number
+ * above it is the same value written down, which is the thing to type over. [widthOf]
+ * measures a string in the reading's own style, so the zone is the text as drawn rather
+ * than a guessed rectangle -- the gesture loop has the measurer, and an exposed row reads
+ * "[400Hz \u2013 2000Hz]", whose two numbers have to be told apart by where they actually sit.
+ *
+ * A stepped row has no reading: its lit button is the value, and there is nothing to type.
+ */
+internal fun panelValueAt(
+    panel: Rect, d: Float, module: PatchModule, at: Offset, widthOf: (String) -> Float,
+): Pair<Int, ValueTarget>? {
+    module.type.rowParams.forEach { i ->
+        val param = module.type.params[i]
+        if (param.curve == ParamCurve.STEPPED) return@forEach
+        val row = panelRow(panel, d, module.type, i)
+        val range = module.modRanges[i]
+        val text = if (range != null) rangeReading(param, range)
+            else param.format(module.params.getOrElse(i) { param.default })
+        val width = widthOf(text)
+        val zone = Rect(
+            row.right - width - 8f * d, row.top - 4f * d,
+            row.right + 8f * d, row.top + VALUE_ZONE_H * d,
+        )
+        if (!zone.contains(at)) return@forEach
+        if (range == null) return i to ValueTarget.VALUE
+        // Split where the dash is: everything left of it is the low number as drawn.
+        val dash = row.right - width + widthOf("[${param.format(range.low)} ") + widthOf("\u2013") / 2f
+        return i to (if (at.x < dash) ValueTarget.LOW else ValueTarget.HIGH)
+    }
+    return null
+}
+
+/**
+ * How tall a reading's touch zone is, in dp, measured down from the top of its row.
+ *
+ * The text is 16sp and sits 2dp below the row's top; the rest is thumb. It stops well
+ * short of the bar, which starts 26dp above the row's bottom and is a 76dp row away.
+ */
+internal const val VALUE_ZONE_H = 30f
+
 /**
  * What an exposed bar reads in place of its value: its range, in the parameter's own units.
  * An en dash rather than a hyphen, which beside a negative number of cents would read as a sign.
@@ -1825,6 +1876,24 @@ sealed interface Interaction {
      * composable over the canvas rather than another shape inside it.
      */
     data class Renaming(val moduleId: Long) : Interaction
+
+    /**
+     * A number is being typed on the keypad, over the canvas like [Renaming].
+     *
+     * The keypad is drawn by this app rather than asked for from the system, unlike the
+     * name field: a numeric IME resizes the window, and the panel whose value you are
+     * typing would slide out from under the keypad as it opened.
+     */
+    data class Typing(val target: NumberTarget) : Interaction
+}
+
+/** What a typed number is going to be written to. */
+sealed interface NumberTarget {
+    /** A knob on an open panel, or one end of the range it sweeps when modulated. */
+    data class Knob(val moduleId: Long, val index: Int, val end: ValueTarget) : NumberTarget
+
+    /** The transport's tempo, which is a knob in every way but where it lives. */
+    data object Tempo : NumberTarget
 }
 
 sealed interface MenuItem {
@@ -2161,6 +2230,17 @@ private const val CARD_PAD = 14f
 /** The tempo: a label, its reading and a bar beneath, like a panel's continuous knob. */
 internal fun transportTempoRow(card: Rect, d: Float) =
     Rect(card.left + CARD_PAD * d, card.top + 12f * d, card.right - CARD_PAD * d, card.top + 66f * d)
+
+/**
+ * The tempo's reading, as a target for a finger: the top right of its row.
+ *
+ * Fixed rather than measured, unlike a panel's readings, because this one is a whole
+ * number of bpm and never grows past "300 bpm".
+ */
+internal fun transportTempoValue(card: Rect, d: Float): Rect {
+    val row = transportTempoRow(card, d)
+    return Rect(row.right - 96f * d, row.top - 4f * d, row.right + 8f * d, row.top + VALUE_ZONE_H * d)
+}
 
 /**
  * Beats per bar: a label over a row of buttons. 68dp rather than the 60 it was, which
@@ -2581,7 +2661,9 @@ fun PatchCanvas(
                             if (card == FloatingCard.Transport &&
                                 frame.transportCard().contains(down.position)
                             ) {
-                                transportCardGesture(frame, down.position, patch, controls.onResetTransport)
+                                transportCardGesture(
+                                    frame, down.position, patch, controls.onResetTransport,
+                                ) { interaction = Interaction.Typing(NumberTarget.Tempo) }
                                 return@awaitEachGesture
                             }
                             val scaleArea = if (scaleView.onPage) frame.scalePicker()
@@ -2623,6 +2705,20 @@ fun PatchCanvas(
                                 intervalMenu = true
                                 return@awaitEachGesture
                             }
+                            // The reading before anything under it. It is a tap-only target,
+                            // like the chips: a number is typed, never dragged, and the bar
+                            // for dragging is in the same row a finger's width below.
+                            val typed = if (onHistory) null else panelValueAt(
+                                panel, frame.density, open, down.position,
+                            ) { screenMeasurer.measure(it, PanelValueStyle).size.width.toFloat() }
+                            if (typed != null) {
+                                waitForUpRelease()
+                                interaction = Interaction.Typing(
+                                    NumberTarget.Knob(open.id, typed.first, typed.second),
+                                )
+                                return@awaitEachGesture
+                            }
+
                             // The [ ] chips come before the rows beside them. Only the chip itself
                             // counts, so a near miss on a knob never gives anything a jack.
                             val chipFor = if (onHistory) null else open.type.rowParams.firstOrNull {
@@ -3096,6 +3192,9 @@ fun PatchCanvas(
                 RenameOverlay(module) { interaction = Interaction.Idle }
             }
         }
+        (interaction as? Interaction.Typing)?.let { typing ->
+            NumberKeypad(patch, typing.target) { interaction = Interaction.Idle }
+        }
     }
 }
 
@@ -3168,6 +3267,192 @@ private fun RenameOverlay(module: PatchModule, onDone: () -> Unit) {
     LaunchedEffect(module.id) {
         focus.requestFocus()
         keyboard?.show()
+    }
+}
+
+// ---------------------------------------------------------------- the keypad
+
+/** The most digits a typed number may hold. Longer than any control's range needs. */
+internal const val MAX_ENTRY = 9
+
+/**
+ * One key pressed, applied to what has been typed so far.
+ *
+ * Pure, and tested as such: the keypad's behavior is all here, and the composable below
+ * is layout. An entry that is only a sign or a point is left as it is rather than fixed
+ * up, because [keypadValue] refuses it and the OK key then does nothing -- which is what
+ * a half-typed number should do.
+ */
+internal fun keypadEntry(entry: String, key: String): String = when (key) {
+    KEY_BACK -> entry.dropLast(1)
+    KEY_SIGN -> if (entry.startsWith("-")) entry.drop(1) else "-$entry"
+    KEY_CLEAR -> ""
+    "." -> when {
+        entry.contains('.') -> entry
+        entry.isEmpty() -> "0."
+        else -> "$entry."
+    }
+    else -> if (entry.count { it.isDigit() } >= MAX_ENTRY) entry else entry + key
+}
+
+/**
+ * What a typed entry means for [param], or null if it means nothing yet.
+ *
+ * Clamped rather than refused when it is out of range: a cutoff typed as 20000 on a knob
+ * that stops at 12000 asks for as high as it goes, and refusing it would just leave the
+ * knob where it was with nothing said. min and max are read either way round, since a
+ * parameter is allowed to descend.
+ */
+internal fun keypadValue(entry: String, param: Param): Float? {
+    val value = entry.toFloatOrNull() ?: return null
+    if (!value.isFinite()) return null
+    return value.coerceIn(minOf(param.min, param.max), maxOf(param.min, param.max))
+}
+
+internal const val KEY_BACK = "\u232b"
+internal const val KEY_SIGN = "\u00b1"
+internal const val KEY_CLEAR = "C"
+internal const val KEY_OK = "OK"
+
+/** The keys, in rows, as they are laid out. OK takes the width of two. */
+internal val KEYPAD_ROWS = listOf(
+    listOf("7", "8", "9", KEY_BACK),
+    listOf("4", "5", "6", KEY_SIGN),
+    listOf("1", "2", "3", "."),
+    listOf(KEY_CLEAR, "0", KEY_OK),
+)
+
+/**
+ * The keypad, over the canvas, for whichever number was tapped.
+ *
+ * Drawn as composables rather than into the canvas, like the rename field and for the
+ * same reason -- but with its own keys rather than the system's numeric IME, which would
+ * resize the window and slide the panel being edited out from under itself.
+ *
+ * The entry starts empty with the current value in its place, so the first digit replaces
+ * rather than appends: typing a number is how you say "this value", not how you amend the
+ * one there. Tapping away cancels, where the rename field commits: a name is whatever the
+ * field holds, while a half-typed number is not a value anyone meant.
+ */
+@Composable
+private fun NumberKeypad(patch: Patch, target: NumberTarget, onDone: () -> Unit) {
+    val module = (target as? NumberTarget.Knob)?.let { patch.module(it.moduleId) }
+    val param = when (target) {
+        is NumberTarget.Tempo -> TEMPO
+        is NumberTarget.Knob -> module?.type?.params?.getOrNull(target.index)
+    } ?: run {
+        // The module went away under the keypad, which only an undo could do.
+        LaunchedEffect(Unit) { onDone() }
+        return
+    }
+    val range = (target as? NumberTarget.Knob)?.let { module?.modRanges?.get(it.index) }
+    val current = when {
+        target is NumberTarget.Tempo -> param.format(patch.tempo)
+        target is NumberTarget.Knob && target.end == ValueTarget.LOW && range != null ->
+            param.format(range.low)
+        target is NumberTarget.Knob && target.end == ValueTarget.HIGH && range != null ->
+            param.format(range.high)
+        target is NumberTarget.Knob ->
+            param.format(module?.params?.getOrElse(target.index) { param.default } ?: param.default)
+        else -> ""
+    }
+    val label = when {
+        target is NumberTarget.Knob && target.end == ValueTarget.LOW -> "${param.name} from"
+        target is NumberTarget.Knob && target.end == ValueTarget.HIGH -> "${param.name} to"
+        else -> param.name
+    }
+    val accent = when (target) {
+        is NumberTarget.Tempo -> TransportAccent
+        is NumberTarget.Knob -> if (range != null) ModulationColor else module?.type?.accent ?: TransportAccent
+    }
+
+    var entry by remember(target) { mutableStateOf("") }
+
+    fun commit() {
+        val value = keypadValue(entry, param)
+        if (value != null) {
+            when (target) {
+                is NumberTarget.Tempo -> patch.tempo = value.roundToInt().toFloat()
+                is NumberTarget.Knob -> {
+                    val m = module ?: return
+                    when {
+                        range == null -> m.setParam(target.index, value)
+                        target.end == ValueTarget.LOW ->
+                            patch.expose(m, target.index, range.copy(low = value))
+                        target.end == ValueTarget.HIGH ->
+                            patch.expose(m, target.index, range.copy(high = value))
+                        // A row being modulated has no plain value to type: its reading is
+                        // its range, and the tap that got here landed on one end of it.
+                        else -> Unit
+                    }
+                }
+            }
+        }
+        onDone()
+    }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0x99000000))
+            .pointerInput(target) { detectTapGestures { onDone() } },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier
+                .width(300.dp)
+                .background(Color(0xFF1B1F26), RoundedCornerShape(14.dp))
+                .border(2.dp, accent.copy(alpha = 0.7f), RoundedCornerShape(14.dp))
+                .padding(14.dp)
+                // The card is not the scrim: a key that missed must not cancel.
+                .pointerInput(Unit) { detectTapGestures { } },
+        ) {
+            BasicText(
+                label,
+                style = TextStyle(color = Color(0xFF98A0AD), fontSize = 14.sp),
+            )
+            BasicText(
+                entry.ifEmpty { current },
+                style = TextStyle(
+                    color = if (entry.isEmpty()) Color(0xFF6C7482) else Color(0xFFE6E9EF),
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Medium,
+                ),
+                modifier = Modifier.padding(top = 2.dp, bottom = 10.dp),
+            )
+            KEYPAD_ROWS.forEach { row ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+                    row.forEach { key ->
+                        val ok = key == KEY_OK
+                        Box(
+                            Modifier
+                                .weight(if (ok) 2f else 1f)
+                                .padding(horizontal = 3.dp)
+                                .height(52.dp)
+                                .background(
+                                    if (ok) accent.copy(alpha = 0.85f) else Color(0xFF262B33),
+                                    RoundedCornerShape(10.dp),
+                                )
+                                .pointerInput(key) {
+                                    detectTapGestures {
+                                        if (ok) commit() else entry = keypadEntry(entry, key)
+                                    }
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            BasicText(
+                                key,
+                                style = TextStyle(
+                                    color = if (ok) Color(0xFF12151A) else Color(0xFFE6E9EF),
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Medium,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -3810,10 +4095,20 @@ private suspend fun AwaitPointerEventScope.transportCardGesture(
     down: Offset,
     patch: Patch,
     onReset: () -> Unit,
+    /** Called when the tempo's reading was tapped, which opens the keypad on it. */
+    onTypeTempo: () -> Unit,
 ) {
     val d = frame.density
     val card = frame.transportCard()
     val tempoRow = transportTempoRow(card, d)
+
+    // Before the bar under it, and tap-only: the reading is where the tempo is written
+    // down, and the bar an inch below is where it is dragged.
+    if (transportTempoValue(card, d).contains(down)) {
+        waitForUpRelease()
+        onTypeTempo()
+        return
+    }
     // Generous vertically, like a panel's knobs: the bar is the row's only target.
     val onTempo = tempoRow.inflate(6f * d).contains(down)
 
@@ -4277,7 +4572,9 @@ private fun handleTap(
         // A menu is always resolved first and choosing modules has its own branch, so
         // both are returned above. Renaming never arrives here at all: its scrim is a
         // composable over the canvas and takes every touch while it is up.
-        is Interaction.Menu, is Interaction.Selecting, is Interaction.Renaming -> Interaction.Idle
+        is Interaction.Menu, is Interaction.Selecting,
+        is Interaction.Renaming, is Interaction.Typing,
+        -> Interaction.Idle
     }
 }
 

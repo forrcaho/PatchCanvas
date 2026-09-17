@@ -65,8 +65,10 @@ events and fight over the pointer. `awaitEachGesture` decides once, on the first
 what a gesture is. The open panel is the exception: it owns the screen, so it has its own
 short loop rather than another outcome bolted into the canvas one. Renaming is the other:
 text entry needs a real `BasicTextField` for its cursor, selection and IME, so it is a
-composable on a scrim over the `Canvas` -- the only one in the app, and the reason
-`PatchCanvas` is wrapped in a `Box`.
+composable on a scrim over the `Canvas`, and so is the number keypad -- the only two in
+the app, and the reason `PatchCanvas` is wrapped in a `Box`. The keypad draws its own keys
+rather than asking for a numeric IME, which would resize the window and slide the panel
+being edited out from under it.
 
 | File | |
 | --- | --- |
