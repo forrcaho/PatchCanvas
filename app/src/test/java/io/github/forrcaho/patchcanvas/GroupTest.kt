@@ -302,15 +302,64 @@ class GroupTest {
         assertEquals(count, group.ports(PortDirection.OUTPUT).size)
     }
 
+    /**
+     * The slot has to be exactly where the port will appear, or it is a target that lies.
+     * A rail is centered like In and Out, so it re-centers as it grows -- the slot is
+     * measured against the rail as it will be, not as it is.
+     */
     @Test
-    fun `a group's rail does not move its jacks when a port is added`() {
+    fun `the slot marks where the next port will land`() {
+        val f = GroupFixture()
+        val group = f.patch.group(setOf(f.lfo.id, f.env.id))!!
+        f.patch.enterScope(group.id)
+        val railOut = f.patch.groupRail(group.id, Types.GroupOut)!!
+        val source = PortRef(f.lfo.id, PortDirection.OUTPUT, 0)
+
+        val slot = groupPortSlot(frame, railOut, PortDirection.INPUT)
+        assertTrue(f.patch.addGroupPort(group.id, source))
+
+        val index = railOut.ports(PortDirection.INPUT).size - 1
+        val landed = portIn(
+            frame.railRect(railOut), frame.density, PortDirection.INPUT, index,
+            railOut.ports(PortDirection.INPUT).size, railOut.portsBody * frame.density,
+        )
+        assertEquals("the slot's x", slot.x, landed.x, 0.01f)
+        assertEquals("the slot's y", slot.y, landed.y, 0.01f)
+    }
+
+    @Test
+    fun `the slot answers only for a jack inside the group being looked at`() {
         val f = GroupFixture()
         val group = f.patch.group(setOf(f.lfo.id, f.env.id))!!
         val railOut = f.patch.groupRail(group.id, Types.GroupOut)!!
-        val before = frame.railRect(railOut).top
-        f.patch.addGroupPort(group.id, PortRef(f.lfo.id, PortDirection.OUTPUT, 0))
-        f.patch.addGroupPort(group.id, PortRef(f.lfo.id, PortDirection.OUTPUT, 0))
-        assertEquals("a grown rail keeps its top, so its first jack stays put", before, frame.railRect(railOut).top, 0.01f)
+        val inside = PortRef(f.lfo.id, PortDirection.OUTPUT, 0)
+        val slot = groupPortSlot(frame, railOut, PortDirection.INPUT)
+        val touch = 24f * frame.density
+
+        assertFalse("at the top level there is no rail to add to", f.patch.groupPortSlotHit(frame, inside, slot, touch))
+        f.patch.enterScope(group.id)
+        assertTrue(f.patch.groupPortSlotHit(frame, inside, slot, touch))
+        assertFalse(
+            "a jack outside this group asks for nothing",
+            f.patch.groupPortSlotHit(frame, PortRef(f.filter.id, PortDirection.OUTPUT, 0), slot, touch),
+        )
+        assertFalse(
+            "and an output's slot is on the right rail, not the left",
+            f.patch.groupPortSlotHit(
+                frame, inside,
+                groupPortSlot(frame, f.patch.groupRail(group.id, Types.GroupIn)!!, PortDirection.OUTPUT), touch,
+            ),
+        )
+    }
+
+    @Test
+    fun `a group's rails are centered, like the patch's own`() {
+        val f = GroupFixture()
+        val group = f.patch.group(setOf(f.lfo.id, f.env.id))!!
+        val railOut = f.patch.groupRail(group.id, Types.GroupOut)!!
+        val out = f.patch.module(OUT_ID)!!
+        val middle = { r: androidx.compose.ui.geometry.Rect -> (r.top + r.bottom) / 2f }
+        assertEquals(middle(frame.railRect(out)), middle(frame.railRect(railOut)), 0.01f)
     }
 
     @Test

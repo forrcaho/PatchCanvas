@@ -1602,13 +1602,18 @@ switches no longer get it.
 **Left for the phone and for later:**
 - **Groups have no names.** Every box and every crumb says "Group", so three levels read
   "Patch > Group > Group". Naming needs text entry, which nothing else here has yet.
-- ~~**A port can only come from grouping.**~~ **Built the same night:** inside a group,
-  arm a jack and tap the matching rail -- an output to the right rail, an input or a knob's
-  jack to the left -- and the group gains a port of that jack's name and kind, wired to it,
-  after the ports it already had. A group's rails now hang from a fixed top under the chips
-  rather than being centered, because a centered rail re-centers as it grows and would slide
-  every jack already on it. On the emulator, an LFO inside a nested group patched to its right
-  rail made a second output port without moving the first.
+- ~~**A port can only come from grouping.**~~ **Built, then fixed on the phone.** Inside a
+  group, an armed jack taken to the matching rail gains the group a port of that jack's name
+  and kind. "Tap the rail" could not be made to happen at all by its owner, and the reason
+  was geometry: a rail is 64dp wide and its jacks answer to a 22dp touch radius, so nearly
+  every tap on a rail lands on a jack already there. There is now a **slot** -- an empty ringed
+  port with a plus, in the cable's color -- drawn at the end of the matching rail whenever a
+  jack inside is armed, a whole port pitch clear of the last jack, and tapping it adds the
+  port. The rest of the rail keeps the jack armed rather than disarming.
+- **A group's rails are centered, like In and Out**, at their owner's request. They briefly
+  hung from a fixed top because a centered rail re-centers as it grows, sliding the jacks
+  already on it; that shift now happens, but only at the moment a port is added, and the
+  slot is measured against the rail *as it will be* so it marks where the port truly lands.
 - **A new group lands where the chosen modules' top-left corner was,** which can put its box
   under the top row of chips, as grouping near the top of the demo patch did.
 - **A parameter cannot yet be exposed through a group's boundary** (Phase 7's "promote a

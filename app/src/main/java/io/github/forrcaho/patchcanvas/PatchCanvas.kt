@@ -1785,6 +1785,15 @@ internal fun Patch.scopePath(): List<Long> {
     return listOf(TOP) + path.reversed()
 }
 
+/** Whether [screen] lands on the slot that would add a port for [source]. */
+internal fun Patch.groupPortSlotHit(frame: Frame, source: PortRef, screen: Offset, touchPx: Float): Boolean {
+    val at = scopeOrTop
+    if (at == TOP) return false
+    if (module(source.moduleId)?.parent != at) return false
+    val rail = groupRail(at, railTypeFor(source)) ?: return false
+    return (groupPortSlot(frame, rail, railDirFor(source)) - screen).getDistance() <= touchPx
+}
+
 /** Looks inside a group, or back out: closing any panel, which belongs to where you were. */
 internal fun Patch.enterScope(id: Long) {
     modules.forEach { it.expanded = false }
@@ -1857,14 +1866,7 @@ internal class Frame(
         val d = density
         val w = PatchModule.RAIL_WIDTH * d
         val h = module.height * d
-        // A group's rails hang from a fixed top instead of being centered. Their ports can
-        // be added to, and a centered rail would re-center as it grew -- sliding every jack
-        // already on it and every cable with it, which is what ports must never do.
-        val top = if (module.type.structural) {
-            insetTop + (RAIL_MARGIN + TRANSPORT_CHIP_H + GROUP_RAIL_GAP) * d
-        } else {
-            insetTop + (canvas.height - insetTop - insetBottom - h) / 2f
-        }
+        val top = insetTop + (canvas.height - insetTop - insetBottom - h) / 2f
         val left = when (module.type.pinned) {
             Edge.LEFT -> insetLeft + RAIL_MARGIN * d
             else -> canvas.width - insetRight - RAIL_MARGIN * d - w
@@ -1969,6 +1971,28 @@ internal class Frame(
     fun scaleRootPage(): Rect = scalePicker()
 
     /**
+     * The rail as it would be with [ports] jacks on it.
+     *
+     * Where a port about to be added will land, which is also where the slot marking it is
+     * drawn. A rail is centered, like In and Out -- so it re-centers as it grows, and the
+     * jacks already on it move half a pitch when one is added. That was the reason they
+     * briefly hung from a fixed top instead; centered is what the patch's own rails do and
+     * what was asked for, and the shift happens only at the moment a port is added.
+     */
+    fun railRectWith(module: PatchModule, ports: Int): Rect {
+        val d = density
+        val w = PatchModule.RAIL_WIDTH * d
+        val body = maxOf(PatchModule.MIN_BODY, maxOf(ports, 1) * PatchModule.PORT_PITCH)
+        val h = (PatchModule.HEADER + body) * d
+        val top = insetTop + (canvas.height - insetTop - insetBottom - h) / 2f
+        val left = when (module.type.pinned) {
+            Edge.LEFT -> insetLeft + RAIL_MARGIN * d
+            else -> canvas.width - insetRight - RAIL_MARGIN * d - w
+        }
+        return Rect(Offset(left, top), Size(w, h))
+    }
+
+    /**
      * One step of the breadcrumb, [level] 0 being the patch itself.
      *
      * In the top row beside the scale chip, because that row is where the patch-wide
@@ -2011,8 +2035,6 @@ internal class Frame(
         const val SCALE_CARD_FOOT = 54f
         const val SCALE_ROW = 44f
         const val SCALE_PICKER_W = 830f
-        /** Below the top row of chips, which a group's rails hang from. */
-        const val GROUP_RAIL_GAP = 24f
         const val CRUMB_W = 96f
         const val CRUMB_GAP = 6f
         const val SELECT_BUTTON_W = 120f
@@ -2240,6 +2262,28 @@ internal class ScaleCardView {
 
     /** Whether a page -- the picker or the root -- is showing in place of the list. */
     val onPage: Boolean get() = pickingFor >= 0 || rootFor >= 0
+}
+
+/** Which of a group's rails a jack inside it would get its port on. */
+internal fun railTypeFor(source: PortRef): ModuleType =
+    if (source.dir == PortDirection.OUTPUT) Types.GroupOut else Types.GroupIn
+
+/** The side of the rail that jack's port appears on: the rails mirror the group's box. */
+internal fun railDirFor(source: PortRef): PortDirection =
+    if (source.dir == PortDirection.OUTPUT) PortDirection.INPUT else PortDirection.OUTPUT
+
+/**
+ * Where a group's next port would land on [rail], and so where the slot for it is drawn.
+ *
+ * A rail is 64dp wide and its jacks answer to a 22dp touch radius, so nearly every tap on a
+ * rail lands on a jack already there -- which is why "tap the rail to add a port" could not
+ * be made to happen at all on the phone. The slot is a target of its own, a whole port pitch
+ * from the last jack, so it can be hit.
+ */
+internal fun groupPortSlot(frame: Frame, rail: PatchModule, dir: PortDirection): Offset {
+    val count = rail.ports(dir).size
+    val body = maxOf(PatchModule.MIN_BODY, (count + 1) * PatchModule.PORT_PITCH)
+    return portIn(frame.railRectWith(rail, count + 1), frame.density, dir, count, count + 1, body * frame.density)
 }
 
 /** Screen position of any port, whether its module is pinned or free. */
@@ -2888,6 +2932,25 @@ fun PatchCanvas(
                     radius = effectiveTouchRadius(camera, touchPx),
                     center = at,
                 )
+            }
+            // The empty slot after a group rail's last jack: where a port for the armed
+            // jack would go, and the only way to ask for one. Drawn only while something is
+            // armed, so a rail at rest is what it has and no more.
+            if (patch.scopeOrTop != TOP && patch.module(state.source.moduleId)?.parent == patch.scopeOrTop) {
+                patch.groupRail(patch.scopeOrTop, railTypeFor(state.source))?.let { rail ->
+                    val slot = groupPortSlot(frame, rail, railDirFor(state.source))
+                    val kind = patch.kindOf(state.source)
+                    drawCircle(kind.cable.copy(alpha = 0.22f), touchPx, slot)
+                    drawCircle(
+                        color = kind.cable,
+                        radius = PatchModule.PORT_RADIUS * d,
+                        center = slot,
+                        style = Stroke(width = 2f * d),
+                    )
+                    val arm = PatchModule.PORT_RADIUS * 0.6f * d
+                    drawLine(kind.cable, Offset(slot.x - arm, slot.y), Offset(slot.x + arm, slot.y), 2f * d)
+                    drawLine(kind.cable, Offset(slot.x, slot.y - arm), Offset(slot.x, slot.y + arm), 2f * d)
+                }
             }
         }
 
@@ -4029,18 +4092,15 @@ private fun handleTap(
             if (port != null) Interaction.Connecting(port) else Interaction.Idle
         }
         is Interaction.Connecting -> when {
-            // Inside a group, an armed jack taken to the matching rail's edge makes a new
-            // port for it: an output to the right rail, an input or a knob's jack to the
-            // left. The wrong rail keeps the jack armed, as a patch that cannot be made does.
-            port == null && patch.scopeOrTop != TOP -> {
-                val rail = patch.shownRails.firstOrNull { frame.railRect(it).contains(screen) }
-                val wants = if (current.source.dir == PortDirection.OUTPUT) Types.GroupOut else Types.GroupIn
-                when {
-                    rail == null -> Interaction.Idle
-                    rail.type == wants && patch.addGroupPort(patch.scopeOrTop, current.source) -> Interaction.Idle
-                    else -> current
-                }
-            }
+            // Inside a group, an armed jack taken to the slot at the end of the matching
+            // rail makes a new port for it: an output to the right rail, an input or a
+            // knob's jack to the left.
+            patch.groupPortSlotHit(frame, current.source, screen, touchPx) ->
+                if (patch.addGroupPort(patch.scopeOrTop, current.source)) Interaction.Idle else current
+            // The rest of that rail, or the other one, keeps the jack armed rather than
+            // disarming: a tap that did nothing and dropped the jack reads as a missed tap.
+            port == null && patch.scopeOrTop != TOP &&
+                patch.shownRails.any { frame.railRect(it).contains(screen) } -> current
             port == null -> Interaction.Idle                      // tapped away: cancel
             port == current.source -> {                            // tapped self: unpatch
                 patch.disconnect(port)
