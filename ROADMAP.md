@@ -1543,10 +1543,37 @@ size re-clamped it somewhere new. `GridWindow` is now the one place the range is
 out, and drawing, hit test and drag all read it.
 
 **That was not all of the jumping.** On the phone, with a scale list alternating 12-TET and
-Harmonic minor, a drone scrolled to show degree 1 at the bottom redraws every four bars as
-seven taller rows with degree 0 at the bottom, because a seven-degree scale fits whole. The
-stored position survives -- back in 12-TET it returns exactly -- but the grid reshaping under
-the hand is a layout question, put to the phone's owner rather than decided here.
+Harmonic minor, a drone scrolled to show degree 1 at the bottom redrew every four bars as
+seven taller rows with degree 0 at the bottom, because a seven-degree scale fit whole. The
+stored position survived the round trip, but the grid reshaped under the hand.
+
+**Decided: a drone always shows as many rows as fit**, starting from a degree of the first
+period and running on past the top of the period when the scale is shorter than the rows.
+Nothing about the layout now depends on the scale's length except which rows carry the
+tonic tint; the bottom row keeps its degree and the rows only get different names. The
+price, accepted on purpose, is that the top of one column can repeat the bottom of the
+next -- the same degrees, so the same cells, lit and toggled together. Two alternatives
+were offered and passed over: fixed-height rows leaving blank space above a short scale,
+and holding the open panel in the scale it opened with, which would have let the grid
+disagree with what a newly toggled cell sounds.
+
+### A module's color is the kind it sends
+
+**Decided 2026-09-16.** There was no scheme; each accent was picked when its module was
+added. By the time anyone looked, Env was exactly the modulation cable's purple, Filter
+exactly the retired gate's orange, and Osc one shade off the note cable's green -- so one
+color said "sends this", another "takes this", and a third named a kind that no longer
+existed.
+
+Now note sources (Steps, Drone) are greens, sound sources and processors (Osc, Filter, Mix,
+the In rail) are audio's steel blues and grays, and modulators (Env, LFO) are purples, each
+a distinct shade rather than the cable color itself. A green cable leaves a green module.
+Out sends nothing into the patch and stays neutral. The other options were colors by role
+kept deliberately clear of every cable color, and one neutral accent for all modules.
+`ModuleColorTest` holds the rule: the nearest cable color to each accent is the kind that
+module sends, no accent is a cable color, and no two palette modules look alike.
+
+**Not yet seen on the phone.** It was locked by the time the build was installed.
 
 ### CV is retired, and the catalogue is seven modules
 

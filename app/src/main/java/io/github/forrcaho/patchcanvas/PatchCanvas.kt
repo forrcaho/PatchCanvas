@@ -321,6 +321,22 @@ data class ModuleType(
     val name: String,
     val inputs: List<Port>,
     val outputs: List<Port>,
+    /**
+     * A module's color says what kind of cable it sends: note sources are green like a
+     * note cable, sound sources and processors are in audio's steel blues and grays, and
+     * modulators are purple like a modulation cable. So a green cable leaves a green module.
+     *
+     * Each is a distinct shade of its family rather than the cable color itself, so a
+     * module still reads as a module and neighbors in a family can be told apart.
+     * `ModuleColorTest` pins the rule: the cable color nearest each accent is the kind
+     * that module sends, and no accent is a cable color.
+     *
+     * There was no scheme before -- the accents were accidents of when each module was
+     * added. Env was exactly the modulation cable's purple, Filter exactly the old gate's
+     * orange, and Osc one shade off the note cable's green, so some colors meant "sends
+     * this" and some "takes this". Chosen 2026-09-16. Out sends nothing into the patch and
+     * stays a neutral near-white.
+     */
     val accent: Color,
     val params: List<Param> = emptyList(),
     /**
@@ -362,7 +378,7 @@ object Types {
 
     val Filter = ModuleType(
         "Filter", listOf(Port("in", A)), listOf(Port("out", A)),
-        Color(0xFFE0A24B),
+        Color(0xFF8FB8BF),
         params = listOf(
             // Hertz outright. This was once where a cable's zero sat, with a cutoff jack
             // moving it in octaves from there; with the jack gone it is an ordinary knob,
@@ -378,7 +394,7 @@ object Types {
      */
     val Env = ModuleType(
         "Env", listOf(Port("notes", N)), listOf(Port("out", M)),
-        Color(0xFFB98FE0),
+        Color(0xFF9E7BD9),
         params = listOf(
             Param("A", 0.001f, 5f, 0.005f, "s", EXP),
             Param("D", 0.001f, 5f, 0.12f, "s", EXP),
@@ -393,7 +409,7 @@ object Types {
      */
     val Lfo = ModuleType(
         "LFO", emptyList(), listOf(Port("out", M)),
-        Color(0xFFC9A8EE),
+        Color(0xFFCFB0F0),
         params = listOf(
             // Order mirrors LfoNode::setParam.
             Param("rate", 0.02f, 20f, 1f, "Hz", EXP),
@@ -406,7 +422,7 @@ object Types {
      */
     val Steps = ModuleType(
         "Steps", emptyList(), listOf(Port("notes", N)),
-        Color(0xFF6FA8E5),
+        Color(0xFF5DBB7C),
         params = listOf(
             Param("len", 1f, STEP_COUNT.toFloat(), 8f, "", STEP),
             Param("transp", -TUNE_RANGE, TUNE_RANGE, 0f, "\u00A2", LIN, marks = true, short = "trn"),
@@ -427,7 +443,7 @@ object Types {
      */
     val Drone = ModuleType(
         "Drone", emptyList(), listOf(Port("notes", N)),
-        Color(0xFFE0B36F),
+        Color(0xFFA6D98A),
         stepCount = DRONE_CELLS,
         grid = GridKind.DRONE,
     )
@@ -441,7 +457,7 @@ object Types {
      */
     val Osc = ModuleType(
         "Osc", listOf(Port("notes", N)), listOf(Port("out", A)),
-        Color(0xFF8FD48A),
+        Color(0xFF7FA6CC),
         // Order mirrors OscNode::setParam. Five, where every other module has at most
         // four: an envelope needs all of A, D, S and R for a note to have a shape, and
         // the waveform is the fifth. The panel divides its body by the rows it has.
@@ -475,7 +491,7 @@ object Types {
     )
     val In = ModuleType(
         "In", emptyList(), listOf(Port("L", A), Port("R", A)),
-        Color(0xFF7FB0E5),
+        Color(0xFF86A9CC),
         // Was a constant, and the right amount depends on the room.
         params = listOf(Param("gain", 0.25f, 64f, 8f, "x", EXP)),
         pinned = Edge.LEFT,
@@ -1102,7 +1118,7 @@ internal fun panelCellAt(
     if (module.type.grid == GridKind.DRONE) {
         val columns = droneColumns(scale)
         val column = ((at.x - area.left) / (area.width / columns)).toInt().coerceIn(0, columns - 1)
-        val degree = droneDegree(module, row, column, window.rows, scale)
+        val degree = droneDegree(window, row, column, scale)
         // A cell is its own index, because a drone's degrees are laid out in order and
         // run no further than its cells do.
         return degree to degree
@@ -1154,10 +1170,7 @@ private const val SEQUENCE_OCTAVES_BELOW = 3f
 private const val SEQUENCE_OCTAVES_ABOVE = 4f
 
 internal fun gridWindow(module: PatchModule, area: Rect, d: Float, scale: Scale): GridWindow {
-    if (module.type.grid == GridKind.DRONE) {
-        val rows = droneRows(area, d, scale)
-        return GridWindow(droneBottom(module, rows, scale), rows, 0, scale.size - 1)
-    }
+    if (module.type.grid == GridKind.DRONE) return droneWindow(module, area, d, scale)
     val rows = gridRows(area, d)
     val written = module.steps.map { it.degree }
     val lowest = minOf(
@@ -1172,9 +1185,6 @@ internal fun gridWindow(module: PatchModule, area: Rect, d: Float, scale: Scale)
     return GridWindow(bottom, rows, lowest, highest)
 }
 
-/** A drone shows its scale's degrees, or as many of them as fit. */
-internal fun droneRows(area: Rect, d: Float, scale: Scale): Int =
-    minOf(gridRows(area, d), scale.size).coerceAtLeast(1)
 
 /**
  * Octave columns. Bounded by the cells there are, so a scale with many degrees to a period
@@ -1184,23 +1194,35 @@ internal fun droneColumns(scale: Scale): Int =
     (DRONE_CELLS / scale.size).coerceIn(1, DRONE_OCTAVES)
 
 /**
- * The lowest degree on screen, clamped to one period.
+ * A drone's rows: always as many as fit, starting from a degree of the scale and running on
+ * past the top of the period when the scale is shorter than the rows.
  *
- * A drone's rows are the scale itself, so scrolling past it would show the octave the next
- * column already holds. The stored position is a degree rather than a fraction of the
- * scale, so a change of scale leaves the same degree on the bottom row -- unless the new
- * scale cannot put it there, being too short for this many rows above it.
+ * The rows used to be the scale itself -- as many as it had degrees, when they fitted. So a
+ * scale list alternating twelve degrees and seven redrew the open grid every few bars, from
+ * eleven rows with the chosen degree at the bottom to seven taller ones with degree 0
+ * there, and back. Now nothing about the layout depends on the scale's length except which
+ * rows carry the tonic tint: the bottom row keeps its degree, and the rows only get
+ * different names. The price is that when rows outnumber degrees, the top of one column
+ * repeats the bottom of the next -- the same degrees, so the same cells, lit together and
+ * toggled together. Chosen on the phone, 2026-09-16.
+ *
+ * The bottom may be any degree of the first period, so it survives a change to any scale
+ * at least that long. It stops short of a top that would run the last column past the
+ * cells there are, which only a scale with more degrees than the other columns leave room
+ * for can reach.
  */
-internal fun droneBottom(module: PatchModule, rows: Int, scale: Scale): Int =
-    module.gridBottom.coerceIn(0, (scale.size - rows).coerceAtLeast(0))
+internal fun droneWindow(module: PatchModule, area: Rect, d: Float, scale: Scale): GridWindow {
+    val rows = gridRows(area, d)
+    val columns = droneColumns(scale)
+    val lastColumnStart = (columns - 1) * scale.size
+    val highest = minOf(scale.size - 1 + rows - 1, DRONE_CELLS - 1 - lastColumnStart)
+    val bottom = module.gridBottom.coerceIn(0, (highest - rows + 1).coerceAtLeast(0))
+    return GridWindow(bottom, rows, 0, highest)
+}
 
 /** The degree at a row and column, which is also its cell. Degrees ascend up the screen. */
-internal fun droneDegree(
-    module: PatchModule, row: Int, column: Int, rows: Int, scale: Scale,
-): Int {
-    val within = droneBottom(module, rows, scale) + (rows - 1 - row)
-    return (column * scale.size + within).coerceIn(0, DRONE_CELLS - 1)
-}
+internal fun droneDegree(window: GridWindow, row: Int, column: Int, scale: Scale): Int =
+    column * scale.size + window.degreeAt(row)
 
 /** How many degrees fit. Whole rows only -- a half-height row at the bottom is a lie. */
 internal fun gridRows(area: Rect, d: Float): Int =
@@ -2665,7 +2687,8 @@ private fun DrawScope.drawDroneGrid(
     scale: Scale,
     accent: Color,
 ) {
-    val rows = droneRows(area, d, scale)
+    val window = droneWindow(module, area, d, scale)
+    val rows = window.rows
     val columns = droneColumns(scale)
     val cellW = area.width / columns
     val cellH = area.height / rows
@@ -2674,7 +2697,7 @@ private fun DrawScope.drawDroneGrid(
 
     repeat(rows) { row ->
         repeat(columns) { column ->
-            val degree = droneDegree(module, row, column, rows, scale)
+            val degree = droneDegree(window, row, column, scale)
             val on = module.steps.getOrNull(degree)?.on == true
             // The tonic of each column, so the octaves read as octaves rather than as
             // four columns of undifferentiated cells.

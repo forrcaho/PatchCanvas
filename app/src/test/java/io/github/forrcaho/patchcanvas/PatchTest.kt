@@ -182,20 +182,18 @@ class PatchModelTest {
         val drone = p.add(Types.Drone, Offset.Zero)!!
         val area = droneArea()
         val scale = Scale.Chromatic
-        val rows = droneRows(area, 1f, scale)
+        val window = droneWindow(drone, area, 1f, scale)
+        val rows = window.rows
 
         // The bottom row of the first column is the lowest degree on screen, and the row
         // above it is one degree higher: pitch ascends up the screen.
-        val bottom = droneDegree(drone, rows - 1, 0, rows, scale)
-        val above = droneDegree(drone, rows - 2, 0, rows, scale)
+        val bottom = droneDegree(window, rows - 1, 0, scale)
+        val above = droneDegree(window, rows - 2, 0, scale)
         assertEquals(above, bottom + 1)
 
         // The same row one column right is the same degree an octave up, which is what
         // makes a column an octave rather than just the next twelve degrees.
-        assertEquals(
-            bottom + scale.size,
-            droneDegree(drone, rows - 1, 1, rows, scale),
-        )
+        assertEquals(bottom + scale.size, droneDegree(window, rows - 1, 1, scale))
     }
 
     @Test
@@ -205,29 +203,26 @@ class PatchModelTest {
         assertEquals(DRONE_OCTAVES, droneColumns(Scale.Chromatic))
         assertEquals(2, droneColumns(Scale.equal("22", 22)))
         assertEquals(1, droneColumns(Scale.equal("40", 40)))
-        // Whatever the scale, no cell lands past the end.
-        listOf(5, 12, 22, 40).forEach { size ->
+        // Whatever the scale, and however far it is scrolled, no cell lands past the end --
+        // including a scale of 64, whose one column cannot scroll its top past cell 63.
+        listOf(5, 7, 12, 22, 40, 64).forEach { size ->
             val scale = Scale.equal("$size", size)
-            val p = Patch()
-            val drone = p.add(Types.Drone, Offset.Zero)!!
-            val rows = droneRows(droneArea(), 1f, scale)
-            val top = droneDegree(drone, 0, droneColumns(scale) - 1, rows, scale)
+            val drone = Patch().add(Types.Drone, Offset.Zero)!!
+            drone.gridBottom = droneWindow(drone, droneArea(), 1f, scale).scrolledBy(1000)
+            val window = droneWindow(drone, droneArea(), 1f, scale)
+            val top = droneDegree(window, 0, droneColumns(scale) - 1, scale)
             assertTrue("$size-degree scale reached cell $top", top < DRONE_CELLS)
         }
     }
 
     @Test
-    fun `a drone's rows stay inside one period however far it is scrolled`() {
-        val p = Patch()
-        val drone = p.add(Types.Drone, Offset.Zero)!!
+    fun `a drone's bottom row is always a degree of its first period`() {
+        val drone = Patch().add(Types.Drone, Offset.Zero)!!
         val scale = Scale.Chromatic
-        val rows = droneRows(droneArea(), 1f, scale)
-
-        // Scrolling past the scale would show the octave the next column already holds.
         drone.gridBottom = 900
-        assertEquals(scale.size - rows, droneBottom(drone, rows, scale))
+        assertEquals(scale.size - 1, droneWindow(drone, droneArea(), 1f, scale).bottom)
         drone.gridBottom = -900
-        assertEquals(0, droneBottom(drone, rows, scale))
+        assertEquals(0, droneWindow(drone, droneArea(), 1f, scale).bottom)
     }
 
     /**
@@ -246,8 +241,8 @@ class PatchModelTest {
         // A long drag upward, far past the top of 12-TET.
         drone.gridBottom = gridWindow(drone, area, 1f, twelve).scrolledBy(100)
         val shown = gridWindow(drone, area, 1f, twelve).bottom
-        assertEquals("the top of 12-TET, and nothing stored beyond it", 4, drone.gridBottom)
-        assertEquals(4, shown)
+        assertEquals("the top of 12-TET, and nothing stored beyond it", 11, drone.gridBottom)
+        assertEquals(11, shown)
 
         assertEquals(
             "the same degree stays on the bottom row in a longer scale",
@@ -265,19 +260,40 @@ class PatchModelTest {
         val area = droneArea()
         drone.gridBottom = gridWindow(drone, area, 1f, Scale.Chromatic).scrolledBy(100)
         drone.gridBottom = gridWindow(drone, area, 1f, Scale.Chromatic).scrolledBy(-1)
-        assertEquals(3, gridWindow(drone, area, 1f, Scale.Chromatic).bottom)
+        assertEquals(10, gridWindow(drone, area, 1f, Scale.Chromatic).bottom)
+    }
+
+    /**
+     * What the phone showed: a scale list alternating 12-TET and a seven-degree scale
+     * redrew the open grid every few bars, from as many rows as fit with the chosen degree
+     * at the bottom to seven taller rows with degree 0 there. The rows now stay put and run
+     * past the top of the short scale instead.
+     */
+    @Test
+    fun `a scale shorter than the rows keeps the bottom degree and runs past its period`() {
+        val drone = Patch().add(Types.Drone, Offset.Zero)!!
+        drone.gridBottom = 4
+        val twelve = droneWindow(drone, droneArea(), 1f, Scale.Chromatic)
+        val seven = Scale.equal("7", 7)
+        val short = droneWindow(drone, droneArea(), 1f, seven)
+
+        assertEquals("the same bottom degree", 4, short.bottom)
+        assertEquals("and the same rows, so nothing reshapes", twelve.rows, short.rows)
+
+        // Eight rows from degree 4 of a seven-degree scale reach degree 11, which is degree
+        // 4 of the next period: the top of one column is the bottom of the next.
+        assertEquals(
+            droneDegree(short, short.rows - 1, 1, seven),
+            droneDegree(short, 0, 0, seven),
+        )
     }
 
     @Test
-    fun `a scale too short to keep the bottom degree shows all of itself instead`() {
+    fun `a bottom past the end of a shorter scale lands on its last degree`() {
         val drone = Patch().add(Types.Drone, Offset.Zero)!!
-        drone.gridBottom = 4
-        // Seven degrees fit in eight rows whole, so there is nothing to scroll and degree 0
-        // has to be at the bottom. The stored position survives for the next longer scale.
-        val major = Scale.equal("7", 7)
-        assertEquals(0, gridWindow(drone, droneArea(), 1f, major).bottom)
-        assertFalse(gridWindow(drone, droneArea(), 1f, major).scrolls)
-        assertEquals(4, gridWindow(drone, droneArea(), 1f, Scale.Chromatic).bottom)
+        drone.gridBottom = 15 // a degree only a longer scale has
+        assertEquals(15, droneWindow(drone, droneArea(), 1f, Scale.equal("22", 22)).bottom)
+        assertEquals(11, droneWindow(drone, droneArea(), 1f, Scale.Chromatic).bottom)
     }
 
     @Test

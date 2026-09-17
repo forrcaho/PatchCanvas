@@ -37,7 +37,8 @@ class ModulationPanelTest {
         val drone = patch.add(Types.Drone, Offset.Zero)!!
         val scale = Scale.Chromatic
         val area = panelGrid(panel, d, Types.Drone)
-        val rows = droneRows(area, d, scale)
+        val window = droneWindow(drone, area, d, scale)
+        val rows = window.rows
         val columns = droneColumns(scale)
 
         // The middle of every cell must find that cell and no other.
@@ -50,7 +51,7 @@ class ModulationPanelTest {
                 val cell = panelCellAt(panel, d, drone, at, scale)
                 assertEquals(
                     "row $row column $column",
-                    droneDegree(drone, row, column, rows, scale),
+                    droneDegree(window, row, column, scale),
                     cell?.first,
                 )
                 // A drone's cell is its own degree, which is what lets the tap that
