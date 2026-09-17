@@ -264,6 +264,56 @@ class GroupTest {
     }
 
     @Test
+    fun `a port can be added after grouping, by patching to a rail`() {
+        val f = GroupFixture()
+        val group = f.patch.group(setOf(f.lfo.id, f.env.id))!!
+        val outputsBefore = group.ports(PortDirection.OUTPUT).map { it }
+
+        // The envelope's output already leaves the group (to the mix's level); give the LFO
+        // an output of its own, and patch that outside to the mix's level as well.
+        assertTrue(f.patch.addGroupPort(group.id, PortRef(f.lfo.id, PortDirection.OUTPUT, 0)))
+        val added = group.ports(PortDirection.OUTPUT)
+        assertEquals("existing ports stay where they were", outputsBefore, added.take(outputsBefore.size))
+        assertEquals(Port("out", SignalKind.MODULATION), added.last())
+
+        val index = added.size - 1
+        assertTrue(f.patch.connect(PortRef(group.id, PortDirection.OUTPUT, index), PortRef(f.mix.id, PortDirection.MOD, 1)))
+        assertTrue(
+            "the new port carries the LFO all the way out",
+            Connection(PortRef(f.lfo.id, PortDirection.OUTPUT, 0), PortRef(f.mix.id, PortDirection.MOD, 1)) in f.patch.engineConnections(),
+        )
+
+        // And an input: the envelope's notes, fed from a second new port on the left rail.
+        val inputs = group.ports(PortDirection.INPUT).size
+        f.patch.disconnect(PortRef(f.env.id, PortDirection.INPUT, 0))
+        assertTrue(f.patch.addGroupPort(group.id, PortRef(f.env.id, PortDirection.INPUT, 0)))
+        assertEquals(inputs + 1, group.ports(PortDirection.INPUT).size)
+        assertEquals(SignalKind.NOTE, group.ports(PortDirection.INPUT).last().kind)
+    }
+
+    @Test
+    fun `a port is not added for a jack outside the group or on its rails`() {
+        val f = GroupFixture()
+        val group = f.patch.group(setOf(f.osc.id))!!
+        val count = group.ports(PortDirection.OUTPUT).size
+        assertFalse(f.patch.addGroupPort(group.id, PortRef(f.filter.id, PortDirection.OUTPUT, 0)))
+        val railIn = f.patch.groupRail(group.id, Types.GroupIn)!!
+        assertFalse(f.patch.addGroupPort(group.id, PortRef(railIn.id, PortDirection.OUTPUT, 0)))
+        assertEquals(count, group.ports(PortDirection.OUTPUT).size)
+    }
+
+    @Test
+    fun `a group's rail does not move its jacks when a port is added`() {
+        val f = GroupFixture()
+        val group = f.patch.group(setOf(f.lfo.id, f.env.id))!!
+        val railOut = f.patch.groupRail(group.id, Types.GroupOut)!!
+        val before = frame.railRect(railOut).top
+        f.patch.addGroupPort(group.id, PortRef(f.lfo.id, PortDirection.OUTPUT, 0))
+        f.patch.addGroupPort(group.id, PortRef(f.lfo.id, PortDirection.OUTPUT, 0))
+        assertEquals("a grown rail keeps its top, so its first jack stays put", before, frame.railRect(railOut).top, 0.01f)
+    }
+
+    @Test
     fun `undo through a group restores it exactly`() {
         val f = GroupFixture()
         val loose = f.patch.toJson()

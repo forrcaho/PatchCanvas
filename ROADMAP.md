@@ -1602,9 +1602,13 @@ switches no longer get it.
 **Left for the phone and for later:**
 - **Groups have no names.** Every box and every crumb says "Group", so three levels read
   "Patch > Group > Group". Naming needs text entry, which nothing else here has yet.
-- **A port can only come from grouping.** An empty rail -- the outer group's left rail when
-  nothing came in -- has no way to gain one. "Patch to the rail's edge to add a port" is the
-  intended gesture and is not built.
+- ~~**A port can only come from grouping.**~~ **Built the same night:** inside a group,
+  arm a jack and tap the matching rail -- an output to the right rail, an input or a knob's
+  jack to the left -- and the group gains a port of that jack's name and kind, wired to it,
+  after the ports it already had. A group's rails now hang from a fixed top under the chips
+  rather than being centered, because a centered rail re-centers as it grows and would slide
+  every jack already on it. On the emulator, an LFO inside a nested group patched to its right
+  rail made a second output port without moving the first.
 - **A new group lands where the chosen modules' top-left corner was,** which can put its box
   under the top row of chips, as grouping near the top of the demo patch did.
 - **A parameter cannot yet be exposed through a group's boundary** (Phase 7's "promote a

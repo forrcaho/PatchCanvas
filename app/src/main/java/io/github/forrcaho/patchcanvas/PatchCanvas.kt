@@ -1598,6 +1598,35 @@ class Patch {
         }
     }
 
+    /**
+     * Gives group [groupId] a new port, wired to [inside] -- a jack on a module inside it --
+     * and says whether it did. An input jack, or a parameter's, gets a new input fed from the
+     * left rail; an output gets a new output feeding the right rail. The port takes the jack's
+     * name and kind, and is added after the others, so no port already there moves.
+     *
+     * This is the way a port is added after grouping: patch to the rail's edge.
+     */
+    fun addGroupPort(groupId: Long, inside: PortRef): Boolean {
+        val group = module(groupId)?.takeIf { it.type == Types.Group } ?: return false
+        val ports = group.groupPorts ?: return false
+        val owner = module(inside.moduleId) ?: return false
+        if (owner.parent != groupId || owner.isPinned) return false
+        val jack = port(inside) ?: return false
+        return if (inside.dir == PortDirection.OUTPUT) {
+            val railOut = groupRail(groupId, Types.GroupOut) ?: return false
+            val index = ports.outputs.size
+            ports.outputs += Port(jack.name, jack.kind)
+            connect(inside, PortRef(railOut.id, PortDirection.INPUT, index))
+                .also { if (!it) ports.outputs.removeAt(index) }
+        } else {
+            val railIn = groupRail(groupId, Types.GroupIn) ?: return false
+            val index = ports.inputs.size
+            ports.inputs += Port(jack.name, jack.kind)
+            connect(PortRef(railIn.id, PortDirection.OUTPUT, index), inside)
+                .also { if (!it) ports.inputs.removeAt(index) }
+        }
+    }
+
     /** What the engine runs: every module that makes or shapes sound, at any depth. */
     val engineModules: List<PatchModule> get() = modules.filter { !it.type.structural }
 
@@ -1828,7 +1857,14 @@ internal class Frame(
         val d = density
         val w = PatchModule.RAIL_WIDTH * d
         val h = module.height * d
-        val top = insetTop + (canvas.height - insetTop - insetBottom - h) / 2f
+        // A group's rails hang from a fixed top instead of being centered. Their ports can
+        // be added to, and a centered rail would re-center as it grew -- sliding every jack
+        // already on it and every cable with it, which is what ports must never do.
+        val top = if (module.type.structural) {
+            insetTop + (RAIL_MARGIN + TRANSPORT_CHIP_H + GROUP_RAIL_GAP) * d
+        } else {
+            insetTop + (canvas.height - insetTop - insetBottom - h) / 2f
+        }
         val left = when (module.type.pinned) {
             Edge.LEFT -> insetLeft + RAIL_MARGIN * d
             else -> canvas.width - insetRight - RAIL_MARGIN * d - w
@@ -1975,6 +2011,8 @@ internal class Frame(
         const val SCALE_CARD_FOOT = 54f
         const val SCALE_ROW = 44f
         const val SCALE_PICKER_W = 830f
+        /** Below the top row of chips, which a group's rails hang from. */
+        const val GROUP_RAIL_GAP = 24f
         const val CRUMB_W = 96f
         const val CRUMB_GAP = 6f
         const val SELECT_BUTTON_W = 120f
@@ -3991,6 +4029,18 @@ private fun handleTap(
             if (port != null) Interaction.Connecting(port) else Interaction.Idle
         }
         is Interaction.Connecting -> when {
+            // Inside a group, an armed jack taken to the matching rail's edge makes a new
+            // port for it: an output to the right rail, an input or a knob's jack to the
+            // left. The wrong rail keeps the jack armed, as a patch that cannot be made does.
+            port == null && patch.scopeOrTop != TOP -> {
+                val rail = patch.shownRails.firstOrNull { frame.railRect(it).contains(screen) }
+                val wants = if (current.source.dir == PortDirection.OUTPUT) Types.GroupOut else Types.GroupIn
+                when {
+                    rail == null -> Interaction.Idle
+                    rail.type == wants && patch.addGroupPort(patch.scopeOrTop, current.source) -> Interaction.Idle
+                    else -> current
+                }
+            }
             port == null -> Interaction.Idle                      // tapped away: cancel
             port == current.source -> {                            // tapped self: unpatch
                 patch.disconnect(port)
