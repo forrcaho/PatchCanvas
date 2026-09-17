@@ -4,15 +4,27 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.*
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.snapshots.SnapshotStateList
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -20,6 +32,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -27,13 +40,19 @@ import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.AwaitPointerEventScope
 import androidx.compose.ui.input.pointer.PointerEventTimeoutCancellationException
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalFontFamilyResolver
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
@@ -594,6 +613,19 @@ class PatchModule(
      * patch stay one level deep, and entering a group is a filter on this.
      */
     var parent by mutableLongStateOf(TOP)
+
+    /**
+     * What this module is called, or null to go by its type's name.
+     *
+     * Groups need one most: every group is the same type, so without a name the boxes,
+     * the panel and the breadcrumb all say "Group" and nothing tells two of them apart.
+     * Any module can take one for the same reason -- a type says what a module is, a
+     * name says what it is doing in this patch.
+     */
+    var name by mutableStateOf<String?>(null)
+
+    /** The name to draw: the given one, or the type's. */
+    val title: String get() = name ?: type.name
 
     /** Knob values in real units, one per declared parameter, starting at their defaults. */
     val params: SnapshotStateList<Float> =
@@ -1323,6 +1355,12 @@ data class PortRef(val moduleId: Long, val dir: PortDirection, val index: Int)
 
 data class Connection(val from: PortRef, val to: PortRef)
 
+/** A default group name, which is what a new group is numbered against. */
+private val GROUP_NUMBER = Regex("""Group (\d+)""")
+
+/** How long a name may be, in characters: enough to be a label, short enough to fit a box. */
+internal const val MAX_NAME = 16
+
 class Patch {
     val modules = mutableStateListOf<PatchModule>()
     val connections = mutableStateListOf<Connection>()
@@ -1470,10 +1508,28 @@ class Patch {
     fun groupRail(group: Long, type: ModuleType): PatchModule? =
         modules.firstOrNull { it.parent == group && it.type == type }
 
+    /**
+     * "Group 1", "Group 2", ... -- one past the highest number in use.
+     *
+     * Counted over every module in the patch rather than the scope being grouped, since a
+     * breadcrumb shows groups from several scopes side by side and two "Group 2"s there
+     * would be a worse answer than a gap in the numbering. A renamed group simply drops
+     * out of the count, and the number it held can come round again.
+     */
+    internal fun nextGroupName(): String {
+        val taken = modules.mapNotNull { m ->
+            GROUP_NUMBER.matchEntire(m.name.orEmpty())?.groupValues?.get(1)?.toIntOrNull()
+        }
+        return "Group ${(taken.maxOrNull() ?: 0) + 1}"
+    }
+
     fun duplicate(module: PatchModule): PatchModule? = when {
         module.isPinned -> null
         module.type == Types.Group -> duplicateGroup(module)
-        else -> add(module.type, module.position + Offset(28f, 28f))?.also { it.parent = module.parent }
+        else -> add(module.type, module.position + Offset(28f, 28f))?.also {
+            it.parent = module.parent
+            it.name = module.name
+        }
     }
 
     /**
@@ -1482,6 +1538,9 @@ class Patch {
      * Cables to the outside are not copied, as duplicating a single module copies none.
      */
     private fun duplicateGroup(group: PatchModule): PatchModule {
+        // The copy is a new group and takes the next free number; the groups nested inside
+        // it keep their names, since those are only ever read from within it.
+        val fresh = nextGroupName()
         val inside = descendants(group.id)
         val originals = modules.filter { it.id == group.id || it.id in inside }
         val newId = originals.associate { it.id to nextId++ }
@@ -1495,6 +1554,7 @@ class Patch {
             }
             val offset = if (from.id == group.id) Offset(28f, 28f) else Offset.Zero
             val copy = PatchModule(newId.getValue(from.id), from.type, from.position + offset, ports)
+            copy.name = if (from.id == group.id) fresh else from.name
             from.params.forEachIndexed { i, v -> copy.setParam(i, v) }
             from.steps.forEachIndexed { i, step -> copy.setStep(i, step) }
             copy.modRanges = from.modRanges
@@ -1533,7 +1593,7 @@ class Patch {
             nextId++, Types.Group,
             Offset(chosen.minOf { it.position.x }, chosen.minOf { it.position.y }),
             ports,
-        ).also { it.parent = at }
+        ).also { it.parent = at; it.name = nextGroupName() }
         val railIn = PatchModule(nextId++, Types.GroupIn, Offset.Zero, ports).also { it.parent = group.id }
         val railOut = PatchModule(nextId++, Types.GroupOut, Offset.Zero, ports).also { it.parent = group.id }
 
@@ -1756,6 +1816,15 @@ sealed interface Interaction {
      * gesture loop to tell apart on the first move.
      */
     data class Selecting(val ids: Set<Long>) : Interaction
+
+    /**
+     * A module is being named, with the system keyboard up.
+     *
+     * The only interaction that is not drawn on the canvas: text entry needs a real
+     * `BasicTextField` to get an IME, autocorrect and a cursor, so this one puts a
+     * composable over the canvas rather than another shape inside it.
+     */
+    data class Renaming(val moduleId: Long) : Interaction
 }
 
 sealed interface MenuItem {
@@ -1764,13 +1833,16 @@ sealed interface MenuItem {
     data class Delete(val moduleId: Long) : MenuItem
     data object StartGroup : MenuItem
     data class Ungroup(val moduleId: Long) : MenuItem
+    data class Rename(val moduleId: Long) : MenuItem
 }
 
 private fun menuItems(patch: Patch, targetId: Long?): List<MenuItem> = when {
     targetId == null -> Types.palette.map { MenuItem.Add(it) } + MenuItem.StartGroup
-    patch.module(targetId)?.type == Types.Group ->
-        listOf(MenuItem.Duplicate(targetId), MenuItem.Delete(targetId), MenuItem.Ungroup(targetId))
-    else -> listOf(MenuItem.Duplicate(targetId), MenuItem.Delete(targetId))
+    patch.module(targetId)?.type == Types.Group -> listOf(
+        MenuItem.Duplicate(targetId), MenuItem.Rename(targetId),
+        MenuItem.Delete(targetId), MenuItem.Ungroup(targetId),
+    )
+    else -> listOf(MenuItem.Duplicate(targetId), MenuItem.Rename(targetId), MenuItem.Delete(targetId))
 }
 
 /** The groups from the top down to the one being looked at, [TOP] first. */
@@ -2472,544 +2544,630 @@ fun PatchCanvas(
         }
     }
 
-    Canvas(
-        modifier = modifier
-            .fillMaxSize()
-            .pointerInput(Unit) {
-                val slop = viewConfiguration.touchSlop
-                val longPressMs =
-                    (viewConfiguration.longPressTimeoutMillis * LONG_PRESS_SCALE).toLong()
-                val touchPx = portTouchRadius.toPx()
+    Box(modifier = modifier.fillMaxSize()) {
+        Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    val slop = viewConfiguration.touchSlop
+                    val longPressMs =
+                        (viewConfiguration.longPressTimeoutMillis * LONG_PRESS_SCALE).toLong()
+                    val touchPx = portTouchRadius.toPx()
 
-                awaitEachGesture {
-                    val frame = frameFor(Size(size.width.toFloat(), size.height.toFloat()))
-                    val down = awaitFirstDown(requireUnconsumed = false)
+                    awaitEachGesture {
+                        val frame = frameFor(Size(size.width.toFloat(), size.height.toFloat()))
+                        val down = awaitFirstDown(requireUnconsumed = false)
 
-                    // The transport floats over the graph and the panel alike, so it is
-                    // asked before either. Only its own chip and, while open, its own
-                    // card: a touch anywhere else carries on to whatever is underneath,
-                    // which is what keeps it from being modal. An open context menu keeps
-                    // its tiles, since it is the thing that was just asked for.
-                    if (interaction !is Interaction.Menu) {
-                        if (frame.transportChip().contains(down.position)) {
-                            waitForUpRelease()
-                            card = if (card == FloatingCard.Transport) FloatingCard.None
-                                else FloatingCard.Transport
-                            return@awaitEachGesture
-                        }
-                        if (frame.scaleChip().contains(down.position)) {
-                            waitForUpRelease()
-                            card = if (card == FloatingCard.Scales) FloatingCard.None
-                                else FloatingCard.Scales
-                            scaleView.pickingFor = -1
-                            scaleView.rootFor = -1
-                            return@awaitEachGesture
-                        }
-                        if (card == FloatingCard.Transport &&
-                            frame.transportCard().contains(down.position)
-                        ) {
-                            transportCardGesture(frame, down.position, patch, controls.onResetTransport)
-                            return@awaitEachGesture
-                        }
-                        val scaleArea = if (scaleView.onPage) frame.scalePicker()
-                            else frame.scaleCard(patch.scales.size)
-                        if (card == FloatingCard.Scales && scaleArea.contains(down.position)) {
-                            scaleCardGesture(frame, down.position, patch, scales, scaleView, slop)
-                            return@awaitEachGesture
-                        }
-                    }
-
-                    // An open panel owns the screen. Pan, zoom and patching all belong to
-                    // the canvas behind it, so this is a separate and much simpler loop
-                    // rather than another outcome bolted into the one below.
-                    val open = patch.modules.firstOrNull { it.expanded }
-                    if (open != null) {
-                        val panel = panelRect(frame)
-                        // Checked before the knobs, because the buttons float over the
-                        // panel and overhang its bottom edge -- where a tap would
-                        // otherwise be read as tapping away to close.
-                        val onHistory = controls.overHistory(frame, down.position)
-
-                        // The interval chooser owns the panel while it is open: nothing
-                        // behind it is reachable, so a stray tap picks nothing and changes
-                        // no knob. Anywhere dismisses it, including the chip itself.
-                        val intervalParam = open.type.intervalParam
-                        if (intervalParam >= 0 && intervalMenu) {
-                            val tiles = panelTiles(panel, frame.density, INTERVALS.size)
-                            waitForUpRelease()
-                            val hit = tiles.indexOfFirst { it.contains(down.position) }
-                            if (hit >= 0) open.setParam(intervalParam, hit.toFloat())
-                            intervalMenu = false
-                            return@awaitEachGesture
-                        }
-
-                        if (intervalParam >= 0 &&
-                            panelIntervalChip(panel, frame.density).contains(down.position)
-                        ) {
-                            waitForUpRelease()
-                            intervalMenu = true
-                            return@awaitEachGesture
-                        }
-                        // The [ ] chips come before the rows beside them. Only the chip itself
-                        // counts, so a near miss on a knob never gives anything a jack.
-                        val chipFor = if (onHistory) null else open.type.rowParams.firstOrNull {
-                            open.canExpose(it) &&
-                                panelModChip(panel, frame.density, open.type, it).contains(down.position)
-                        }
-                        if (chipFor != null) {
-                            waitForUpRelease()
-                            if (chipFor in open.modRanges) {
-                                patch.unexpose(open, chipFor)
-                            } else {
-                                val param = open.type.params[chipFor]
-                                patch.expose(open, chipFor, initialModRange(param, open.params[chipFor]))
+                        // The transport floats over the graph and the panel alike, so it is
+                        // asked before either. Only its own chip and, while open, its own
+                        // card: a touch anywhere else carries on to whatever is underneath,
+                        // which is what keeps it from being modal. An open context menu keeps
+                        // its tiles, since it is the thing that was just asked for.
+                        if (interaction !is Interaction.Menu) {
+                            if (frame.transportChip().contains(down.position)) {
+                                waitForUpRelease()
+                                card = if (card == FloatingCard.Transport) FloatingCard.None
+                                    else FloatingCard.Transport
+                                return@awaitEachGesture
                             }
-                            return@awaitEachGesture
-                        }
-
-                        // A bracket before the knob it sits on: dragging `[` or `]` moves that
-                        // end of the range, and leaves the knob where it is.
-                        val bracket: Pair<Int, Boolean>? =
-                            if (onHistory) null
-                            else open.modRanges.keys.firstNotNullOfOrNull { index ->
-                                panelBracketAt(panel, frame.density, open, index, down.position)
-                                    ?.let { index to it }
+                            if (frame.scaleChip().contains(down.position)) {
+                                waitForUpRelease()
+                                card = if (card == FloatingCard.Scales) FloatingCard.None
+                                    else FloatingCard.Scales
+                                scaleView.pickingFor = -1
+                                scaleView.rootFor = -1
+                                return@awaitEachGesture
                             }
-                        val knob =
-                            if (onHistory || bracket != null) null
-                            else panelKnobAt(panel, frame.density, open, down.position)
-                        val cell =
-                            if (onHistory || knob != null) null
-                            else panelCellAt(panel, frame.density, open, down.position, gridScale)
-
-                        // Scrolling the grid is measured from where the drag began and
-                        // in whole rows, so a slow drag moves the same distance as a fast
-                        // one and never lands between two degrees.
-                        // The height a row actually got, not GRID_ROW: rows divide the
-                        // area evenly once their count is fixed, so the two differ by
-                        // the remainder and a drag measured against the nominal value
-                        // slides against the grid it is supposed to be moving.
-                        val gridArea = panelGrid(panel, frame.density, open.type)
-                        // Taken from the window rather than worked out again here: a drone
-                        // shows fewer rows than fit when its scale is short, and a drag
-                        // measured against the rows that would fit slid against the grid.
-                        val window = gridWindow(open, gridArea, frame.density, gridScale)
-                        val rowHeight = gridArea.height / window.rows
-                        var moved = false
-
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val pressed = event.changes.filter { it.pressed }
-                            if (pressed.isEmpty()) break
-                            val change = pressed.first()
-                            if ((change.position - down.position).getDistance() > slop) {
-                                moved = true
+                            if (card == FloatingCard.Transport &&
+                                frame.transportCard().contains(down.position)
+                            ) {
+                                transportCardGesture(frame, down.position, patch, controls.onResetTransport)
+                                return@awaitEachGesture
                             }
-                            if (bracket != null) {
-                                patch.moveBracket(
-                                    open, panel, frame.density, bracket.first, bracket.second,
-                                    change.position.x,
-                                )
-                            } else if (knob != null) {
-                                val param = open.type.params[knob]
-                                open.setParam(
-                                    knob,
-                                    param.valueAt(
-                                        panelKnobPosition(panel, frame.density, change.position.x),
-                                    ),
-                                )
-                            } else if (cell != null) {
-                                // Down the screen is down in pitch, so dragging the grid
-                                // downward brings higher degrees into view.
-                                val rows = ((change.position.y - down.position.y) / rowHeight)
-                                // From where the view stood, never from a stored overshoot,
-                                // and never past either end: dragging back must move the
-                                // grid at once, and a scale change must not re-clamp a
-                                // position nobody could see.
-                                open.gridBottom = window.scrolledBy(rows.roundToInt())
-                            }
-                            change.consume()
-                        }
-
-                        if (!moved) {
-                            if (onHistory) {
-                                controls.tapHistory(frame, down.position)
-                            } else if (bracket != null) {
-                                patch.moveBracket(
-                                    open, panel, frame.density, bracket.first, bracket.second,
-                                    down.position.x,
-                                )
-                            } else if (knob != null) {
-                                // A tap on a knob jumps there, which is faster than
-                                // dragging when you already know where you want it.
-                                val param = open.type.params[knob]
-                                open.setParam(
-                                    knob,
-                                    param.valueAt(
-                                        panelKnobPosition(panel, frame.density, down.position.x),
-                                    ),
-                                )
-                            } else if (cell != null) {
-                                val (column, degree) = cell
-                                val step = open.steps[column]
-                                // Tapping the note that is already there mutes it rather
-                                // than clearing the cell: a rest still holds its pitch,
-                                // and tapping again brings it back without having to
-                                // remember what it was.
-                                open.setStep(
-                                    column,
-                                    if (step.degree == degree && step.on) step.copy(on = false)
-                                    else Step(degree, on = true),
-                                )
-                            } else if (!panel.contains(down.position)) {
-                                // The border is the way out. Tapping the panel itself does
-                                // nothing, so a missed knob never closes what you are
-                                // working on.
-                                open.expanded = false
+                            val scaleArea = if (scaleView.onPage) frame.scalePicker()
+                                else frame.scaleCard(patch.scales.size)
+                            if (card == FloatingCard.Scales && scaleArea.contains(down.position)) {
+                                scaleCardGesture(frame, down.position, patch, scales, scaleView, slop)
+                                return@awaitEachGesture
                             }
                         }
-                        return@awaitEachGesture
-                    }
 
-                    var kind = GestureKind.Undecided
-                    var draggedModule: PatchModule? = null
-                    var grabOffset = Offset.Zero
-                    val startPan = camera.pan
-                    var lastTwoFinger: TwoFinger? = null
+                        // An open panel owns the screen. Pan, zoom and patching all belong to
+                        // the canvas behind it, so this is a separate and much simpler loop
+                        // rather than another outcome bolted into the one below.
+                        val open = patch.modules.firstOrNull { it.expanded }
+                        if (open != null) {
+                            val panel = panelRect(frame)
+                            // Checked before the knobs, because the buttons float over the
+                            // panel and overhang its bottom edge -- where a tap would
+                            // otherwise be read as tapping away to close.
+                            val onHistory = controls.overHistory(frame, down.position)
 
-                    // Only a free module can be dragged; rails are welded to the edge.
-                    val hitModule = patch.hitModule(camera, frame, down.position)
-                    val draggable = hitModule?.takeIf { !it.isPinned }
+                            // The interval chooser owns the panel while it is open: nothing
+                            // behind it is reachable, so a stray tap picks nothing and changes
+                            // no knob. Anywhere dismisses it, including the chip itself.
+                            val intervalParam = open.type.intervalParam
+                            if (intervalParam >= 0 && intervalMenu) {
+                                val tiles = panelTiles(panel, frame.density, INTERVALS.size)
+                                waitForUpRelease()
+                                val hit = tiles.indexOfFirst { it.contains(down.position) }
+                                if (hit >= 0) open.setParam(intervalParam, hit.toFloat())
+                                intervalMenu = false
+                                return@awaitEachGesture
+                            }
 
-                    // ---- decide phase, under a long-press timer.
-                    //
-                    // The timer wraps only this phase rather than sitting alongside as a
-                    // second detector: stacking detectors is the thing thesis #3 exists
-                    // to avoid, and two of them would both consume this pointer.
-                    try {
-                        withTimeout(longPressMs) {
-                            while (kind == GestureKind.Undecided) {
+                            if (intervalParam >= 0 &&
+                                panelIntervalChip(panel, frame.density).contains(down.position)
+                            ) {
+                                waitForUpRelease()
+                                intervalMenu = true
+                                return@awaitEachGesture
+                            }
+                            // The [ ] chips come before the rows beside them. Only the chip itself
+                            // counts, so a near miss on a knob never gives anything a jack.
+                            val chipFor = if (onHistory) null else open.type.rowParams.firstOrNull {
+                                open.canExpose(it) &&
+                                    panelModChip(panel, frame.density, open.type, it).contains(down.position)
+                            }
+                            if (chipFor != null) {
+                                waitForUpRelease()
+                                if (chipFor in open.modRanges) {
+                                    patch.unexpose(open, chipFor)
+                                } else {
+                                    val param = open.type.params[chipFor]
+                                    patch.expose(open, chipFor, initialModRange(param, open.params[chipFor]))
+                                }
+                                return@awaitEachGesture
+                            }
+
+                            // A bracket before the knob it sits on: dragging `[` or `]` moves that
+                            // end of the range, and leaves the knob where it is.
+                            val bracket: Pair<Int, Boolean>? =
+                                if (onHistory) null
+                                else open.modRanges.keys.firstNotNullOfOrNull { index ->
+                                    panelBracketAt(panel, frame.density, open, index, down.position)
+                                        ?.let { index to it }
+                                }
+                            val knob =
+                                if (onHistory || bracket != null) null
+                                else panelKnobAt(panel, frame.density, open, down.position)
+                            val cell =
+                                if (onHistory || knob != null) null
+                                else panelCellAt(panel, frame.density, open, down.position, gridScale)
+
+                            // Scrolling the grid is measured from where the drag began and
+                            // in whole rows, so a slow drag moves the same distance as a fast
+                            // one and never lands between two degrees.
+                            // The height a row actually got, not GRID_ROW: rows divide the
+                            // area evenly once their count is fixed, so the two differ by
+                            // the remainder and a drag measured against the nominal value
+                            // slides against the grid it is supposed to be moving.
+                            val gridArea = panelGrid(panel, frame.density, open.type)
+                            // Taken from the window rather than worked out again here: a drone
+                            // shows fewer rows than fit when its scale is short, and a drag
+                            // measured against the rows that would fit slid against the grid.
+                            val window = gridWindow(open, gridArea, frame.density, gridScale)
+                            val rowHeight = gridArea.height / window.rows
+                            var moved = false
+
+                            while (true) {
                                 val event = awaitPointerEvent()
                                 val pressed = event.changes.filter { it.pressed }
-
-                                if (pressed.isEmpty()) {
-                                    kind = GestureKind.Tap
-                                } else if (pressed.size >= 2) {
-                                    val a = pressed[0].position
-                                    val b = pressed[1].position
-                                    lastTwoFinger = TwoFinger(
-                                        centroid = (a + b) / 2f,
-                                        spread = (a - b).getDistance(),
+                                if (pressed.isEmpty()) break
+                                val change = pressed.first()
+                                if ((change.position - down.position).getDistance() > slop) {
+                                    moved = true
+                                }
+                                if (bracket != null) {
+                                    patch.moveBracket(
+                                        open, panel, frame.density, bracket.first, bracket.second,
+                                        change.position.x,
                                     )
-                                    pressed.forEach { it.consume() }
-                                    kind = GestureKind.Transform
-                                } else {
-                                    val change = pressed.first()
-                                    if ((change.position - down.position).getDistance() > slop) {
-                                        kind = if (draggable != null && interaction is Interaction.Idle) {
-                                            draggedModule = draggable
-                                            grabOffset =
-                                                camera.toWorld(down.position) - draggable.position
-                                            GestureKind.MoveModule
-                                        } else {
-                                            GestureKind.Pan
+                                } else if (knob != null) {
+                                    val param = open.type.params[knob]
+                                    open.setParam(
+                                        knob,
+                                        param.valueAt(
+                                            panelKnobPosition(panel, frame.density, change.position.x),
+                                        ),
+                                    )
+                                } else if (cell != null) {
+                                    // Down the screen is down in pitch, so dragging the grid
+                                    // downward brings higher degrees into view.
+                                    val rows = ((change.position.y - down.position.y) / rowHeight)
+                                    // From where the view stood, never from a stored overshoot,
+                                    // and never past either end: dragging back must move the
+                                    // grid at once, and a scale change must not re-clamp a
+                                    // position nobody could see.
+                                    open.gridBottom = window.scrolledBy(rows.roundToInt())
+                                }
+                                change.consume()
+                            }
+
+                            if (!moved) {
+                                if (onHistory) {
+                                    controls.tapHistory(frame, down.position)
+                                } else if (bracket != null) {
+                                    patch.moveBracket(
+                                        open, panel, frame.density, bracket.first, bracket.second,
+                                        down.position.x,
+                                    )
+                                } else if (knob != null) {
+                                    // A tap on a knob jumps there, which is faster than
+                                    // dragging when you already know where you want it.
+                                    val param = open.type.params[knob]
+                                    open.setParam(
+                                        knob,
+                                        param.valueAt(
+                                            panelKnobPosition(panel, frame.density, down.position.x),
+                                        ),
+                                    )
+                                } else if (cell != null) {
+                                    val (column, degree) = cell
+                                    val step = open.steps[column]
+                                    // Tapping the note that is already there mutes it rather
+                                    // than clearing the cell: a rest still holds its pitch,
+                                    // and tapping again brings it back without having to
+                                    // remember what it was.
+                                    open.setStep(
+                                        column,
+                                        if (step.degree == degree && step.on) step.copy(on = false)
+                                        else Step(degree, on = true),
+                                    )
+                                } else if (!panel.contains(down.position)) {
+                                    // The border is the way out. Tapping the panel itself does
+                                    // nothing, so a missed knob never closes what you are
+                                    // working on.
+                                    open.expanded = false
+                                }
+                            }
+                            return@awaitEachGesture
+                        }
+
+                        var kind = GestureKind.Undecided
+                        var draggedModule: PatchModule? = null
+                        var grabOffset = Offset.Zero
+                        val startPan = camera.pan
+                        var lastTwoFinger: TwoFinger? = null
+
+                        // Only a free module can be dragged; rails are welded to the edge.
+                        val hitModule = patch.hitModule(camera, frame, down.position)
+                        val draggable = hitModule?.takeIf { !it.isPinned }
+
+                        // ---- decide phase, under a long-press timer.
+                        //
+                        // The timer wraps only this phase rather than sitting alongside as a
+                        // second detector: stacking detectors is the thing thesis #3 exists
+                        // to avoid, and two of them would both consume this pointer.
+                        try {
+                            withTimeout(longPressMs) {
+                                while (kind == GestureKind.Undecided) {
+                                    val event = awaitPointerEvent()
+                                    val pressed = event.changes.filter { it.pressed }
+
+                                    if (pressed.isEmpty()) {
+                                        kind = GestureKind.Tap
+                                    } else if (pressed.size >= 2) {
+                                        val a = pressed[0].position
+                                        val b = pressed[1].position
+                                        lastTwoFinger = TwoFinger(
+                                            centroid = (a + b) / 2f,
+                                            spread = (a - b).getDistance(),
+                                        )
+                                        pressed.forEach { it.consume() }
+                                        kind = GestureKind.Transform
+                                    } else {
+                                        val change = pressed.first()
+                                        if ((change.position - down.position).getDistance() > slop) {
+                                            kind = if (draggable != null && interaction is Interaction.Idle) {
+                                                draggedModule = draggable
+                                                grabOffset =
+                                                    camera.toWorld(down.position) - draggable.position
+                                                GestureKind.MoveModule
+                                            } else {
+                                                GestureKind.Pan
+                                            }
                                         }
                                     }
                                 }
                             }
-                        }
-                    } catch (_: PointerEventTimeoutCancellationException) {
-                        kind = GestureKind.LongPress
-                    }
-
-                    when (kind) {
-                        GestureKind.Tap -> {
-                            interaction = handleTap(
-                                patch, camera, frame, interaction, down.position, touchPx,
-                                controls,
-                            )
-                            return@awaitEachGesture
-                        }
-                        GestureKind.LongPress -> {
-                            // Holding a history button is not a request for the add menu;
-                            // it is a finger resting on a button. Nothing happens.
-                            val onButton = controls.overHistory(frame, down.position)
-                            // A rail offers nothing to delete, so it opens no menu -- but
-                            // it does have knobs, and tapping it is already its switch, so
-                            // holding is the way in to its panel.
-                            interaction = if (onButton) {
-                                Interaction.Idle
-                            } else if (interaction is Interaction.Selecting) {
-                                // Choosing is taps; a finger that rests does not end it.
-                                interaction
-                            } else if (hitModule != null && hitModule.isPinned) {
-                                if (hitModule.type.hasPanel) {
-                                    patch.modules.forEach { it.expanded = false }
-                                    hitModule.expanded = true
-                                }
-                                Interaction.Idle
-                            } else {
-                                Interaction.Menu(down.position, hitModule?.id)
-                            }
-                            // Swallow the rest of the gesture so the release is not a tap.
-                            while (true) {
-                                val event = awaitPointerEvent()
-                                event.changes.forEach { it.consume() }
-                                if (event.changes.none { it.pressed }) break
-                            }
-                            return@awaitEachGesture
-                        }
-                        else -> Unit
-                    }
-
-                    // ---- committed to a drag, a pan or a pinch
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val pressed = event.changes.filter { it.pressed }
-                        if (pressed.isEmpty()) break
-
-                        if (pressed.size >= 2) {
-                            kind = GestureKind.Transform
-                            val a = pressed[0].position
-                            val b = pressed[1].position
-                            val now = TwoFinger(
-                                centroid = (a + b) / 2f,
-                                spread = (a - b).getDistance(),
-                            )
-                            lastTwoFinger?.let { prev ->
-                                if (prev.spread > 0f) {
-                                    camera.zoomAround(now.centroid, now.spread / prev.spread)
-                                }
-                                camera.panBy(now.centroid - prev.centroid)
-                            }
-                            lastTwoFinger = now
-                            pressed.forEach { it.consume() }
-                            continue
+                        } catch (_: PointerEventTimeoutCancellationException) {
+                            kind = GestureKind.LongPress
                         }
 
-                        lastTwoFinger = null
-                        val change = pressed.first()
                         when (kind) {
-                            GestureKind.MoveModule -> {
-                                draggedModule?.position =
-                                    camera.toWorld(change.position) - grabOffset
-                                change.consume()
+                            GestureKind.Tap -> {
+                                interaction = handleTap(
+                                    patch, camera, frame, interaction, down.position, touchPx,
+                                    controls,
+                                )
+                                return@awaitEachGesture
                             }
-                            GestureKind.Pan -> {
-                                camera.panTo(startPan + (change.position - down.position))
-                                change.consume()
+                            GestureKind.LongPress -> {
+                                // Holding a history button is not a request for the add menu;
+                                // it is a finger resting on a button. Nothing happens.
+                                val onButton = controls.overHistory(frame, down.position)
+                                // A rail offers nothing to delete, so it opens no menu -- but
+                                // it does have knobs, and tapping it is already its switch, so
+                                // holding is the way in to its panel.
+                                interaction = if (onButton) {
+                                    Interaction.Idle
+                                } else if (interaction is Interaction.Selecting) {
+                                    // Choosing is taps; a finger that rests does not end it.
+                                    interaction
+                                } else if (hitModule != null && hitModule.isPinned) {
+                                    if (hitModule.type.hasPanel) {
+                                        patch.modules.forEach { it.expanded = false }
+                                        hitModule.expanded = true
+                                    }
+                                    Interaction.Idle
+                                } else {
+                                    Interaction.Menu(down.position, hitModule?.id)
+                                }
+                                // Swallow the rest of the gesture so the release is not a tap.
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    event.changes.forEach { it.consume() }
+                                    if (event.changes.none { it.pressed }) break
+                                }
+                                return@awaitEachGesture
                             }
                             else -> Unit
                         }
+
+                        // ---- committed to a drag, a pan or a pinch
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val pressed = event.changes.filter { it.pressed }
+                            if (pressed.isEmpty()) break
+
+                            if (pressed.size >= 2) {
+                                kind = GestureKind.Transform
+                                val a = pressed[0].position
+                                val b = pressed[1].position
+                                val now = TwoFinger(
+                                    centroid = (a + b) / 2f,
+                                    spread = (a - b).getDistance(),
+                                )
+                                lastTwoFinger?.let { prev ->
+                                    if (prev.spread > 0f) {
+                                        camera.zoomAround(now.centroid, now.spread / prev.spread)
+                                    }
+                                    camera.panBy(now.centroid - prev.centroid)
+                                }
+                                lastTwoFinger = now
+                                pressed.forEach { it.consume() }
+                                continue
+                            }
+
+                            lastTwoFinger = null
+                            val change = pressed.first()
+                            when (kind) {
+                                GestureKind.MoveModule -> {
+                                    draggedModule?.position =
+                                        camera.toWorld(change.position) - grabOffset
+                                    change.consume()
+                                }
+                                GestureKind.Pan -> {
+                                    camera.panTo(startPan + (change.position - down.position))
+                                    change.consume()
+                                }
+                                else -> Unit
+                            }
+                        }
+                    }
+                }
+        ) {
+            val frame = frameFor(size)
+            val d = density.density
+            val touchPx = portTouchRadius.toPx()
+
+            drawRect(Color(0xFF14171C))
+
+            withTransform({
+                translate(camera.pan.x, camera.pan.y)
+                scale(camera.worldToScreen, camera.worldToScreen, pivot = Offset.Zero)
+            }) {
+                val selecting = (interaction as? Interaction.Selecting)?.ids.orEmpty()
+                patch.shownFree.forEach { module ->
+                    drawModuleBox(
+                        module = module,
+                        rect = module.bounds,
+                        unit = 1f,
+                        // Dividing by zoom alone leaves a constant width in dp, which is
+                        // what "1.5dp of line" should mean at any zoom.
+                        strokeWidth = 1.5f / camera.zoom,
+                        armed = (interaction as? Interaction.Connecting)?.source,
+                        measurer = worldMeasurer,
+                        showTitle = camera.zoom >= Camera.TITLE_ZOOM,
+                        showLabels = camera.zoom >= Camera.LABEL_ZOOM,
+                        alpha = 1f,
+                    )
+                    if (module.id in flash.ids && pulse.value > 0f) {
+                        drawFlash(module.bounds, 1f, pulse.value, 3f / camera.zoom)
+                    }
+                    if (module.id in selecting) {
+                        drawRoundRect(
+                            color = SelectedColor,
+                            topLeft = module.bounds.topLeft,
+                            size = module.bounds.size,
+                            cornerRadius = CornerRadius(PatchModule.CORNER, PatchModule.CORNER),
+                            style = Stroke(width = 3f / camera.zoom),
+                        )
                     }
                 }
             }
-    ) {
-        val frame = frameFor(size)
-        val d = density.density
-        val touchPx = portTouchRadius.toPx()
 
-        drawRect(Color(0xFF14171C))
-
-        withTransform({
-            translate(camera.pan.x, camera.pan.y)
-            scale(camera.worldToScreen, camera.worldToScreen, pivot = Offset.Zero)
-        }) {
-            val selecting = (interaction as? Interaction.Selecting)?.ids.orEmpty()
-            patch.shownFree.forEach { module ->
+            patch.shownRails.forEach { rail ->
+                // Both rails dim when they are not passing anything, so "this is a switch and
+                // it is off" reads the same way on each. A correctly patched canvas that made
+                // no sound, with nothing on screen saying why, was the single most confusing
+                // thing about using this.
+                val live = when (rail.id) {
+                    IN_ID -> patch.inputEnabled
+                    OUT_ID -> outputActive
+                    else -> true
+                }
+                // A group's rails are not switches, so they get neither the dimming nor the
+                // switched-on outline -- the outline would say "this is live, tap to turn it
+                // off" about something with no off.
+                val switch = rail.id == IN_ID || rail.id == OUT_ID
                 drawModuleBox(
-                    module = module,
-                    rect = module.bounds,
-                    unit = 1f,
-                    // Dividing by zoom alone leaves a constant width in dp, which is
-                    // what "1.5dp of line" should mean at any zoom.
-                    strokeWidth = 1.5f / camera.zoom,
+                    module = rail,
+                    rect = frame.railRect(rail),
+                    unit = d,
+                    strokeWidth = 1.5f * d,
                     armed = (interaction as? Interaction.Connecting)?.source,
-                    measurer = worldMeasurer,
-                    showTitle = camera.zoom >= Camera.TITLE_ZOOM,
-                    showLabels = camera.zoom >= Camera.LABEL_ZOOM,
-                    alpha = 1f,
+                    measurer = screenMeasurer,
+                    showTitle = true,
+                    showLabels = true,
+                    alpha = if (live) 1f else 0.38f,
                 )
-                if (module.id in flash.ids && pulse.value > 0f) {
-                    drawFlash(module.bounds, 1f, pulse.value, 3f / camera.zoom)
-                }
-                if (module.id in selecting) {
+                // After the box, not before: drawModuleBox fills opaquely, so a highlight
+                // drawn underneath is painted straight over and never appears.
+                //
+                // Both rails get the same weight of outline when switched on, because they
+                // are the same kind of control and reading as different ones was confusing.
+                // In is red: a live microphone is a record light everywhere else, and the
+                // one rail that can embarrass you should be the one that looks urgent.
+                if (live && switch) {
+                    val r = frame.railRect(rail)
                     drawRoundRect(
-                        color = SelectedColor,
-                        topLeft = module.bounds.topLeft,
-                        size = module.bounds.size,
-                        cornerRadius = CornerRadius(PatchModule.CORNER, PatchModule.CORNER),
-                        style = Stroke(width = 3f / camera.zoom),
+                        color = if (rail.id == IN_ID) RecordRed else rail.type.accent,
+                        topLeft = r.topLeft,
+                        size = r.size,
+                        cornerRadius = CornerRadius(PatchModule.CORNER * d, PatchModule.CORNER * d),
+                        style = Stroke(width = 2.5f * d),
                     )
                 }
+                if (rail.id in flash.ids && pulse.value > 0f) {
+                    drawFlash(frame.railRect(rail), d, pulse.value, 3f * d)
+                }
             }
-        }
 
-        patch.shownRails.forEach { rail ->
-            // Both rails dim when they are not passing anything, so "this is a switch and
-            // it is off" reads the same way on each. A correctly patched canvas that made
-            // no sound, with nothing on screen saying why, was the single most confusing
-            // thing about using this.
-            val live = when (rail.id) {
-                IN_ID -> patch.inputEnabled
-                OUT_ID -> outputActive
-                else -> true
-            }
-            // A group's rails are not switches, so they get neither the dimming nor the
-            // switched-on outline -- the outline would say "this is live, tap to turn it
-            // off" about something with no off.
-            val switch = rail.id == IN_ID || rail.id == OUT_ID
-            drawModuleBox(
-                module = rail,
-                rect = frame.railRect(rail),
-                unit = d,
-                strokeWidth = 1.5f * d,
-                armed = (interaction as? Interaction.Connecting)?.source,
-                measurer = screenMeasurer,
-                showTitle = true,
-                showLabels = true,
-                alpha = if (live) 1f else 0.38f,
-            )
-            // After the box, not before: drawModuleBox fills opaquely, so a highlight
-            // drawn underneath is painted straight over and never appears.
+            // Cables over the modules rather than under them, and a little translucent, so a cable
+            // crossing a module stays visible and the module still shows through it. Drawn under,
+            // a cable passing behind a box simply vanished there, and which of two jacks it came
+            // out at was a guess. Routing around the boxes was the other candidate and was not
+            // tried first: a route flips sides as a module is dragged across it, and it costs a
+            // path search per cable per frame.
             //
-            // Both rails get the same weight of outline when switched on, because they
-            // are the same kind of control and reading as different ones was confusing.
-            // In is red: a live microphone is a record light everywhere else, and the
-            // one rail that can embarrass you should be the one that looks urgent.
-            if (live && switch) {
-                val r = frame.railRect(rail)
-                drawRoundRect(
-                    color = if (rail.id == IN_ID) RecordRed else rail.type.accent,
-                    topLeft = r.topLeft,
-                    size = r.size,
-                    cornerRadius = CornerRadius(PatchModule.CORNER * d, PatchModule.CORNER * d),
-                    style = Stroke(width = 2.5f * d),
-                )
-            }
-            if (rail.id in flash.ids && pulse.value > 0f) {
-                drawFlash(frame.railRect(rail), d, pulse.value, 3f * d)
-            }
-        }
-
-        // Cables over the modules rather than under them, and a little translucent, so a cable
-        // crossing a module stays visible and the module still shows through it. Drawn under,
-        // a cable passing behind a box simply vanished there, and which of two jacks it came
-        // out at was a guess. Routing around the boxes was the other candidate and was not
-        // tried first: a route flips sides as a module is dragged across it, and it costs a
-        // path search per cable per frame.
-        //
-        // In screen space, because a cable can run from a world module to a rail and so have
-        // one endpoint in each space. Resolving both through portScreen() keeps that a non-case.
-        patch.connections.forEach { conn ->
-            // Only a cable with both ends in this scope. A cable into a group ends at the
-            // group's box out here and starts again at its rail inside; either half alone is
-            // the whole of what can be seen from where you are.
-            if (!patch.shown(conn.from.moduleId) || !patch.shown(conn.to.moduleId)) return@forEach
-            val a = portScreen(patch, conn.from, camera, frame) ?: return@forEach
-            val b = portScreen(patch, conn.to, camera, frame) ?: return@forEach
-            val dim = !patch.portUsable(conn.from) || !patch.portUsable(conn.to)
-            // Colored by what the source emits, not what the destination expects --
-            // the two may legitimately differ, and the cable should say what is actually
-            // traveling down it.
-            val color = patch.kindOf(conn.from).cable.copy(alpha = if (dim) 0.3f else CABLE_ALPHA)
-            drawCable(a, b, color, 2.5f * d, intoBottom = conn.to.dir == PortDirection.MOD)
-            // A plug at each end, in the cable's color. Drawn over, the stroke would cover the
-            // jack's own dot; this puts one back, and says the jack is taken, as a patched jack
-            // on the open panel already does.
-            for ((ref, at) in listOf(conn.from to a, conn.to to b)) {
-                val pinned = patch.module(ref.moduleId)?.isPinned == true
-                val scale = if (pinned) d else camera.worldToScreen
-                drawCircle(color.copy(alpha = if (dim) 0.3f else 1f), PatchModule.PORT_RADIUS * scale, at)
-            }
-        }
-
-        // Halo on the armed port, drawn unscaled so it always reads as a real target.
-        (interaction as? Interaction.Connecting)?.let { state ->
-            portScreen(patch, state.source, camera, frame)?.let { at ->
-                drawCircle(
-                    color = Color(0xFF7FD1C1).copy(alpha = 0.28f),
-                    radius = effectiveTouchRadius(camera, touchPx),
-                    center = at,
-                )
-            }
-            // The empty slot after a group rail's last jack: where a port for the armed
-            // jack would go, and the only way to ask for one. Drawn only while something is
-            // armed, so a rail at rest is what it has and no more.
-            if (patch.scopeOrTop != TOP && patch.module(state.source.moduleId)?.parent == patch.scopeOrTop) {
-                patch.groupRail(patch.scopeOrTop, railTypeFor(state.source))?.let { rail ->
-                    val slot = groupPortSlot(frame, rail, railDirFor(state.source))
-                    val kind = patch.kindOf(state.source)
-                    drawCircle(kind.cable.copy(alpha = 0.22f), touchPx, slot)
-                    drawCircle(
-                        color = kind.cable,
-                        radius = PatchModule.PORT_RADIUS * d,
-                        center = slot,
-                        style = Stroke(width = 2f * d),
-                    )
-                    val arm = PatchModule.PORT_RADIUS * 0.6f * d
-                    drawLine(kind.cable, Offset(slot.x - arm, slot.y), Offset(slot.x + arm, slot.y), 2f * d)
-                    drawLine(kind.cable, Offset(slot.x, slot.y - arm), Offset(slot.x, slot.y + arm), 2f * d)
+            // In screen space, because a cable can run from a world module to a rail and so have
+            // one endpoint in each space. Resolving both through portScreen() keeps that a non-case.
+            patch.connections.forEach { conn ->
+                // Only a cable with both ends in this scope. A cable into a group ends at the
+                // group's box out here and starts again at its rail inside; either half alone is
+                // the whole of what can be seen from where you are.
+                if (!patch.shown(conn.from.moduleId) || !patch.shown(conn.to.moduleId)) return@forEach
+                val a = portScreen(patch, conn.from, camera, frame) ?: return@forEach
+                val b = portScreen(patch, conn.to, camera, frame) ?: return@forEach
+                val dim = !patch.portUsable(conn.from) || !patch.portUsable(conn.to)
+                // Colored by what the source emits, not what the destination expects --
+                // the two may legitimately differ, and the cable should say what is actually
+                // traveling down it.
+                val color = patch.kindOf(conn.from).cable.copy(alpha = if (dim) 0.3f else CABLE_ALPHA)
+                drawCable(a, b, color, 2.5f * d, intoBottom = conn.to.dir == PortDirection.MOD)
+                // A plug at each end, in the cable's color. Drawn over, the stroke would cover the
+                // jack's own dot; this puts one back, and says the jack is taken, as a patched jack
+                // on the open panel already does.
+                for ((ref, at) in listOf(conn.from to a, conn.to to b)) {
+                    val pinned = patch.module(ref.moduleId)?.isPinned == true
+                    val scale = if (pinned) d else camera.worldToScreen
+                    drawCircle(color.copy(alpha = if (dim) 0.3f else 1f), PatchModule.PORT_RADIUS * scale, at)
                 }
             }
-        }
 
-        patch.modules.firstOrNull { it.expanded }?.let { open ->
-            drawPanel(
-                open, patch, panelRect(frame), d, screenMeasurer, playing, playingStep,
-                intervalMenu, liveParams,
-            )
-        }
+            // Halo on the armed port, drawn unscaled so it always reads as a real target.
+            (interaction as? Interaction.Connecting)?.let { state ->
+                portScreen(patch, state.source, camera, frame)?.let { at ->
+                    drawCircle(
+                        color = Color(0xFF7FD1C1).copy(alpha = 0.28f),
+                        radius = effectiveTouchRadius(camera, touchPx),
+                        center = at,
+                    )
+                }
+                // The empty slot after a group rail's last jack: where a port for the armed
+                // jack would go, and the only way to ask for one. Drawn only while something is
+                // armed, so a rail at rest is what it has and no more.
+                if (patch.scopeOrTop != TOP && patch.module(state.source.moduleId)?.parent == patch.scopeOrTop) {
+                    patch.groupRail(patch.scopeOrTop, railTypeFor(state.source))?.let { rail ->
+                        val slot = groupPortSlot(frame, rail, railDirFor(state.source))
+                        val kind = patch.kindOf(state.source)
+                        drawCircle(kind.cable.copy(alpha = 0.22f), touchPx, slot)
+                        drawCircle(
+                            color = kind.cable,
+                            radius = PatchModule.PORT_RADIUS * d,
+                            center = slot,
+                            style = Stroke(width = 2f * d),
+                        )
+                        val arm = PatchModule.PORT_RADIUS * 0.6f * d
+                        drawLine(kind.cable, Offset(slot.x - arm, slot.y), Offset(slot.x + arm, slot.y), 2f * d)
+                        drawLine(kind.cable, Offset(slot.x, slot.y - arm), Offset(slot.x, slot.y + arm), 2f * d)
+                    }
+                }
+            }
 
-        // After the panel, so they float over it rather than being buried by it. Undo is
-        // most wanted from inside a panel, where the knob you just moved is on screen
-        // and can be watched moving back; having to close the panel, undo blind and
-        // reopen to see what happened is the opposite of that.
-        //
-        // Hidden rather than grayed when there is nothing to undo: a disabled control
-        // promises something could happen here, and at the start of a session nothing
-        // could. The panel's knob rows are inset by PANEL_SIDE, so the corner these sit
-        // in covers no control of the panel's own.
-        if (canUndo) drawHistoryButton(frame.historyRect(false), d, redo = false)
-        if (canRedo) drawHistoryButton(frame.historyRect(true), d, redo = true)
+            patch.modules.firstOrNull { it.expanded }?.let { open ->
+                drawPanel(
+                    open, patch, panelRect(frame), d, screenMeasurer, playing, playingStep,
+                    intervalMenu, liveParams,
+                )
+            }
 
-        // Over the panel for the same reason as the buttons, and before the context menu,
-        // which is transient and should cover everything while it is up.
-        drawTransport(frame, d, patch, card == FloatingCard.Transport, transportBeat, screenMeasurer)
-        // Not over an open panel: its header is where the chips would land, the "Osc" of
-        // an Osc panel was the thing they covered on the emulator, and a panel's taps go to
-        // its own loop, so the breadcrumb would be a picture of a control that did nothing.
-        if (patch.scopeOrTop != TOP && patch.modules.none { it.expanded }) {
-            val path = patch.scopePath()
-            path.forEachIndexed { level, id ->
+            // After the panel, so they float over it rather than being buried by it. Undo is
+            // most wanted from inside a panel, where the knob you just moved is on screen
+            // and can be watched moving back; having to close the panel, undo blind and
+            // reopen to see what happened is the opposite of that.
+            //
+            // Hidden rather than grayed when there is nothing to undo: a disabled control
+            // promises something could happen here, and at the start of a session nothing
+            // could. The panel's knob rows are inset by PANEL_SIDE, so the corner these sit
+            // in covers no control of the panel's own.
+            if (canUndo) drawHistoryButton(frame.historyRect(false), d, redo = false)
+            if (canRedo) drawHistoryButton(frame.historyRect(true), d, redo = true)
+
+            // Over the panel for the same reason as the buttons, and before the context menu,
+            // which is transient and should cover everything while it is up.
+            drawTransport(frame, d, patch, card == FloatingCard.Transport, transportBeat, screenMeasurer)
+            // Not over an open panel: its header is where the chips would land, the "Osc" of
+            // an Osc panel was the thing they covered on the emulator, and a panel's taps go to
+            // its own loop, so the breadcrumb would be a picture of a control that did nothing.
+            if (patch.scopeOrTop != TOP && patch.modules.none { it.expanded }) {
+                val path = patch.scopePath()
+                path.forEachIndexed { level, id ->
+                    drawChip(
+                        frame.breadcrumbChip(level), d,
+                        if (id == TOP) "Patch" else patch.module(id)?.title ?: "Group",
+                        open = id == path.last(),
+                        accent = Types.Group.accent,
+                        measurer = screenMeasurer,
+                    )
+                }
+            }
+            (interaction as? Interaction.Selecting)?.let { choosing ->
+                val count = choosing.ids.size
                 drawChip(
-                    frame.breadcrumbChip(level), d,
-                    if (id == TOP) "Patch" else "Group",
-                    open = id == path.last(),
+                    frame.selectionButton(done = true), d,
+                    // "Group \u00d73", not "Group 3": groups are named "Group 1", "Group 2" now,
+                    // and a button reading "Group 1" over a selection of one looked like the
+                    // name of the group it was about to make.
+                    if (count == 0) "Tap modules" else "Group \u00d7$count",
+                    open = count > 0,
                     accent = Types.Group.accent,
                     measurer = screenMeasurer,
                 )
+                drawChip(frame.selectionButton(done = false), d, "Cancel", false, Types.Group.accent, screenMeasurer)
+            }
+            drawScales(
+                frame, d, patch, scales, playingEntry, card == FloatingCard.Scales, scaleView,
+                screenMeasurer,
+            )
+
+            (interaction as? Interaction.Menu)?.let { menu ->
+                drawMenu(menuLayout(menuItems(patch, menu.targetId), menu.anchor, d, size), d, screenMeasurer)
             }
         }
-        (interaction as? Interaction.Selecting)?.let { choosing ->
-            val count = choosing.ids.size
-            drawChip(
-                frame.selectionButton(done = true), d,
-                if (count == 0) "Tap modules" else "Group $count",
-                open = count > 0,
-                accent = Types.Group.accent,
-                measurer = screenMeasurer,
-            )
-            drawChip(frame.selectionButton(done = false), d, "Cancel", false, Types.Group.accent, screenMeasurer)
-        }
-        drawScales(
-            frame, d, patch, scales, playingEntry, card == FloatingCard.Scales, scaleView,
-            screenMeasurer,
-        )
 
-        (interaction as? Interaction.Menu)?.let { menu ->
-            drawMenu(menuLayout(menuItems(patch, menu.targetId), menu.anchor, d, size), d, screenMeasurer)
+        // The one part of the UI that is not drawn: text entry needs a real text field to
+        // get an IME, a cursor and autocorrect, so naming puts a composable over the canvas
+        // instead of another shape inside it. Nothing else lives up here.
+        (interaction as? Interaction.Renaming)?.let { renaming ->
+            patch.module(renaming.moduleId)?.let { module ->
+                RenameOverlay(module) { interaction = Interaction.Idle }
+            }
         }
+    }
+}
+
+/**
+ * Naming a module, with the system keyboard.
+ *
+ * The text starts selected, so the default "Group 3" is replaced by typing and kept by
+ * tapping past it -- the same bargain a file manager's rename makes. An empty name is not
+ * an error but the way back: it clears the name and the module goes by its type again.
+ * Committing writes to the model like any other edit, so autosave and undo carry it
+ * without knowing this dialog exists.
+ *
+ * The scrim commits rather than cancels. There is no Cancel here because undo is the
+ * cancel this app has everywhere else, and a name is one step of it.
+ */
+@Composable
+private fun RenameOverlay(module: PatchModule, onDone: () -> Unit) {
+    val initial = module.title
+    var text by remember(module.id) {
+        mutableStateOf(TextFieldValue(initial, TextRange(0, initial.length)))
+    }
+    val focus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+
+    fun commit() {
+        val trimmed = text.text.trim()
+        module.name = trimmed.takeIf { it.isNotEmpty() && it != module.type.name }
+        keyboard?.hide()
+        onDone()
+    }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0x99000000))
+            .pointerInput(module.id) { detectTapGestures { commit() } },
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        Box(
+            Modifier
+                // High enough that the keyboard cannot reach it on a phone held either way.
+                .padding(top = 72.dp, start = 24.dp, end = 24.dp)
+                .widthIn(max = 360.dp)
+                .background(Color(0xFF1B1F26), RoundedCornerShape(12.dp))
+                .border(2.dp, module.type.accent.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
+                .padding(horizontal = 16.dp, vertical = 14.dp)
+                // Swallows taps on the card itself, which would otherwise reach the scrim
+                // behind it and commit halfway through an edit.
+                .pointerInput(Unit) { detectTapGestures { } },
+        ) {
+            BasicTextField(
+                value = text,
+                onValueChange = { if (it.text.length <= MAX_NAME) text = it },
+                singleLine = true,
+                textStyle = TextStyle(
+                    color = Color(0xFFE6E9EF),
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Medium,
+                ),
+                cursorBrush = SolidColor(module.type.accent),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { commit() }),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focus),
+            )
+        }
+    }
+
+    LaunchedEffect(module.id) {
+        focus.requestFocus()
+        keyboard?.show()
     }
 }
 
@@ -4014,6 +4172,9 @@ private fun handleTap(
             is MenuItem.Delete -> patch.module(chosen.moduleId)?.let { patch.remove(it) }
             is MenuItem.StartGroup -> return Interaction.Selecting(emptySet())
             is MenuItem.Ungroup -> patch.module(chosen.moduleId)?.let { patch.ungroup(it) }
+            is MenuItem.Rename ->
+                return if (patch.module(chosen.moduleId) == null) Interaction.Idle
+                else Interaction.Renaming(chosen.moduleId)
         }
         return Interaction.Idle
     }
@@ -4113,9 +4274,10 @@ private fun handleTap(
                 if (patch.connect(current.source, port)) Interaction.Idle else current
             else -> Interaction.Connecting(port)                   // same side: re-arm
         }
-        // Both returned above: a menu is always resolved first, and choosing modules has
-        // its own branch.
-        is Interaction.Menu, is Interaction.Selecting -> Interaction.Idle
+        // A menu is always resolved first and choosing modules has its own branch, so
+        // both are returned above. Renaming never arrives here at all: its scrim is a
+        // composable over the canvas and takes every touch while it is up.
+        is Interaction.Menu, is Interaction.Selecting, is Interaction.Renaming -> Interaction.Idle
     }
 }
 
@@ -4239,6 +4401,7 @@ internal fun menuLayout(
 private fun MenuItem.label(): String = when (this) {
     is MenuItem.Add -> type.name
     is MenuItem.Duplicate -> "Duplicate"
+    is MenuItem.Rename -> "Rename\u2026"
     is MenuItem.Delete -> "Delete"
     is MenuItem.StartGroup -> "Group\u2026"
     is MenuItem.Ungroup -> "Ungroup"
@@ -4246,7 +4409,7 @@ private fun MenuItem.label(): String = when (this) {
 
 private fun MenuItem.tint(): Color = when (this) {
     is MenuItem.Add -> type.accent
-    is MenuItem.Duplicate -> Color(0xFF8A93A3)
+    is MenuItem.Duplicate, is MenuItem.Rename -> Color(0xFF8A93A3)
     is MenuItem.Delete -> Color(0xFFE07A6B)
     is MenuItem.StartGroup, is MenuItem.Ungroup -> Types.Group.accent
 }
@@ -4417,7 +4580,7 @@ private fun DrawScope.drawModuleBox(
     )
 
     if (showTitle) {
-        val title = measurer.measure(module.type.name, TitleStyle)
+        val title = measurer.measure(module.title, TitleStyle)
         drawText(
             title,
             alpha = alpha,
@@ -4547,7 +4710,7 @@ private fun DrawScope.drawPanel(
         style = Stroke(width = 2f * d),
     )
 
-    val title = measurer.measure(module.type.name, PanelTitleStyle)
+    val title = measurer.measure(module.title, PanelTitleStyle)
     drawText(
         title,
         topLeft = Offset(

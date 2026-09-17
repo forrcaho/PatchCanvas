@@ -63,7 +63,10 @@ therefore have one endpoint in each, which is why every cable is resolved throug
 **One gesture loop**, not stacked detectors — Compose's built-in detectors each consume
 events and fight over the pointer. `awaitEachGesture` decides once, on the first move,
 what a gesture is. The open panel is the exception: it owns the screen, so it has its own
-short loop rather than another outcome bolted into the canvas one.
+short loop rather than another outcome bolted into the canvas one. Renaming is the other:
+text entry needs a real `BasicTextField` for its cursor, selection and IME, so it is a
+composable on a scrim over the `Canvas` -- the only one in the app, and the reason
+`PatchCanvas` is wrapped in a `Box`.
 
 | File | |
 | --- | --- |
@@ -187,7 +190,10 @@ drawing, hit testing and cables all apply unchanged. `GraphSync` reads
 `engineModules` and `engineConnections()`, which follow any chain of group ports to the
 real output at the far end. **Grouping or ungrouping a playing patch must send the engine
 nothing**, and `GraphSyncTest` asserts exactly that. Which group you are looking at
-(`Patch.scope`) is view state: not saved, not undone.
+(`Patch.scope`) is view state: not saved, not undone. A group is named "Group N" -- one
+past the highest number in use anywhere in the patch -- on a `PatchModule.name` that every
+module has and that falls back to the type's name, so a file written before names still
+draws "Group".
 
 **Nothing carries a pulse yet, and the kind stays anyway.** `Env` was the last thing taking
 a gate and it takes *notes* now: a pulse is an event with no duration, so it could never

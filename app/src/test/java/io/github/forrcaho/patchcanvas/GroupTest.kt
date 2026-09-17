@@ -375,4 +375,61 @@ class GroupTest {
         assertEquals(grouped, f.patch.toJson())
         assertEquals(1, f.patch.modules.count { it.type == Types.Group })
     }
+
+    @Test
+    fun `groups are numbered, and a number comes round again when its name is taken off`() {
+        val f = GroupFixture()
+        val first = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+        val second = f.patch.group(setOf(f.lfo.id, f.env.id))!!
+        assertEquals("Group 1", first.name)
+        assertEquals("Group 2", second.name)
+        assertEquals("the box and the breadcrumb both read this", "Group 2", second.title)
+
+        // Naming one for what it does takes its number out of use, and the next group
+        // gets the lowest one free rather than counting groups.
+        second.name = "Reverb"
+        assertEquals("Group 2", f.patch.nextGroupName())
+        first.name = "Bass"
+        assertEquals("Group 1", f.patch.nextGroupName())
+    }
+
+    @Test
+    fun `a module with no name of its own goes by its type`() {
+        val f = GroupFixture()
+        assertNull(f.osc.name)
+        assertEquals("Osc", f.osc.title)
+        f.osc.name = "Bass"
+        assertEquals("Bass", f.osc.title)
+    }
+
+    @Test
+    fun `a duplicated group is numbered afresh, and the groups inside it keep their names`() {
+        val f = GroupFixture()
+        val inner = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+        val outer = f.patch.group(setOf(inner.id, f.mix.id))!!
+        inner.name = "Tone"
+
+        val copy = f.patch.duplicate(outer)!!
+        assertEquals("Group 3", copy.name)
+        val copiedInner = f.patch.modules.first { it.parent == copy.id && it.type == Types.Group }
+        assertEquals("Tone", copiedInner.name)
+    }
+
+    @Test
+    fun `a name is saved, reloaded and undone`() {
+        val f = GroupFixture()
+        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+        f.osc.name = "Bass"
+        val named = f.patch.toJson()
+
+        val reloaded = patchFromJson(named)!!
+        assertEquals("Group 1", reloaded.module(group.id)?.name)
+        assertEquals("Bass", reloaded.module(f.osc.id)?.name)
+        assertEquals("a reload has to serialize back to the same bytes", named, reloaded.toJson())
+
+        group.name = "Reverb"
+        f.patch.replaceWith(patchFromJson(named)!!)
+        assertEquals("Group 1", f.patch.module(group.id)?.name)
+        assertEquals(named, f.patch.toJson())
+    }
 }

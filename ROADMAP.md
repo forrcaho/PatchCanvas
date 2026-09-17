@@ -1600,8 +1600,7 @@ that on In and Out means "switched on", about something that has no off: rails t
 switches no longer get it.
 
 **Left for the phone and for later:**
-- **Groups have no names.** Every box and every crumb says "Group", so three levels read
-  "Patch > Group > Group". Naming needs text entry, which nothing else here has yet.
+- ~~**Groups have no names.**~~ **Built, and checked on the emulator.** See below.
 - ~~**A port can only come from grouping.**~~ **Built, then fixed on the phone.** Inside a
   group, an armed jack taken to the matching rail gains the group a port of that jack's name
   and kind. "Tap the rail" could not be made to happen at all by its owner, and the reason
@@ -1621,6 +1620,45 @@ switches no longer get it.
   works; exposing a knob later from outside does not exist.
 - Whether choosing modules by tapping reads as a mode, and whether the rails inside a group
   read as its ports.
+
+### A module has a name
+
+**2026-09-17, asked for after a day with groups on the phone.** Every box and every crumb
+said "Group", so three levels read "Patch > Group > Group". A new group is now named
+"Group 1", "Group 2", ... and any module can be renamed from its long-press menu.
+
+**The number is one past the highest in use, counted over the whole patch** rather than per
+scope, because a breadcrumb shows groups from several scopes at once and two "Group 2"s
+there would read worse than a gap in the numbering. Renaming a group takes its number back
+out of use, so names do not drift upwards through a session of grouping and ungrouping.
+
+**The name lives on the module, not on the group**, and falls back to the type's name when
+it is null -- which is what makes it free for everything else: `title` is what the box, the
+panel header and the crumb all draw, and an older file with no name in it still reads
+"Group". Duplicating a group numbers the copy afresh while the groups nested inside it keep
+their names, since those are only ever read from within it.
+
+**Text entry is the first composable over the canvas.** Everything else in this app is
+drawn, and a drawn text field would mean owning a cursor, a selection and an IME
+connection. `PatchCanvas`'s `Canvas` is now wrapped in a `Box`, and renaming puts a
+`BasicTextField` on a scrim above it -- the second exception to the one-gesture-loop rule,
+after the panel. The text starts selected, so the default is replaced by typing and kept by
+tapping past it; an empty name is not an error but the way back, clearing it so the module
+goes by its type again. The scrim commits rather than cancels, because undo is the cancel
+this app has everywhere else -- and a rename is one step of it, as the undo button
+appearing after one proves.
+
+**The confirm chip had to be reworded.** It counted its selection as "Group 2", which with
+names in play read like the name of the group it was about to make; it says "Group ×2" now.
+
+**Checked on the emulator:** rename from the menu, the keyboard up with the old name
+selected, the new name on the box, in the file, and gone again after one undo; a new group
+named "Group 1" beside an older unnamed one, and the breadcrumb reading "Patch > Group 1".
+Not yet checked on the phone.
+
+**Still open:** a number keypad on panel values, which is the same problem in a different
+shape and the next thing asked for; and whether 16 characters is the right ceiling for a
+name on a box that does not grow.
 
 ### Grids say how much of them there is
 

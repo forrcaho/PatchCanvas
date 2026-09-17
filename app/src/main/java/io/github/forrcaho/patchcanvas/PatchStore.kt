@@ -42,6 +42,7 @@ fun Patch.toJson(): String {
             .put("steps", stepsOf(m))
             .put("mod", modOf(m))
         // Absent at the top level, so a patch with no groups writes exactly what format 5 did.
+        m.name?.let { entry.put("name", it) }
         if (m.parent != TOP) entry.put("parent", m.parent)
         if (m.type == Types.Group) {
             // The rails inside are not modules in the file: they carry no knobs and no
@@ -245,6 +246,7 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
                 Offset(m.optDouble("x", 0.0).toFloat(), m.optDouble("y", 0.0).toFloat()),
                 shared,
             )
+            module.name = m.optString("name").takeIf { it.isNotBlank() }?.take(MAX_NAME)
             module.parent = m.optLong("parent", TOP)
             if (shared != null) {
                 // The rails come back under the ids the cables inside were saved against.
