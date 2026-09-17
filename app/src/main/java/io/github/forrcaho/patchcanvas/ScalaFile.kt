@@ -51,7 +51,7 @@ fun parseScala(name: String, text: String): Scale? {
     val octaves = values.map { parsePitch(it) ?: return null }
 
     // Ascending and above the unison, which the format requires and a hand-edited file
-    // may not honour. Out of order, the grid's rows would not be in pitch order either.
+    // may not honor. Out of order, the grid's rows would not be in pitch order either.
     if (octaves.any { it <= 0f }) return null
     if (octaves.zipWithNext().any { (a, b) -> b <= a }) return null
 

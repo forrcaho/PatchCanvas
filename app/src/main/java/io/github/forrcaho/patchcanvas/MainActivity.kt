@@ -140,7 +140,7 @@ class MainActivity : ComponentActivity() {
             window.attributes = window.attributes.apply { preferredRefreshRate = fastest }
         }
 
-        // Autosave. Serialising inside the snapshot means the string can never be torn
+        // Autosave. Serializing inside the snapshot means the string can never be torn
         // by an edit mid-write, and collectLatest plus a delay debounces the flood of
         // positions a single module drag produces. onStop covers the ordinary exit;
         // this covers being killed without one.

@@ -53,7 +53,7 @@ fun Patch.toJson(): String {
 
     val cables = JSONArray()
     connections.forEach { c ->
-        // connect() normalises every cable to output -> input, so the directions are an
+        // connect() normalizes every cable to output -> input, so the directions are an
         // invariant rather than data, and reload re-imposes them.
         val cable = JSONObject()
             .put("from", c.from.moduleId)

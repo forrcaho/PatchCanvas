@@ -417,7 +417,7 @@ void AudioEngine::writeCaptureWav() {
     }
 
     // 32-bit float WAV: the samples exactly as the stream saw them, with no
-    // quantisation of our own to confuse an analysis looking for small discontinuities.
+    // quantization of our own to confuse an analysis looking for small discontinuities.
     const uint32_t dataBytes = static_cast<uint32_t>(total * sizeof(float));
     const uint32_t rate = static_cast<uint32_t>(sampleRate_);
     const uint16_t channels = static_cast<uint16_t>(channelCount_);

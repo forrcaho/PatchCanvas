@@ -51,7 +51,7 @@ constraint that makes exclusive-mode MMAP viable.
 ## Reference target
 
 **Pixel 10 Pro XL running GrapheneOS.** Development, latency measurement and every
-"does this actually feel right" judgement happen here. Others are expected to be on
+"does this actually feel right" judgment happen here. Others are expected to be on
 something broadly comparable; nothing below assumes a low-end device.
 
 Measured over adb on 2026-09-10, not estimated:
@@ -365,13 +365,13 @@ acquire a relinking obligation without choosing to. It also keeps offline and CI
 free of a configure-time download. Built as its own target with headers included as
 SYSTEM, so upstream is held to upstream's warning settings rather than ours.
 
-**Signal typing is advisory, not enforced.** Audio, CV and gate colour the cable and the
+**Signal typing is advisory, not enforced.** Audio, CV and gate color the cable and the
 port, and any output may still patch to any input.
 
 This roadmap originally said types would gate connection validity. That was wrong. In
 hardware modular it is all just voltage, and patching audio into a CV input is a
 technique rather than a mistake -- audio-rate modulation lives there, and refusing it
-would make this less modular than the thing it models. The colour says what to expect;
+would make this less modular than the thing it models. The color says what to expect;
 the cable decides what happens. The oscillator updates its frequency per sample rather
 than per block precisely so that stays real.
 
@@ -430,8 +430,8 @@ mode parameter turns one module into five filters.
 places across two languages -- a C++ node class, the C++ enum, the Kotlin enum, a
 `ModuleType`, and the palette -- and the two enums must agree. There is already a test
 asserting they do, which is a smell rather than a solution. The engine should own the
-catalogue (name, ports, signal kinds) and hand it to Kotlin at startup, with the UI
-supplying only colour and category. Then a module is one declaration, and a whole class
+catalog (name, ports, signal kinds) and hand it to Kotlin at startup, with the UI
+supplying only color and category. Then a module is one declaration, and a whole class
 of silent mismatch stops being possible.
 
 Two limits will bite as it grows: `kMaxPorts` is 4, and a mixer wants eight inputs;
@@ -523,7 +523,7 @@ A horizontal bar is the right default and the wrong universal:
 
 - **Stepped parameters are radio buttons.** Done. A bar cannot show what the options
   are, which is tolerable for a length and useless for a waveform: dragging to pick
-  "square" out of four unlabelled positions asks you to know the order by heart.
+  "square" out of four unlabeled positions asks you to know the order by heart.
 
   The waveforms are drawn rather than named -- the shape is the name, and reading it
   needs no translation from the word "saw". All four glyphs are sampled from a function
@@ -535,7 +535,7 @@ A horizontal bar is the right default and the wrong universal:
   that names it. Phasing them all to start and end at zero was wrong for the same kind of
   reason -- it is right for sine and triangle, but it put the saw's reset in the middle of
   the glyph and the square's edges at the quarter and three-quarter points, which reads as
-  an off-centre pulse. The saw starts at the top of a ramp and the square starts high, so
+  an off-center pulse. The saw starts at the top of a ramp and the square starts high, so
   both switch on the cycle boundary.
 
   **The saw glyph descends**, because that is what comes out: DaisySP's polyblep saw
@@ -543,7 +543,7 @@ A horizontal bar is the right default and the wrong universal:
   in a capture of the real output. The conventional rising glyph would be prettier and
   wrong.
 
-  The maths behind the buttons matters more than it looks. `valueAt` floors rather than
+  The math behind the buttons matters more than it looks. `valueAt` floors rather than
   rounds, because rounding gives the first and last options half the width of the rest --
   so the two ends of every selector would be twice as hard to hit as the middle. And the
   option count is asserted against the engine's waveform table: an extra waveform in
@@ -603,12 +603,12 @@ A horizontal bar is the right default and the wrong universal:
   Reported as "the rectangle disappears but the note still plays", and the report had two
   causes. The visible one was this. The other was a patch with no `Env` and no `VCA` and
   the gate output unpatched, where nothing controls amplitude and a gate has nothing to
-  act on -- correct modular behaviour, and worth knowing that the grid gives no hint of
+  act on -- correct modular behavior, and worth knowing that the grid gives no hint of
   it.
 
-  A silenced step used to draw a grey box at the pitch it remembered. That was a lie
+  A silenced step used to draw a gray box at the pitch it remembered. That was a lie
   about what you would hear -- a rest is the absence of a note, not a note in another
-  colour -- so it draws nothing now. The degree is still remembered underneath, which is
+  color -- so it draws nothing now. The degree is still remembered underneath, which is
   what lets tapping the same cell bring the note back.
 
   A note scrolled out of view left a column looking empty, which was indistinguishable
@@ -633,7 +633,7 @@ A horizontal bar is the right default and the wrong universal:
   Tiles rather than a scrolling list: four columns by four rows holds twenty-odd scales
   without paging, which covers the shipped set and a generous number of the user's own.
   A test asserts the whole shipped library plus six more fits, and that no tile overlaps
-  its neighbour.
+  its neighbor.
 
   **Transposition is in cents**, and so is the oscillator's tune. A semitone is a fact
   about twelve-tone equal temperament and means nothing in 19-TET or Bohlen-Pierce, where
@@ -689,7 +689,7 @@ Also here: per-input attenuverters -- superseded in direction, as above.
 
 Done and verified on the device.
 
-**One stack of whole patches, not a log of inverted commands.** A patch serialises to a
+**One stack of whole patches, not a log of inverted commands.** A patch serializes to a
 couple of kilobytes of the JSON the autosave already produces, so fifty states cost
 nothing and there are no inverses to get wrong -- the inverse you forget is a silent
 corruption rather than a crash, and every new module type would be another chance to
@@ -724,12 +724,12 @@ engine.
 
 Two buttons in the bottom-left, drawn in the canvas in screen space like the rails,
 hidden when there is nothing to undo or redo. The corner is the one nothing else claims:
-the In rail is centred on the left edge and the gesture bar is already excluded by the
+the In rail is centered on the left edge and the gesture bar is already excluded by the
 inset. Rejected: a two-finger tap (fights the pinch), a three-finger swipe
 (undiscoverable), and a long-press menu entry (two gestures deep for the control you
 reach for when the last thing you did was wrong).
 
-Hidden rather than greyed, because a disabled control promises that something could
+Hidden rather than grayed, because a disabled control promises that something could
 happen there; at the start of a session nothing could.
 
 The device found the bug the suite could not, again. The buttons drew correctly and did
@@ -828,7 +828,7 @@ if it ever lands, translates at the edge.
   that sounds it. This moves degree-to-octave conversion out of `GraphSync` and into the
   engine, which now holds scale tables -- but the engine still never learns what a
   semitone is, which was the point of that rule. Octaves on the wire was the other
-  candidate and lost: every scale-aware note operation (up a step, quantise to the key)
+  candidate and lost: every scale-aware note operation (up a step, quantize to the key)
   would become a nearest-degree search on floats.
 
   SuperCollider separates a `Tuning` from a `Scale` chosen within it, which buys an
@@ -891,7 +891,7 @@ type, that there is no crossfade, and that the ports are typed: a mask per node 
 indices carry notes, and the one place a patch is refused for what it carries is
 `Patch.connect`. Refusing leaves the port armed rather than disarming silently -- a tap
 that did nothing and forgot itself would look like a tap that was never seen. **Whether
-that reads as a refusal or as a bug is a judgement for the phone.**
+that reads as a refusal or as a bug is a judgment for the phone.**
 
 **Voices come from a curated module.** `Voice` is eight voices of oscillator and envelope,
 allocated by note id and source, summed like Mix -- a chord is louder than a note, which is
@@ -1190,7 +1190,7 @@ obviously, in an engine with no voltage in it.
 
 To be settled in a deliberate pass, with one principle proposed: **name by what flows in
 and out**, since that is what a finger at the picker needs and it is unambiguous. The
-catalogue already knows every port's kind, so picker categories could be derived rather
+catalog already knows every port's kind, so picker categories could be derived rather
 than filed by hand. One collision to watch: "voice" is the obvious word for notes-to-audio
 and also the word for one of the copies inside it. The eight-character limit belongs to
 the phone, not to Eurorack, and stays.
@@ -1204,7 +1204,7 @@ Android, so an installed copy cannot update into it.
 **Designed, not built.** The screen-space reasoning below predates it; everything from
 *Opening a module is going inside it* onward was settled in discussion on 2026-09-14,
 before any code. It answers open question 7, retires an invariant CLAUDE.md marked
-do-not-touch, and changes most of the module catalogue. Four layouts were drawn against
+do-not-touch, and changes most of the module catalog. Four layouts were drawn against
 the real 986x443dp landscape frame first, and the drawings are what settled it -- two of
 the four turned out to be too small rather than merely worse, which is not something the
 argument had reached on its own.
@@ -1214,7 +1214,7 @@ that, and panning around a flat sheet of forty nodes is a worse problem than the
 tap-to-connect set out to solve. Conceptually coherent groupings are the answer:
 build a voice out of Osc, Env, VCA and Filter, then treat it as one node.
 
-**The rails already generalise, and that is the whole design.** `In` and `Out` mean
+**The rails already generalize, and that is the whole design.** `In` and `Out` mean
 "the boundary of this scope". At the top level that boundary happens to be the audio
 device; inside a group it is the group's own ports. Navigating into a subpatch is the
 same canvas with the same rails, so the mechanism for defining a composite's
@@ -1281,7 +1281,7 @@ being Eurorack in Phase 6. Four kinds, which are Bespoke's:
 | **pulse** | events without pitch: reset, retrigger, sample-start |
 | **modulation** | a value driving a control between a low and a high stored on the control, in its units |
 
-Pulse and modulation keep the colours of the gate and CV they replace, which is most of the
+Pulse and modulation keep the colors of the gate and CV they replace, which is most of the
 argument that they are the same idea said properly. `Node::tick` already anticipates the
 first: "one entry point on purpose: a pulse cable, if one is ever built, calls the same
 thing with a count of its own".
@@ -1294,7 +1294,7 @@ stops being true, since not one of these four is a voltage. Note to pulse is the
 allowed conversion, because a note implies a trigger; the reverse is refused, because
 nothing says what pitch it would be.
 
-**The catalogue changes more than the engine does.** `Steps` drops pitch and gate and keeps
+**The catalog changes more than the engine does.** `Steps` drops pitch and gate and keeps
 notes, ending the "same sequence, said twice" that Phase 6 left deliberately in place.
 `Filter` drops its cutoff jack and `Osc` its pitch jack, both becoming modulatable knobs.
 `Env` becomes a modulator rather than a CV source. `Vca` retires outright: its entire reason
@@ -1307,7 +1307,7 @@ can be modulated, and a parameter cannot be modulated until the mechanic below e
 
 ---
 
-**The type system landed 2026-09-15, catalogue untouched, as the first of two commits.**
+**The type system landed 2026-09-15, catalog untouched, as the first of two commits.**
 Splitting it that way keeps the format bump and the module deletions off the same commit as
 the enforcement rules, so a regression has one obvious cause. 94 graph checks, 90 node
 checks, 208 JVM tests.
@@ -1338,7 +1338,7 @@ fourth before anything was touched: no edit, no warning, no way back.
 
 So a cable refused *for its kind* now refuses the whole file, where a cable naming a port
 that no longer exists still skips quietly -- the version 1 migration depends on that second
-behaviour, and the two cases are genuinely different. One is a file this build cannot read
+behavior, and the two cases are genuinely different. One is a file this build cannot read
 honestly; the other is a cable whose module went away and which is meant to disappear with
 it.
 
@@ -1387,7 +1387,7 @@ either its own float or a modulator's buffer, with the usual crossfade on a chan
 sides live.
 
 **Ports are told apart by name and position, not by shape.** Every port on that edge is the
-same kind, so a shape would have to carry identity -- arbitrary, where colour carrying kind
+same kind, so a shape would have to carry identity -- arbitrary, where color carrying kind
 is not. The band runs left to right in the same order as the rows inside, so the bottom edge
 is a map of what you just saw. The names are already short enough to be the labels: `cut`,
 `res`, `A`, `D`, `S`, `R`, `wave`, `len`, `bias`, `gain`, `lvl`. A truncation rule, not a
@@ -1476,7 +1476,7 @@ control, so it costs the bar no travel and stays clear of the output jacks' labe
 within 22dp of the finger is taken before the knob is, so a drag that starts on `[` moves the
 range and not the knob. On a row of buttons the brackets go around the options rather than
 through them, so a range of a single option still shows two. On the open panel the jacks are
-spread along its bottom edge in row order and labelled *below* the edge -- a panel of four or
+spread along its bottom edge in row order and labeled *below* the edge -- a panel of four or
 five rows fills its body, and above the edge would be on the last bar. A cable into a
 parameter's jack arrives from below, rather than crossing the module it feeds.
 
@@ -1520,7 +1520,7 @@ what VCV Rack does.
 The opacity was chosen on the phone from 80, 70, 60 and 50%. 80 still read as solid over a
 module; 50 came too close to the 30% a cable from a switched-off In rail is drawn at, which is
 what says the microphone is not listening. 60 lets a title read through a crossing cable and
-keeps that difference visible. Each end gets a plug in the cable's colour, since the stroke
+keeps that difference visible. Each end gets a plug in the cable's color, since the stroke
 would otherwise cover the jack's own dot. Crossing a label is better than vanishing behind a
 box -- that was the open half, and the phone answered it.
 
@@ -1627,7 +1627,7 @@ test holds every pair to 15. Steps is teal-green and Drone lime; Osc a clear blu
 gray-teal and Mix a light gray; Env a muted violet and LFO magenta. On the phone the pairs
 separate, Osc and Filter least of them.
 
-### CV is retired, and the catalogue is seven modules
+### CV is retired, and the catalog is seven modules
 
 **Built 2026-09-16**, as the second of the two commits the type system was split from.
 94 graph checks, 115 node checks, 214 JVM tests.
@@ -1682,7 +1682,7 @@ an envelope wants. So `Env` takes notes.
 
 The consequences ran further than the module. `Steps`' gate output had no consumer left, so
 it went -- ending half of the "same sequence, said twice" a commit earlier than planned.
-And **no port in the catalogue carries a pulse any more.** The kind stays, for a module
+And **no port in the catalog carries a pulse any more.** The kind stays, for a module
 that wants a bare trigger, and the rule is now pinned against the kinds themselves rather
 than against a pair of ports.
 
@@ -1704,7 +1704,7 @@ output is read rather than the exit code.
 
 ### Drone, and what a test tone is made of
 
-**Added 2026-09-16, to unblock the catalogue change above.** Retiring the monophonic `Osc`
+**Added 2026-09-16, to unblock the catalog change above.** Retiring the monophonic `Osc`
 takes away the engine's only free-running audio-rate source, and about fifteen graph tests
 are built on one -- `patchingDoesNotStep` measures a click against the saw's own worst step
 precisely so that no fixed threshold has to be invented, and the roadmap already records
@@ -1811,7 +1811,7 @@ path through the loader.
 
 Worth doing once rather than assuming -- check the suite can actually fail.
 Reintroducing the original 17.2dp port spacing fails three tests. Doing that also exposed
-a real gap, since spacing and centring are separate terms in `portIn` and only spacing
+a real gap, since spacing and centering are separate terms in `portIn` and only spacing
 was pinned. Mutation-checking a new test area is now the habit.
 
 Still to cover:
@@ -1857,7 +1857,7 @@ use rather than by argument.
    out. Measure it before designing for it: tap a fingernail on the glass beside a laptop
    mic while the speaker plays what the tap triggers, and read the gap off the recording.
    Two uses survive latency regardless -- continuous gestures on notes already sounding,
-   and input the transport quantises, where the finger chooses what and the next step
+   and input the transport quantizes, where the finger chooses what and the next step
    chooses when.
 7. **How does a modulator reach a knob?** **Answered by design on 2026-09-14**, which is
    not how this list is meant to work -- recorded as answered rather than deleted, because

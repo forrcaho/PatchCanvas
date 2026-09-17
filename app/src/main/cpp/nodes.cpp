@@ -178,7 +178,7 @@ void DroneNode::process(int32_t frames) {
 
     for (int32_t i = 0; i < kCells; ++i) {
         // Everything starts at offset 0: a cell is toggled by a finger, between blocks,
-        // and there is no boundary within the block it belongs to. Quantising a drone to
+        // and there is no boundary within the block it belongs to. Quantizing a drone to
         // anything would be the transport's job and a drone is not the transport's.
         if (on_[i] && sounding_[i] == 0) {
             NoteEvent on;
@@ -417,7 +417,7 @@ void OscNode::start(const NoteEvent &event) {
     // reached rather than from zero, which would be a step in the middle of a note.
     const bool stolen = chosen->active && chosen->gate;
 
-    // Resolved here, against the scale of the beat the note started on, which travelled
+    // Resolved here, against the scale of the beat the note started on, which traveled
     // with it. It is not resolved again unless the source sends a Change: a sequencer's
     // note keeps the pitch it started on, and only a drone's follows the scale.
     chosen->octaves = pitchOf(event);

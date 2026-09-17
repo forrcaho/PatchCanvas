@@ -452,7 +452,7 @@ class ParamTest {
         allParams().forEach { p ->
             listOf(0f, 0.25f, 0.5f, 0.75f, 1f).forEach { t ->
                 val roundTrip = p.positionOf(p.valueAt(t))
-                // Stepped params quantise, so they only round trip at their own steps.
+                // Stepped params quantize, so they only round trip at their own steps.
                 if (p.curve != ParamCurve.STEPPED) {
                     assertEquals("${p.name} at $t", t, roundTrip, 0.001f)
                 }
@@ -723,7 +723,7 @@ class SequenceTest {
 
     /**
      * The snapshot deliberately holds a step that is neither the default nor the current
-     * value. A rebuilt PatchModule initialises to the default figure, so asserting
+     * value. A rebuilt PatchModule initializes to the default figure, so asserting
      * against the default would pass whether or not the sequence was carried across --
      * which is exactly what it did until a mutation check caught it.
      */

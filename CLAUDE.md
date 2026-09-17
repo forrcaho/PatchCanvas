@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-PatchCanvas is a touch-first modular synthesiser for Android: a Compose canvas for
+PatchCanvas is a touch-first modular synthesizer for Android: a Compose canvas for
 patching, and a C++/Oboe audio engine behind it. `ROADMAP.md` carries the plan, the
 phase-by-phase reasoning, and the decisions that were made and reversed — read it before
 proposing direction. This file is the operating manual.
@@ -70,7 +70,7 @@ short loop rather than another outcome bolted into the canvas one.
 | `PatchCanvas.kt` | model, camera, gestures, drawing, panel — the bulk of the UI |
 | `GraphSync.kt` | the diff, `NodeType` mirror, `GraphCommands` seam for tests |
 | `PatchStore.kt` | JSON persistence, hand-rolled on `org.json` |
-| `History.kt` | undo as a stack of serialised patches, plus `Patch.replaceWith` |
+| `History.kt` | undo as a stack of serialized patches, plus `Patch.replaceWith` |
 | `Scale.kt` | the tuning model: degrees in octaves, with a period |
 | `ScalaFile.kt` | `.scl` parsing — untrusted input, every bad shape returns null |
 | `ScaleLibrary.kt` | seeds the bundled scales and reads the user's folder |
@@ -102,7 +102,7 @@ edge.
 
 **Cycles are legal.** Whatever cannot be topologically ordered is appended, which costs
 exactly one block of delay on the back edge — because output buffers are never cleared
-between blocks. That persistence is the mechanism, not an optimisation.
+between blocks. That persistence is the mechanism, not an optimization.
 
 **Every cable change crossfades** (30ms, smoothstep) between two *live* sources. Fading
 from a captured value instead stops the waveform dead and glides DC to zero, which is a
@@ -158,14 +158,14 @@ the only one defined in code, and exists so the app still works when that folder
 unreadable. Tuning controls are in **cents**, never semitones: a semitone is a fact about 12-TET and
 means nothing in the tunings these knobs still have to work in.
 
-**Signal types are enforced.** Audio, CV and gate used to colour the cable without
+**Signal types are enforced.** Audio, CV and gate used to color the cable without
 constraining it, because in hardware it is all voltage. That was the Eurorack model and
 the project has left it: CV and gate are now *modulation* and *pulse*, which are not
 voltages and do not interchange, so `patchesTo` is like-to-like and a mismatch is refused.
 Audio-rate modulation does not need the loophole — a module that wants it declares an
 audio input, and `MODULATION` is applied once per block and could not carry it anyway.
 
-**The catalogue is seven modules, and every synth is polyphonic.** `Osc` is the
+**The catalog is seven modules, and every synth is polyphonic.** `Osc` is the
 polyphonic one -- what was called `Voice` -- and the monophonic oscillator is gone, which
 settled the worst naming collision in the project: "voice" now means only one of the eight
 slots inside an `Osc`. `Vca` retired with CV, since a `Mix` channel is `in * level` and was

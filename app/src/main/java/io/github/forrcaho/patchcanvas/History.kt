@@ -8,7 +8,7 @@ import androidx.compose.runtime.snapshots.Snapshot
 /**
  * Undo, as a stack of whole patches.
  *
- * Snapshots rather than inverted commands. A patch serialises to a few kilobytes of the
+ * Snapshots rather than inverted commands. A patch serializes to a few kilobytes of the
  * JSON we already produce, so fifty of them cost nothing -- and there are no inverses to
  * get wrong. The command approach needs every mutation to have a correct opposite, and
  * the one you forget is a silent corruption rather than a crash.

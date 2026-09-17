@@ -325,7 +325,7 @@ void envMatchesAnOffAgainstItsOwnSource() {
  *
  * A Mix channel is `in * level`, which is a VCA with the level on a knob instead of a
  * jack -- so Mix shut at zero and open at one is the same claim, and is why retiring the
- * VCA cost the catalogue nothing.
+ * VCA cost the catalog nothing.
  */
 void aMixChannelIsAGainThatCanBeShut() {
     std::printf("a mix channel is a gain that can be shut\n");
@@ -398,7 +398,7 @@ void stepsPlayTheirOwnPattern() {
     check(std::fabs(soundsAs(startedNote(steps), nullptr) - 1.0f) < 0.0001f,
           "the degree written to a step is the pitch it plays");
 
-    // Out of range in both directions must be ignored rather than corrupt a neighbour.
+    // Out of range in both directions must be ignored rather than corrupt a neighbor.
     // Checked by coming round to step 1 again, since a sequencer only says anything at a
     // tick now -- there is no held output to re-read between them.
     steps.setStep(-1, 108, true);

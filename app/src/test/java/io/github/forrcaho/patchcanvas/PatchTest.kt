@@ -107,7 +107,7 @@ class PatchModelTest {
     }
 
     /**
-     * Pulse has no port anywhere in the catalogue: Env was the last thing taking a gate
+     * Pulse has no port anywhere in the catalog: Env was the last thing taking a gate
      * and it takes notes now. The kind stays, for a module that wants a bare trigger, and
      * so does the rule -- asserted here against the kinds themselves, since there is no
      * longer a pair of ports to try it on.
@@ -346,7 +346,7 @@ class PatchModelTest {
     }
 
     @Test
-    fun `connect normalises argument order to output then input`() {
+    fun `connect normalizes argument order to output then input`() {
         val p = Patch()
         val osc = p.add(Types.Osc, Offset.Zero)!!
         // deliberately passed input-first
@@ -457,12 +457,12 @@ class PortGeometryTest {
     }
 
     @Test
-    fun `a lone port sits centred in the body`() {
+    fun `a lone port sits centered in the body`() {
         val type = Types.Env // one input, one output
         val rect = boxFor(type)
         val at = portIn(rect, 1f, PortDirection.INPUT, 0, 1, PatchModule.portsBodyFor(type))
-        val bodyCentre = PatchModule.HEADER + (rect.height - PatchModule.HEADER) / 2f
-        assertEquals(bodyCentre, at.y, 0.001f)
+        val bodyCenter = PatchModule.HEADER + (rect.height - PatchModule.HEADER) / 2f
+        assertEquals(bodyCenter, at.y, 0.001f)
     }
 
     @Test
@@ -475,7 +475,7 @@ class PortGeometryTest {
 
     @Test
     fun `height grows with port count and never crowds below the pitch`() {
-        // Drone has one port and Mix has four, which is the widest spread the catalogue
+        // Drone has one port and Mix has four, which is the widest spread the catalog
         // still offers now that every synth is one note input and one audio output.
         val one = PatchModule.heightFor(Types.Drone)
         val four = PatchModule.heightFor(Types.Mix)
@@ -484,18 +484,18 @@ class PortGeometryTest {
     }
 
     @Test
-    fun `the port group is centred in the body at any count`() {
-        // Spacing and centring are separate terms in portIn: index * pitch places the
+    fun `the port group is centered in the body at any count`() {
+        // Spacing and centering are separate terms in portIn: index * pitch places the
         // ports, span only decides where the group starts. A pitch test alone leaves
-        // the centring unpinned, so assert the group's midpoint lands on the body's.
+        // the centering unpinned, so assert the group's midpoint lands on the body's.
         (1..5).forEach { n ->
             val h = PatchModule.HEADER + maxOf(PatchModule.MIN_BODY, n * PatchModule.PORT_PITCH)
             val rect = Rect(Offset.Zero, Size(PatchModule.WIDTH, h))
             val band = h - PatchModule.HEADER
             val first = portIn(rect, 1f, PortDirection.INPUT, 0, n, band).y
             val last = portIn(rect, 1f, PortDirection.INPUT, n - 1, n, band).y
-            val bodyCentre = PatchModule.HEADER + (h - PatchModule.HEADER) / 2f
-            assertEquals("n=$n", bodyCentre, (first + last) / 2f, 0.001f)
+            val bodyCenter = PatchModule.HEADER + (h - PatchModule.HEADER) / 2f
+            assertEquals("n=$n", bodyCenter, (first + last) / 2f, 0.001f)
         }
     }
 
@@ -522,7 +522,7 @@ class MenuLayoutTest {
     private fun add(n: Int) = Types.palette.take(n).map { MenuItem.Add(it) }
 
     @Test
-    fun `rows are minimised and then balanced`() {
+    fun `rows are minimized and then balanced`() {
         // Asserted as the invariant rather than a specific shape, so widening the column
         // cap does not falsify the test it was meant to satisfy.
         (1..12).forEach { n ->

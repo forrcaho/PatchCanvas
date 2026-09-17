@@ -407,7 +407,7 @@ void Graph::applyCommands() {
                 // Notes are typed, and this is the one place in the engine where a patch
                 // is refused for what it carries. Signals stay advisory: audio into a CV
                 // input is a technique, and blocking it would make this less modular than
-                // the thing it is modelled on. An event is not a voltage, though -- a
+                // the thing it is modeled on. An event is not a voltage, though -- a
                 // voice reading a note buffer nobody fills would simply never sound, and
                 // the silence would look like a bug in everything except the cable.
                 const bool noteSrc = (nodes_[src].node->noteOutputs() &

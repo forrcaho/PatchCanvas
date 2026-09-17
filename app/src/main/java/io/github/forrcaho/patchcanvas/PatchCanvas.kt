@@ -84,7 +84,7 @@ import kotlin.math.sin
  * size and stay reachable at any zoom. Cables can therefore have one endpoint in each
  * space, which is why every cable is drawn in screen space after resolving both ends —
  * see portScreen(). The screen-space hit test needed no changes to cope with this,
- * which is a point in favour of thesis #2.
+ * which is a point in favor of thesis #2.
  */
 
 // ---------------------------------------------------------------- model
@@ -111,13 +111,13 @@ enum class Edge { LEFT, RIGHT }
  * of these four is a voltage: [MODULATION] drives a control between a low and a high stored
  * on that control, in that control's own units, and [PULSE] and [NOTE] are events. Nothing
  * sensible happens when one is read as another, so a mismatch is refused rather than
- * coloured -- see [Patch.connect].
+ * colored -- see [Patch.connect].
  *
  * Audio-rate modulation does not need the loophole enforcement would close. A module that
  * wants it declares an audio input, where the rate is the whole point and the unit is a
  * sample; [MODULATION] is applied once per block and could not carry it anyway.
  *
- * [MODULATION] and [PULSE] keep the colours of the CV and gate they replace, which is most
+ * [MODULATION] and [PULSE] keep the colors of the CV and gate they replace, which is most
  * of the argument that they are the same idea said properly.
  */
 enum class SignalKind(val cable: Color, val idle: Color) {
@@ -156,7 +156,7 @@ enum class ParamCurve { LINEAR, EXPONENTIAL, STEPPED }
  * A knob.
  *
  * Values cross to the engine in real units -- hertz, seconds, beats per minute -- rather
- * than normalised, so a node uses what it is given and the interface can say "440 Hz"
+ * than normalized, so a node uses what it is given and the interface can say "440 Hz"
  * instead of "0.63". The range and the curve belong here, with the thing being
  * described.
  */
@@ -196,7 +196,7 @@ data class Param(
      */
     val header: Boolean = false,
     /**
-     * What this parameter's modulation port is labelled, on a bottom edge where three share
+     * What this parameter's modulation port is labeled, on a bottom edge where three share
      * 116dp. The name itself when it is that short already, which most are; otherwise its
      * first three letters, unless those would say something else.
      */
@@ -221,7 +221,7 @@ data class Param(
             ParamCurve.LINEAR -> min + t * (max - min)
             // Equal-width segments, deliberately not round(): rounding makes the first
             // and last options half as wide as the rest, so on a row of buttons the two
-            // ends are half as easy to hit as their neighbours.
+            // ends are half as easy to hit as their neighbors.
             ParamCurve.STEPPED ->
                 min + floor(t * steps).coerceAtMost(steps - 1f)
             ParamCurve.EXPONENTIAL -> min * kotlin.math.exp(t * kotlin.math.ln(max / min))
@@ -628,7 +628,7 @@ class PatchModule(
         const val RAIL_WIDTH = 64f
         /** Title band above the ports. */
         const val HEADER = 22f
-        /** Centre-to-centre spacing of adjacent ports on one edge. */
+        /** Center-to-center spacing of adjacent ports on one edge. */
         const val PORT_PITCH = 44f
         const val MIN_BODY = 44f
         const val CORNER = 8f
@@ -664,7 +664,7 @@ class PatchModule(
             return maxOf(MIN_BODY, ports * PORT_PITCH)
         }
 
-        /** Closed height. Derived from the type alone, so the add menu can centre one. */
+        /** Closed height. Derived from the type alone, so the add menu can center one. */
         fun heightFor(type: ModuleType): Float = HEADER + portsBodyFor(type)
 
         /** Modulation ports per row of the bottom band, and the height of each row. */
@@ -817,9 +817,9 @@ internal fun panelRow(panel: Rect, d: Float, type: ModuleType, index: Int): Rect
 internal fun panelModChip(panel: Rect, d: Float, type: ModuleType, index: Int): Rect {
     val row = panelRow(panel, d, type, index)
     val height = minOf(PatchModule.PANEL_MOD_CHIP_H * d, row.height - 4f * d)
-    val centre = minOf(row.bottom - 20f * d, row.bottom - height / 2f - 2f * d)
+    val center = minOf(row.bottom - 20f * d, row.bottom - height / 2f - 2f * d)
     return Rect(
-        Offset(row.right + PatchModule.PANEL_MOD_GAP * d, centre - height / 2f),
+        Offset(row.right + PatchModule.PANEL_MOD_GAP * d, center - height / 2f),
         Size(PatchModule.PANEL_MOD_CHIP_W * d, height),
     )
 }
@@ -1252,7 +1252,7 @@ class Patch {
     /**
      * Whether the microphone is listening.
      *
-     * Runtime state, never serialised: it always starts false and is only true while an
+     * Runtime state, never serialized: it always starts false and is only true while an
      * input stream is actually open. Persisting it meant a crash or a force-stop with
      * the mic on came back showing a live In rail with nothing behind it.
      */
@@ -1284,7 +1284,7 @@ class Patch {
     /**
      * Modules to pulse, after an undo moved something you were not looking at.
      *
-     * View state, like the camera and the open panel: never serialised, invisible to the
+     * View state, like the camera and the open panel: never serialized, invisible to the
      * engine. At graph level a parameter is not drawn at all, so undoing a knob was pure
      * audio with no visible cause -- this answers "what did that?" without taking the
      * screen, which binding a whole panel to a repeatable button would.
@@ -1526,7 +1526,7 @@ internal class Frame(
      *
      * Screen space, like the rails: the canvas principle forbids chrome stacked above
      * the surface, not controls drawn inside it that stay put while the world moves.
-     * Bottom-left is the one corner nothing else claims -- the In rail is centred on the
+     * Bottom-left is the one corner nothing else claims -- the In rail is centered on the
      * left edge, and the gesture bar is already excluded by the inset.
      */
     fun historyRect(redo: Boolean): Rect {
@@ -1547,7 +1547,7 @@ internal class Frame(
      *
      * Screen space and always present, floating over the graph and an open panel alike --
      * the undo buttons' arrangement, in the opposite corner. Top-left because it is free
-     * on both: the In rail is centred on the left edge, and a panel keeps its own header
+     * on both: the In rail is centered on the left edge, and a panel keeps its own header
      * chips on the right.
      */
     fun transportChip(): Rect {
@@ -2460,12 +2460,12 @@ fun PatchCanvas(
             val a = portScreen(patch, conn.from, camera, frame) ?: return@forEach
             val b = portScreen(patch, conn.to, camera, frame) ?: return@forEach
             val dim = !patch.portUsable(conn.from) || !patch.portUsable(conn.to)
-            // Coloured by what the source emits, not what the destination expects --
+            // Colored by what the source emits, not what the destination expects --
             // the two may legitimately differ, and the cable should say what is actually
-            // travelling down it.
+            // traveling down it.
             val color = patch.kindOf(conn.from).cable.copy(alpha = if (dim) 0.3f else CABLE_ALPHA)
             drawCable(a, b, color, 2.5f * d, intoBottom = conn.to.dir == PortDirection.MOD)
-            // A plug at each end, in the cable's colour. Drawn over, the stroke would cover the
+            // A plug at each end, in the cable's color. Drawn over, the stroke would cover the
             // jack's own dot; this puts one back, and says the jack is taken, as a patched jack
             // on the open panel already does.
             for ((ref, at) in listOf(conn.from to a, conn.to to b)) {
@@ -2498,7 +2498,7 @@ fun PatchCanvas(
         // and can be watched moving back; having to close the panel, undo blind and
         // reopen to see what happened is the opposite of that.
         //
-        // Hidden rather than greyed when there is nothing to undo: a disabled control
+        // Hidden rather than grayed when there is nothing to undo: a disabled control
         // promises something could happen here, and at the start of a session nothing
         // could. The panel's knob rows are inset by PANEL_SIDE, so the corner these sit
         // in covers no control of the panel's own.
@@ -2548,7 +2548,7 @@ private data class TwoFinger(val centroid: Offset, val spread: Float)
 // ---------------------------------------------------------------- hit testing
 
 /**
- * A port never grabs past the midpoint to its neighbour.
+ * A port never grabs past the midpoint to its neighbor.
  *
  * The screen-space radius is the right idea — a port should be a fixed amount of glass —
  * but it cannot exceed half the on-screen port pitch, or zooming out would let one port's
@@ -2785,7 +2785,7 @@ private fun DrawScope.drawStepGrid(
 
             // A silenced step draws nothing at all. It still remembers its degree --
             // which is what lets tapping the same cell bring the note back -- but a rest
-            // is the absence of a note, not a note in a different colour, and drawing one
+            // is the absence of a note, not a note in a different color, and drawing one
             // where nothing sounds was simply a lie about what you would hear.
             val sounds = here && step.on
             val fill = when {
@@ -2801,8 +2801,8 @@ private fun DrawScope.drawStepGrid(
                 cornerRadius = radius,
             )
 
-            // The note actually sounding right now, ringed rather than recoloured: the
-            // accent already means "there is a note here", and a second colour for
+            // The note actually sounding right now, ringed rather than recolored: the
+            // accent already means "there is a note here", and a second color for
             // "and it is happening" would compete with it.
             if (sounds && column == playingStep) {
                 drawRoundRect(
@@ -2864,7 +2864,7 @@ private fun DrawScope.drawStepGrid(
         if (!above && step.degree >= window.bottom) return@repeat
 
         val live = column < length
-        val centreX = area.left + (column + 0.5f) * cellW
+        val centerX = area.left + (column + 0.5f) * cellW
         val edgeY = if (above) area.top else area.bottom
         val point = if (above) edgeY + 1f * d else edgeY - 1f * d
         val base = if (above) edgeY + 8f * d else edgeY - 8f * d
@@ -2873,9 +2873,9 @@ private fun DrawScope.drawStepGrid(
         // A marker sounds the same way a cell does, or a note you cannot see would be
         // the one note the playhead never acknowledges.
         val marker = Path().apply {
-            moveTo(centreX, point)
-            lineTo(centreX - half, base)
-            lineTo(centreX + half, base)
+            moveTo(centerX, point)
+            lineTo(centerX - half, base)
+            lineTo(centerX + half, base)
             close()
         }
         drawPath(
@@ -2892,7 +2892,7 @@ private fun DrawScope.drawStepGrid(
  * A stepped parameter as a row of buttons rather than a bar.
  *
  * A bar cannot show what the options are, which is fine for a length and useless for a
- * waveform: dragging to pick "square" out of four unlabelled positions asks you to know
+ * waveform: dragging to pick "square" out of four unlabeled positions asks you to know
  * the order by heart. The buttons are equal width so no option is harder to hit than
  * another, which is also why valueAt floors rather than rounds.
  */
@@ -2927,7 +2927,7 @@ private fun DrawScope.drawChoices(
             )
         }
 
-        // Dark ink on the lit button, light on the rest: the accent colours are bright
+        // Dark ink on the lit button, light on the rest: the accent colors are bright
         // enough that a white glyph on top of one disappears.
         val ink = if (on) Color(0xFF14171C) else Color(0xFFB7C0CE)
         when (param.choice) {
@@ -3031,13 +3031,13 @@ private fun DrawScope.drawHistoryButton(rect: Rect, d: Float, redo: Boolean) {
         style = Stroke(width = 1.5f * d),
     )
 
-    val centre = rect.center
+    val center = rect.center
     val radius = rect.width * 0.24f
     val stroke = 2.2f * d
 
-    // Drawn a touch high: the arrowheads hang below the arc, so centring the arc itself
+    // Drawn a touch high: the arrowheads hang below the arc, so centering the arc itself
     // would leave the glyph sitting low in the box.
-    val arc = Offset(centre.x, centre.y - radius * 0.35f)
+    val arc = Offset(center.x, center.y - radius * 0.35f)
     drawArc(
         color = HistoryGlyph,
         startAngle = START_ANGLE,
@@ -3188,7 +3188,7 @@ private suspend fun AwaitPointerEventScope.transportCardGesture(
 
 // ---------------------------------------------------------------- scales
 
-/** A small button: a box with a centred label, dimmed when it would do nothing. */
+/** A small button: a box with a centered label, dimmed when it would do nothing. */
 private fun DrawScope.drawKey(
     rect: Rect,
     d: Float,
@@ -3293,15 +3293,15 @@ private fun DrawScope.drawScales(
 
     val columns = scaleRowParts(scaleCardRow(card, d, 0), d)
     val headTop = card.top + Frame.SCALE_CARD_PAD * d
-    fun heading(text: String, left: Float, right: Float, centred: Boolean) {
+    fun heading(text: String, left: Float, right: Float, centered: Boolean) {
         val t = measurer.measure(text, GridLabelStyle)
-        val x = if (centred) (left + right) / 2f - t.size.width / 2f else left
+        val x = if (centered) (left + right) / 2f - t.size.width / 2f else left
         drawText(t, topLeft = Offset(x, headTop))
     }
-    heading("scale", columns.name.left, columns.name.right, centred = false)
-    heading("bars", columns.barsLess.left, columns.barsMore.right, centred = true)
-    heading("beats", columns.beatsLess.left, columns.beatsMore.right, centred = true)
-    heading("root", columns.rootLess.left, columns.rootMore.right, centred = true)
+    heading("scale", columns.name.left, columns.name.right, centered = false)
+    heading("bars", columns.barsLess.left, columns.barsMore.right, centered = true)
+    heading("beats", columns.beatsLess.left, columns.beatsMore.right, centered = true)
+    heading("root", columns.rootLess.left, columns.rootMore.right, centered = true)
 
     fun value(rect: Rect, text: String) {
         val t = measurer.measure(text, PanelValueStyle)
@@ -3502,7 +3502,7 @@ private fun handleTap(
             ?: return Interaction.Idle // tapped away: dismiss
         when (chosen) {
             is MenuItem.Add -> {
-                // Place the new module centred on where the long press landed.
+                // Place the new module centered on where the long press landed.
                 val world = camera.toWorld(current.anchor)
                 patch.add(
                     chosen.type,
@@ -3743,7 +3743,7 @@ private fun DrawScope.drawMenu(layout: MenuLayout, d: Float, measurer: TextMeasu
 
 // ---------------------------------------------------------------- drawing
 
-/** A live microphone reads as a record light, not as another accent colour. */
+/** A live microphone reads as a record light, not as another accent color. */
 private val RecordRed = Color(0xFFE03B2F)
 
 private val TitleStyle = TextStyle(
@@ -3884,9 +3884,9 @@ private fun DrawScope.drawModuleBox(
             val ref = PortRef(module.id, dir, i)
             val at = portIn(rect, unit, dir, i, ports.size, module.portsBody * unit)
             val lit = ref == armed
-            // Idle colour comes from what the port carries, so the four kinds are
+            // Idle color comes from what the port carries, so the four kinds are
             // distinguishable at a glance without reading a label -- and since typing is
-            // enforced, the colour now says which cables will be accepted rather than
+            // enforced, the color now says which cables will be accepted rather than
             // merely which were expected.
             drawCircle(
                 color = (if (lit) module.type.accent else port.kind.idle).copy(alpha = alpha),
@@ -3943,7 +3943,7 @@ private fun DrawScope.drawModuleBox(
     }
 }
 
-/** The colour of modulation, which now has a kind of its own to take it from. */
+/** The color of modulation, which now has a kind of its own to take it from. */
 private val ModulationColor = SignalKind.MODULATION.cable
 
 /**
@@ -4039,7 +4039,7 @@ private fun DrawScope.drawPanel(
     }
 
     // A jack for each exposed parameter on the bottom edge, in the order of the rows, with a
-    // stub down past the edge when patched. Labelled below the edge rather than above it:
+    // stub down past the edge when patched. Labeled below the edge rather than above it:
     // a panel with four or five rows fills its body, and above would be on the last bar.
     module.modRanges.keys.sorted().forEach { index ->
         val ref = PortRef(module.id, PortDirection.MOD, index)

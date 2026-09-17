@@ -42,13 +42,13 @@ public:
         sampleRate_ = rate;
         // Both 30ms.
         //
-        // The artefact is the envelope itself, not a discontinuity: fading a signal that
+        // The artifact is the envelope itself, not a discontinuity: fading a signal that
         // is already at full amplitude and arbitrary phase puts energy around
         // 1/duration, which at 10ms is a low-frequency thump. 30ms moves that down and
         // quietens it.
         //
         // These were briefly asymmetric, on the theory that fading out ends in silence
-        // where an envelope has nothing left to colour. That was wrong: 10ms sounded
+        // where an envelope has nothing left to color. That was wrong: 10ms sounded
         // clean on the phone's speaker and was plainly audible on earbuds. The shorter
         // side was not better, only harder to hear.
         //

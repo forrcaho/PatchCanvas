@@ -59,7 +59,7 @@ object AudioEngine {
     fun disconnect(srcId: Long, srcPort: Int, dstId: Long, dstPort: Int): Boolean =
         available && started && nativeDisconnect(srcId, srcPort, dstId, dstPort)
 
-    /** A knob moved. Real units, not normalised -- the node owns no mapping. */
+    /** A knob moved. Real units, not normalized -- the node owns no mapping. */
     fun setParam(id: Long, index: Int, value: Float): Boolean =
         available && started && nativeSetParam(id, index, value)
 

@@ -107,14 +107,14 @@ class HistoryTest {
 }
 
 /**
- * `replaceWith` has to leave the patch in a state that serialises *byte for byte* to the
+ * `replaceWith` has to leave the patch in a state that serializes *byte for byte* to the
  * snapshot it came from, or History's equality check fails and every undo pushes a
  * phantom entry onto its own stack.
  */
 class ReplaceWithTest {
 
     @Test
-    fun `a replaced patch serialises identically to its snapshot`() {
+    fun `a replaced patch serializes identically to its snapshot`() {
         val snapshot = demoPatch().toJson()
 
         val live = Patch()
@@ -466,7 +466,7 @@ class RestoreChangeSetTest {
 
 /**
  * The scale chooser's geometry. It covers the panel body, so a tile that fell outside it
- * or overlapped its neighbour would be a scale you could not pick or could pick by
+ * or overlapped its neighbor would be a scale you could not pick or could pick by
  * accident -- and neither is visible in a screenshot of the one you were aiming at.
  */
 class ScaleChooserGeometryTest {
@@ -531,8 +531,8 @@ class ScaleChooserGeometryTest {
     fun `the interval chip sits in the header, clear of the title`() {
         val interval = panelIntervalChip(panel, frame.density)
         assertTrue("spills past the header", interval.bottom <= panel.top + PatchModule.PANEL_HEADER * frame.density)
-        // The title is centred; keeping the chips in the right-hand side keeps them off it.
-        assertTrue("reaches the centred title", interval.left > panel.center.x + 60f * frame.density)
+        // The title is centered; keeping the chips in the right-hand side keeps them off it.
+        assertTrue("reaches the centered title", interval.left > panel.center.x + 60f * frame.density)
     }
 
     @Test
@@ -609,7 +609,7 @@ class TransportGeometryTest {
         val scale = frame.scaleChip()
         assertFalse(scale.overlaps(chip))
         assertEquals(chip.top, scale.top, 0.001f)
-        assertTrue("reaches the centred panel title", scale.right < panel.center.x - 60f * d)
+        assertTrue("reaches the centered panel title", scale.right < panel.center.x - 60f * d)
         assertFalse(scale.overlaps(panelGrid(panel, d)))
         assertFalse(scale.overlaps(panelIntervalChip(panel, d)))
         Types.byName.values.forEach { type ->

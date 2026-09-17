@@ -52,7 +52,7 @@ public:
 
     /**
      * A knob moved. Values arrive in real units -- hertz, seconds, beats per minute --
-     * rather than normalised, because the range and the curve belong to the thing being
+     * rather than normalized, because the range and the curve belong to the thing being
      * described and the interface should be able to say "440 Hz" rather than "0.63".
      *
      * Called from applyCommands on the audio thread, so an implementation may compute
