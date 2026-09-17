@@ -156,8 +156,18 @@ void DroneNode::setStep(int32_t index, int32_t degree, bool gate) {
 }
 
 void DroneNode::tick(int32_t offset, int64_t count) {
-    (void) offset;
     beat_ = count;
+    // Checked on every beat rather than only where an entry ends: whole beats are where a
+    // scale can change, and the comparison is per cell and cheap, so there is no second
+    // piece of arithmetic about entry lengths to keep in step with ScaleList's.
+    retuneDue_ = true;
+    retuneBeat_ = count;
+    retuneOffset_ = static_cast<uint16_t>(offset);
+}
+
+float DroneNode::octavesAt(int64_t beat, int32_t degree) const {
+    return scales_ != nullptr ? scales_->tableAt(beat).octavesOf(degree)
+                              : ScaleTable{}.octavesOf(degree);
 }
 
 void DroneNode::process(int32_t frames) {
@@ -179,7 +189,10 @@ void DroneNode::process(int32_t frames) {
             on.beat = beat_;
             on.cents = 0.0f;
             on.velocity = 1.0f;
-            if (notes.push(on)) sounding_[i] = on.id;
+            if (notes.push(on)) {
+                sounding_[i] = on.id;
+                octaves_[i] = octavesAt(beat_, degree_[i]);
+            }
         } else if (!on_[i] && sounding_[i] != 0) {
             NoteEvent off;
             off.id = sounding_[i];
@@ -188,6 +201,44 @@ void DroneNode::process(int32_t frames) {
             if (notes.push(off)) sounding_[i] = 0;
         }
     }
+
+    // A replaced scale list retunes too, at the top of the block and against the beat
+    // already known -- unless a tick in this block has asked for its own sample.
+    if (scales_ != retunedFor_) {
+        if (!retuneDue_) {
+            retuneDue_ = true;
+            retuneBeat_ = beat_;
+            retuneOffset_ = 0;
+        }
+        retunedFor_ = scales_;
+    }
+    if (!retuneDue_) return;
+
+    bool said = true;
+    for (int32_t i = 0; i < kCells; ++i) {
+        if (!on_[i] || sounding_[i] == 0) continue;
+        // Exact comparison on purpose: both sides come from the same lookup on the same
+        // inputs, so an unchanged degree compares equal and sends nothing.
+        const float target = octavesAt(retuneBeat_, degree_[i]);
+        if (target == octaves_[i]) continue;
+
+        NoteEvent change;
+        change.id = sounding_[i];
+        change.kind = NoteKind::Change;
+        change.offset = retuneOffset_;
+        change.degree = degree_[i];
+        change.beat = retuneBeat_;
+        change.cents = 0.0f;
+        change.velocity = 1.0f;
+        if (notes.push(change)) {
+            octaves_[i] = target;
+        } else {
+            said = false;
+        }
+    }
+    // What did not fit goes on the next block, at its top: already late, so no later.
+    retuneDue_ = !said;
+    retuneOffset_ = 0;
 }
 
 // ---------------------------------------------------------------- Steps
@@ -328,6 +379,7 @@ void StepsNode::setParam(int32_t index, float value) {
 
 void OscNode::prepare(int32_t sampleRate) {
     Node::prepare(sampleRate);
+    glideFrames_ = std::max(1, static_cast<int32_t>(0.03f * static_cast<float>(sampleRate)));
     for (auto &voice : voices_) {
         voice.osc.Init(static_cast<float>(sampleRate));
         voice.osc.SetWaveform(daisysp::Oscillator::WAVE_POLYBLEP_SAW);
@@ -365,17 +417,12 @@ void OscNode::start(const NoteEvent &event) {
     // reached rather than from zero, which would be a step in the middle of a note.
     const bool stolen = chosen->active && chosen->gate;
 
-    // Resolved once, here, and never again: a held note keeps the pitch it started on.
-    // Retuning a sounding voice was considered and rejected -- a major third dropping to
-    // a minor third mid-note is a step with no ramp, which is the transient every
-    // crossfade in this engine exists to prevent.
-    //
-    // Against the scale of the beat the note started on, which travelled with it. The
-    // engine still never learns what a semitone is: this is a table lookup and an exp2.
-    const float octaves = scales_ != nullptr
-            ? scales_->tableAt(event.beat).octavesOf(event.degree)
-            : ScaleTable{}.octavesOf(event.degree);
-    chosen->osc.SetFreq(kMiddleC * std::exp2(octaves + event.cents / 1200.0f));
+    // Resolved here, against the scale of the beat the note started on, which travelled
+    // with it. It is not resolved again unless the source sends a Change: a sequencer's
+    // note keeps the pitch it started on, and only a drone's follows the scale.
+    chosen->octaves = pitchOf(event);
+    chosen->glideLeft = 0;
+    chosen->osc.SetFreq(kMiddleC * std::exp2(chosen->octaves));
     chosen->osc.SetAmp(clampf(event.velocity, 0.0f, 1.0f));
     chosen->id = event.id;
     chosen->source = event.source;
@@ -383,6 +430,31 @@ void OscNode::start(const NoteEvent &event) {
     chosen->active = true;
     chosen->age = age_++;
     if (stolen) chosen->env.Retrigger(false);
+}
+
+float OscNode::pitchOf(const NoteEvent &event) const {
+    // The engine still never learns what a semitone is: a table lookup and an exp2.
+    const float octaves = scales_ != nullptr
+            ? scales_->tableAt(event.beat).octavesOf(event.degree)
+            : ScaleTable{}.octavesOf(event.degree);
+    return octaves + event.cents / 1200.0f;
+}
+
+void OscNode::change(const NoteEvent &event) {
+    const float target = pitchOf(event);
+    for (auto &voice : voices_) {
+        if (!voice.active || voice.id != event.id || voice.source != event.source) continue;
+        if (voice.glideLeft == 0 && voice.octaves == target) return;
+        // A glide, not a step. Retuning a sounding voice was rejected once because a
+        // major third dropping to a minor third mid-note is a step with no ramp -- the
+        // transient every crossfade here exists to prevent. The ramp is the answer to
+        // that, over the same 30ms and the same smoothstep the crossfades use. A glide
+        // already under way starts again from wherever it has got to.
+        voice.glideFrom = voice.octaves;
+        voice.glideTo = target;
+        voice.glideLeft = glideFrames_;
+        return;
+    }
 }
 
 void OscNode::release(uint32_t id, int32_t source) {
@@ -412,7 +484,7 @@ void OscNode::process(int32_t frames) {
             const NoteEvent &event = notes.events[next];
             if (event.kind == NoteKind::On) start(event);
             if (event.kind == NoteKind::Off) release(event.id, event.source);
-            // Change is reserved and does nothing yet.
+            if (event.kind == NoteKind::Change) change(event);
             ++next;
         }
 
@@ -433,6 +505,14 @@ void OscNode::process(int32_t frames) {
                 voice.source = -1;
                 voice.id = 0;
                 continue;
+            }
+            if (voice.glideLeft > 0) {
+                const float t = 1.0f - static_cast<float>(voice.glideLeft - 1) /
+                                               static_cast<float>(glideFrames_);
+                const float eased = t * t * (3.0f - 2.0f * t);
+                voice.octaves = voice.glideFrom + (voice.glideTo - voice.glideFrom) * eased;
+                voice.osc.SetFreq(kMiddleC * std::exp2(voice.octaves));
+                --voice.glideLeft;
             }
             sum += voice.osc.Process() * amplitude;
         }

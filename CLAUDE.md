@@ -147,7 +147,8 @@ are not.
 nothing. Degrees become octaves in exactly one place — `ScaleTable::octavesOf` in
 `scales.h`, against the scale sounding on the beat a note starts, with that entry's root
 (the key, in octaves from middle C) added — because only the audio thread knows that beat
-to the sample. Which scale is decided in integers from the tick's
+to the sample. A note keeps that pitch unless its source sends a `Change`: only `Drone`
+does, on each beat where a held note's pitch moved, and `OscNode` glides there over 30ms. Which scale is decided in integers from the tick's
 count, never from the transport's floating position. A scale list crosses whole, as a
 pointer built off the audio thread, like a node; both sides cap a scale at 64 degrees
 (`MAX_DEGREES` / `kMaxDegrees`), and a larger `.scl` fails to parse rather than being cut

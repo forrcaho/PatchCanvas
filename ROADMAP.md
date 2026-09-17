@@ -1118,7 +1118,8 @@ mechanism rather than a static mode and a progression mode.
 - **Held notes keep their pitch.** A voice resolves its degree once, at note-on. Retuning a
   sounding note was considered and rejected: a held major third dropping to a minor third
   mid-note is a step with no ramp, the transient every crossfade in this engine exists to
-  prevent.
+  prevent. *Revised 2026-09-16 for drones, which glide instead -- see "A drone follows the
+  scale".*
 - **Degrees map by position.** Degree 6 of a seven-note scale becomes degree 1 of the next
   period in a five-note one -- the figure keeps its shape and spreads upward. Snapping to
   the nearest pitch instead is a key change rather than the same figure in another mode,
@@ -1556,6 +1557,38 @@ next -- the same degrees, so the same cells, lit and toggled together. Two alter
 were offered and passed over: fixed-height rows leaving blank space above a short scale,
 and holding the open panel in the scale it opened with, which would have let the grid
 disagree with what a newly toggled cell sounds.
+
+### A drone follows the scale
+
+**Found on the phone, 2026-09-16:** a drone holding degree 10 through a list of 12-TET and
+Harmonic minor never changed pitch. That was the Phase 6 rule working as written -- a note
+resolves its scale once, at note-on -- but the rule was made for notes that end. A
+sequencer's note lasts half a step and picks up the new scale almost at once. A drone's
+never ends, so it sounded its 12-TET pitch forever while its grid showed the new scale.
+
+**Decided: held drone notes glide to the new scale.** Re-striking them, gliding every held
+note including a sequencer's, and keeping the drone as a fixed pedal were the other three
+choices. Gliding answers the original objection directly: that objection was to a pitch
+step with no ramp, so this ramps it -- over 30ms with a smoothstep, like every crossfade.
+
+It uses `NoteKind::Change`, which had been reserved and ignored since notes were built.
+The drone decides *when*: on every beat, and whenever the scale list itself is replaced
+(which can happen with the transport stopped and no tick coming), it works out each held
+note's pitch under the scale for that beat and sends a Change only where the pitch moved.
+The oscillator decides *how*: it finds the voice by id and source, as an Off does, and
+glides. A sequencer never sends Change, so its notes keep the old rule.
+
+**The join is what the tests had to prove.** Each half passing alone says nothing about a
+Change being ticked, merged and resolved against the same list, so a graph test drives a
+drone into an oscillator across a real scale switch and counts cycles either side. Five
+mutations each fail a test: an oscillator ignoring Change, a glide that steps, a tick
+that never asks for a retune, a replaced list going unnoticed, and a retune sent where
+nothing moved.
+
+**Heard on the phone** through the debug capture of that same patch: degree 10 (index 9) is
+E-flat at 622Hz in Harmonic minor and A at 440Hz in 12-TET, and the capture turns from one
+to the other 3.1 seconds in, with the pitch moving over about 30ms. `find_clicks.py` finds no
+discontinuity, and the largest sample step at the turn is the same as in the steady tone.
 
 ### A module's color is the kind it sends
 

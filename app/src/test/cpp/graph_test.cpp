@@ -647,6 +647,64 @@ void aReplacedScaleListIsHandedBackAndFreed() {
     check(graph.scaleEntry() == 1, "and on its second a beat later");
 }
 
+/**
+ * The whole path, because each half passing on its own proves nothing about the join: the
+ * drone has to be ticked by the transport, its Change has to survive the merge into the
+ * oscillator's input, and the oscillator has to be reading the same scale list. Any one of
+ * those missing would leave the drone as silent about a scale change as it was on the
+ * phone, with every node test green.
+ *
+ * Sine, flat envelope, 120bpm: a beat is 24000 frames and the list turns from 12-TET to
+ * major at beat 4. Degree 10 is 466Hz before and 698Hz after.
+ */
+void aDroneFollowsTheScaleThroughTheGraph() {
+    std::printf("a drone follows the scale through the graph\n");
+    Graph graph;
+    graph.setSampleRate(48000);
+    graph.postAdd(1, NodeType::Osc);
+    graph.postAdd(2, NodeType::Out);
+    graph.postAdd(3, NodeType::Drone);
+    graph.postSetParam(1, 0, 3.0f);    // sine, so a zero crossing is a cycle
+    graph.postSetParam(1, 1, 0.0005f); // and a flat envelope
+    graph.postSetParam(1, 2, 0.0005f);
+    graph.postSetParam(1, 3, 1.0f);
+    graph.postSetStep(3, 10, 10, true);
+    graph.postConnect(3, 0, 1, 0);
+    graph.postConnect(1, 0, 2, 0);
+
+    auto *list = new ScaleList();
+    list->count = 2;
+    list->tables[0].size = 12;
+    for (int32_t i = 0; i < 12; ++i) list->tables[0].octaves[i] = static_cast<float>(i) / 12.0f;
+    constexpr int32_t major[7] = {0, 2, 4, 5, 7, 9, 11};
+    list->tables[1].size = 7;
+    for (int32_t i = 0; i < 7; ++i) list->tables[1].octaves[i] = static_cast<float>(major[i]) / 12.0f;
+    list->beats[0] = 4;
+    list->beats[1] = 4;
+    list->finish();
+    graph.postSetScales(list);
+    graph.postSetTempo(120.0f);
+    graph.applyCommands();
+    graph.setTransportRunning(true);
+
+    auto cycles = [](const std::vector<float> &samples) {
+        int count = 0;
+        for (std::size_t i = 1; i < samples.size(); ++i) {
+            if (samples[i - 1] > 0.0f && samples[i] <= 0.0f) ++count;
+        }
+        return count;
+    };
+
+    render(graph, 750);                      // to beat 1
+    const int before = cycles(render(graph, 750)); // beats 1 to 2, half a second
+    check(std::abs(before - 233) <= 3, "degree 10 in 12-TET, got " + std::to_string(before));
+
+    render(graph, 1625);                     // past the turn at beat 4, and the glide
+    const int after = cycles(render(graph, 750));
+    check(std::abs(after - 349) <= 3, "degree 10 in major after the turn, got " + std::to_string(after));
+    graph.collectGarbage();
+}
+
 void resetStartsOnTheFirstFrameOfBarOne() {
     std::printf("reset starts on the first frame of bar one\n");
     Transport transport;
@@ -1152,6 +1210,7 @@ int main() {
     aScaleTableWrapsByPeriod();
     aScaleListSwitchesOnWholeBeatsAndLoops();
     aReplacedScaleListIsHandedBackAndFreed();
+    aDroneFollowsTheScaleThroughTheGraph();
     aNoteCableSoundsAndOrdersTheGraph();
     notesAndSignalsDoNotPatchToEachOther();
     aRemovedSourceEndsTheNotesItStarted();

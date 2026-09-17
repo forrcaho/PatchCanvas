@@ -1119,6 +1119,138 @@ void anLfoStaysInsideItsRangeAtItsRate() {
     check(first[0] < 0.01f, "a sine starts from the bottom of the range, not its middle");
 }
 
+// ---------------------------------------------------------------- a drone follows the scale
+
+namespace {
+
+/** The first event of [kind] a drone left in the block just rendered, or null. */
+const NoteEvent *firstOf(const DroneNode &drone, NoteKind kind) {
+    const NoteBuffer &notes = *drone.noteOutput(0);
+    for (int32_t i = 0; i < notes.count; ++i) {
+        if (notes.events[i].kind == kind) return &notes.events[i];
+    }
+    return nullptr;
+}
+
+/** One block with a tick at [offset], against [scales]. */
+void tickDrone(DroneNode &drone, int64_t count, int32_t offset, const ScaleList &scales) {
+    drone.setTiming(kBeatsPerFrame, true, &scales);
+    drone.tick(offset, count);
+    drone.process(kBlockSize);
+}
+
+} // namespace
+
+/**
+ * Found on the phone: a drone holding degree 10 through a list of 12-TET and Harmonic minor
+ * never changed pitch, because a note resolved its scale once, at note-on, and a drone's
+ * notes never end. Degree 10 is B-flat in 12-TET and the F an octave and a fourth up in
+ * major, so a Change has to be sent at the beat the scale turns.
+ */
+void aDroneRetunesItsHeldNotesWhenTheScaleChanges() {
+    std::printf("a drone retunes its held notes when the scale changes\n");
+    DroneNode drone;
+    drone.prepare(kRate);
+    drone.setStep(10, 10, true);
+
+    tickDrone(drone, 3, 0, chromaticThenMajor()); // beat 3: the last of 12-TET
+    const NoteEvent *on = firstOf(drone, NoteKind::On);
+    check(on != nullptr, "the note starts");
+    const uint32_t id = on != nullptr ? on->id : 0;
+    check(firstOf(drone, NoteKind::Change) == nullptr, "and nothing moves it in the scale it started in");
+
+    tickDrone(drone, 4, 7, chromaticThenMajor()); // beat 4, on sample 7: major
+    const NoteEvent *change = firstOf(drone, NoteKind::Change);
+    check(change != nullptr, "the held note is told the scale turned");
+    if (change != nullptr) {
+        check(change->id == id, "naming the note that is sounding");
+        check(change->degree == 10, "with its degree");
+        check(change->beat == 4, "and the beat that chooses its new scale");
+        check(change->offset == 7, "on the tick's own sample");
+    }
+
+    tickDrone(drone, 5, 0, chromaticThenMajor()); // beat 5: still major
+    check(firstOf(drone, NoteKind::Change) == nullptr, "and nothing more while the scale holds");
+}
+
+void aDroneSaysNothingForADegreeTheChangeLeavesWhereItWas() {
+    std::printf("a drone says nothing for a degree the change leaves where it was\n");
+    DroneNode drone;
+    drone.prepare(kRate);
+    drone.setStep(0, 0, true); // the tonic is the tonic in both scales
+
+    tickDrone(drone, 3, 0, chromaticThenMajor());
+    tickDrone(drone, 4, 0, chromaticThenMajor());
+    check(firstOf(drone, NoteKind::Change) == nullptr, "a pitch that did not move is not sent");
+}
+
+/**
+ * The list can be replaced with the transport stopped, when no tick is coming: editing the
+ * scale must still retune what is holding, at the top of the next block.
+ */
+void aReplacedScaleListRetunesADroneWithTheTransportStopped() {
+    std::printf("a replaced scale list retunes a drone with the transport stopped\n");
+    DroneNode drone;
+    drone.prepare(kRate);
+    drone.setStep(2, 2, true);
+    tickDrone(drone, 4, 0, chromaticThenMajor()); // beat 4, major: degree 2 is E
+
+    drone.setTiming(0.0, false, &cThenG()); // same beat, now G: degree 2 is A
+    drone.process(kBlockSize);
+    const NoteEvent *change = firstOf(drone, NoteKind::Change);
+    check(change != nullptr, "the held note is retuned without a tick");
+    if (change != nullptr) {
+        check(change->offset == 0, "at the top of the block");
+        check(change->beat == 4, "against the beat it already knew");
+    }
+}
+
+/**
+ * The other half: an oscillator told to move a held note glides there. Degree 10 in 12-TET
+ * is 466Hz and in major 698Hz. Over the 30ms glide it has to be neither -- a step would read
+ * as the new pitch from the first cycle, which is the transient that got retuning rejected
+ * the first time.
+ */
+void aHeldNoteGlidesToItsNewPitch() {
+    std::printf("a held note glides to its new pitch\n");
+    OscNode osc;
+    osc.setTiming(kBeatsPerFrame, true, &chromaticThenMajor());
+    const auto on = noteAt(NoteKind::On, 1, 0, 10);
+    holdDegree(osc, 10, on);
+    const int before = countCycles(run(osc, kRate / kBlockSize));
+    check(std::abs(before - 466) <= 3, "degree 10 in 12-TET, got " + std::to_string(before));
+
+    NoteBuffer move = noteAt(NoteKind::Change, 1, 0, 10);
+    move.events[0].beat = 4; // major
+    osc.setNoteInput(0, &move);
+    std::vector<float> glide = run(osc, 1);
+    osc.setNoteInput(0, &kNoNotes);
+    const auto rest = run(osc, 44); // 45 blocks in all: exactly the 1440-frame glide
+    glide.insert(glide.end(), rest.begin(), rest.end());
+    const int during = countCycles(glide);
+    // 14 cycles if it never moved, 21 if it stepped at once; a glide is between.
+    check(during >= 15 && during <= 19, "partway between the two during the glide, got " + std::to_string(during));
+
+    const int after = countCycles(run(osc, kRate / kBlockSize));
+    check(std::abs(after - 698) <= 4, "and degree 10 in major once it arrives, got " + std::to_string(after));
+}
+
+void aChangeForANoteNobodyHoldsMovesNothing() {
+    std::printf("a change for a note nobody holds moves nothing\n");
+    OscNode osc;
+    osc.setTiming(kBeatsPerFrame, true, &chromaticThenMajor());
+    const auto on = noteAt(NoteKind::On, 1, 0, 10);
+    holdDegree(osc, 10, on);
+
+    NoteBuffer stray = noteAt(NoteKind::Change, 99, 0, 10); // an id no voice has
+    stray.events[0].beat = 4;
+    osc.setNoteInput(0, &stray);
+    osc.process(kBlockSize);
+    osc.setNoteInput(0, &kNoNotes);
+    const int cycles = countCycles(run(osc, kRate / kBlockSize));
+    check(std::abs(cycles - 466) <= 3, "the note that is held stays put, got " + std::to_string(cycles));
+}
+
 int main() {
     oscPlaysTheRequestedPitch();
     oscStaysBandLimited();
@@ -1156,5 +1288,10 @@ int main() {
     aDroneNoteTakesTheBeatOfTheLastTick();
     aDroneSaysNothingTwiceForTheSameCell();
     aDroneIgnoresACellOutsideItsGrid();
+    aDroneRetunesItsHeldNotesWhenTheScaleChanges();
+    aDroneSaysNothingForADegreeTheChangeLeavesWhereItWas();
+    aReplacedScaleListRetunesADroneWithTheTransportStopped();
+    aHeldNoteGlidesToItsNewPitch();
+    aChangeForANoteNobodyHoldsMovesNothing();
     return testing::report("nodes");
 }

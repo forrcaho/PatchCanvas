@@ -29,9 +29,13 @@
 constexpr int32_t kMaxNoteEvents = 32;
 
 /**
- * Change is reserved and unimplemented: it is per-note expression, what MPE does by
- * giving each note its own MIDI channel. Here the id already does the channel's job, so
- * reserving the kind now keeps a touch keyboard from being a format change later.
+ * Change moves a note that is already sounding: per-note expression, what MPE does by
+ * giving each note its own MIDI channel. Here the id already does the channel's job.
+ *
+ * Its first use is a drone following the scale -- a Change carries the note's degree and a
+ * new beat, and the oscillator glides to that degree's pitch in the scale sounding then.
+ * Its pitch is worked out exactly as an On's is, cents included. Velocity on a Change is
+ * not applied yet; a touch keyboard is what will want it.
  */
 enum class NoteKind : uint8_t { On = 0, Off = 1, Change = 2 };
 

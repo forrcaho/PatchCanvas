@@ -214,8 +214,15 @@ private:
  * It is ticked at a quarter note, which it uses for nothing but knowing the beat. A note
  * has to name the beat it starts on so the right scale resolves it, and a drone must be
  * able to sound with the transport stopped -- so the ticks tell it where the music is
- * without its sounding depending on them. A note held across a scale change keeps the
- * scale it started in, which is what every other held note here already does.
+ * without its sounding depending on them.
+ *
+ * A drone note follows the scale; a sequencer's note does not. Every other held note here
+ * keeps the scale it started in, a rule made for notes that end within a step. A drone's
+ * never end, so under that rule a degree toggled in 12-TET went on sounding its 12-TET
+ * pitch through every later scale, while the grid showed the new one -- found on the phone,
+ * 2026-09-16. So at each beat, and whenever the scale list itself is replaced, a drone
+ * sends a Change for every held note whose pitch has moved, and the oscillator glides
+ * there rather than stepping.
  */
 class DroneNode : public Node {
 public:
@@ -244,9 +251,29 @@ private:
      * disagreeing, and the rest go out on the next block.
      */
     uint32_t sounding_[kCells] = {};
+    /**
+     * The pitch each sounding cell was last told to play, in octaves from middle C. Kept so
+     * a retune is sent only where a pitch actually moved: most scale changes leave some
+     * degrees where they were, and a glide from a pitch to itself is a command for nothing.
+     */
+    float octaves_[kCells] = {};
     uint32_t nextNoteId_ = 1;
     /** The last quarter-note boundary seen, which is the beat a note starting now belongs to. */
     int64_t beat_ = 0;
+
+    /** A degree's pitch in the scale sounding on [beat], resolved as OscNode resolves it. */
+    float octavesAt(int64_t beat, int32_t degree) const;
+
+    /**
+     * A retune waiting for process() to say it. Set by a tick, since events can only be
+     * written into the block that is about to render, and by the scale list being replaced
+     * -- which can happen with the transport stopped, when no tick will come.
+     */
+    bool retuneDue_ = false;
+    int64_t retuneBeat_ = 0;
+    uint16_t retuneOffset_ = 0;
+    /** Compared by address only, never followed: it says the list was swapped, nothing more. */
+    const ScaleList *retunedFor_ = nullptr;
 };
 
 /**
@@ -297,10 +324,23 @@ private:
         bool active = false;
         /** When it started, for choosing which to steal. */
         int64_t age = 0;
+        /** Where its pitch is now, in octaves from middle C, cents included. */
+        float octaves = 0.0f;
+        /** A glide in progress: from, to, and frames still to go. */
+        float glideFrom = 0.0f;
+        float glideTo = 0.0f;
+        int32_t glideLeft = 0;
     };
 
     void start(const NoteEvent &event);
     void release(uint32_t id, int32_t source);
+    /** A held note told to move: it glides there rather than stepping. */
+    void change(const NoteEvent &event);
+    /** A note's pitch in octaves from middle C, against the scale of the beat it carries. */
+    float pitchOf(const NoteEvent &event) const;
+
+    /** How long a glide takes: 30ms, like every crossfade in the engine. */
+    int32_t glideFrames_ = 1440;
 
     Voice voices_[kVoices];
     int64_t age_ = 0;
