@@ -73,6 +73,51 @@ class GraphSyncTest {
     private val rec = Recorder()
     private val sync = GraphSync(rec)
 
+    /**
+     * The engine-facing half of groups: a playing patch grouped, nested, ungrouped or
+     * regrouped is sent nothing, because the cables the engine has are the same cables. A
+     * command here would be a crossfade, and every one of them is audible.
+     */
+    @Test
+    fun `grouping a playing patch sends the engine nothing`() {
+        val f = GroupFixture()
+        sync.sync(f.patch)
+        rec.clear()
+
+        val inner = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+        sync.sync(f.patch)
+        assertTrue("grouping: ${rec.log}", rec.log.isEmpty())
+
+        val outer = f.patch.group(setOf(inner.id, f.lfo.id))!!
+        sync.sync(f.patch)
+        assertTrue("nesting: ${rec.log}", rec.log.isEmpty())
+
+        f.patch.ungroup(outer)
+        f.patch.ungroup(inner)
+        sync.sync(f.patch)
+        assertTrue("ungrouping: ${rec.log}", rec.log.isEmpty())
+    }
+
+    @Test
+    fun `a module inside a group is synced like any other`() {
+        val f = GroupFixture()
+        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+        sync.sync(f.patch)
+
+        assertTrue(rec.log.none { it is Cmd.Add && (it.id == group.id) })
+        assertTrue(rec.log.any { it == Cmd.Add(f.osc.id, NodeType.Osc) })
+        assertTrue(
+            "a cable through the group's ports arrives as the one it stands for",
+            rec.log.contains(Cmd.Connect(f.filter.id, 0, OUT_ID, 0)),
+        )
+
+        rec.clear()
+        f.filter.setParam(0, 2345f)
+        sync.sync(f.patch)
+        assertEquals(listOf<Cmd>(Cmd.SetParam(f.filter.id, 0, 2345f)), rec.log)
+    }
+
+
     @Test
     fun `first sync sends every node and cable`() {
         val patch = demoPatch()

@@ -185,8 +185,12 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
     }
 
     fun sync(patch: Patch) {
-        val nodes = patch.modules.associate { it.id to NodeType.of(it.type) }
-        val cables = patch.connections.toSet()
+        // The patch flattened: groups and their rails are not nodes, and a cable through a
+        // group's ports arrives as the one cable it stands for. So grouping modules that are
+        // already playing sends the engine nothing at all.
+        val sounding = patch.engineModules
+        val nodes = sounding.associate { it.id to NodeType.of(it.type) }
+        val cables = patch.engineConnections()
 
         // Note inputs are excluded: they merge rather than replace, so a new cable into
         // one supersedes nothing and the cable that left still has to be sent.
@@ -229,7 +233,7 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
         // wrong -- but only until the range arrived, and a queue drained partway through a
         // sync would let a block render in between. Every range of a node that was just
         // made, because the engine's node knows none of them.
-        val ranges = patch.modules.associate { it.id to it.modRanges }
+        val ranges = sounding.associate { it.id to it.modRanges }
         ranges.forEach { (id, exposed) ->
             val type = patch.module(id)?.type ?: return@forEach
             val previous = if (id in fresh) null else syncedRanges[id]
@@ -252,7 +256,7 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
         // Knobs last, and every knob of a node that was just added: the engine's node
         // starts at its own C++ defaults, which are not required to agree with the ones
         // declared here, and a patch loaded from disk has values for all of them.
-        val params = patch.modules.associate { it.id to it.params.toList() }
+        val params = sounding.associate { it.id to it.params.toList() }
         params.forEach { (id, values) ->
             val previous = syncedParams[id]
             values.forEachIndexed { index, value ->
@@ -266,7 +270,7 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
         // a node that was just added. As degrees: the engine resolves each note against
         // the scale sounding on the beat it starts, so a change of scale resends the list
         // below and not a single step.
-        val steps = patch.modules
+        val steps = sounding
             .filter { it.type.stepCount > 0 }
             .associate { it.id to it.steps.toList() }
         steps.forEach { (id, sequence) ->

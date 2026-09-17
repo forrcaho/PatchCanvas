@@ -113,7 +113,9 @@ finish.
 modules rather than renaming fields, so an older file could only have been converted
 *silently* -- a patch built around a VCA an envelope opened comes back as a filter fed by
 nothing, quieter than it was left, reporting success. So `upgrade` is a version check and
-nothing more; the migration ladder that walked 1 to 4 went with the formats it served. What
+nothing more; the migration ladder that walked 1 to 4 went with the formats it served.
+Format 6 added groups without taking anything away, so it reads 5 as it stands -- the
+rule is against silent conversion, not against a change that needs none. What
 makes that affordable is that `PatchStore.load` moves a refused file to
 `patch.rejected.json` before the demo patch can be autosaved over it. **A refusal must
 never be a delete** -- check that still holds before adding another one.
@@ -176,6 +178,16 @@ Node ids 1, 7 and 8 are retired and never reused; `Osc` is id 10, where `Voice` 
 **A module's color is the kind of cable it sends** -- greens for notes, steel blues and
 grays for audio, purples for modulation -- in a shade of that family, never the cable
 color itself. `ModuleColorTest` enforces it, so a new module's accent has to follow it.
+
+**Groups never reach the engine.** Every module is in one flat list with a `parent`
+(`TOP`, or the id of the group it is in). A group is a module of type `Group` whose ports
+are its own, stored in a `GroupPorts` it shares with the two pinned rails inside it
+(`GroupIn` on the left, `GroupOut` on the right) -- so inside a group, the existing rail
+drawing, hit testing and cables all apply unchanged. `GraphSync` reads
+`engineModules` and `engineConnections()`, which follow any chain of group ports to the
+real output at the far end. **Grouping or ungrouping a playing patch must send the engine
+nothing**, and `GraphSyncTest` asserts exactly that. Which group you are looking at
+(`Patch.scope`) is view state: not saved, not undone.
 
 **Nothing carries a pulse yet, and the kind stays anyway.** `Env` was the last thing taking
 a gate and it takes *notes* now: a pulse is an event with no duration, so it could never

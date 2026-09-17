@@ -170,7 +170,9 @@ class MainActivity : ComponentActivity() {
             snapshotFlow {
                 listOf(
                     patch.modules.map { it.id to it.type.name },
-                    patch.connections.toList(),
+                    // Flattened, as GraphSync reads them: regrouping changes the cables in the
+                    // patch without changing a single one the engine has, and must not sync.
+                    patch.engineConnections(),
                     patch.modules.map { it.params.toList() },
                     // A plain map replaced whole, so it compares by content as it stands.
                     patch.modules.map { it.modRanges },

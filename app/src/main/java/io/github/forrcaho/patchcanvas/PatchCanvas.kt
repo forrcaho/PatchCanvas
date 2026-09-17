@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -353,6 +354,12 @@ data class ModuleType(
     val stepCount: Int = 0,
     /** What those cells mean, and so which grid the panel draws. */
     val grid: GridKind = GridKind.NONE,
+    /**
+     * Part of how a patch is organized rather than something that sounds: a group and the
+     * two rails inside it. Never a node in the engine, which only ever sees the patch
+     * flattened -- see [Patch.engineConnections].
+     */
+    val structural: Boolean = false,
 ) {
     /** Indices of the parameters drawn as rows of the panel; the rest live in its header. */
     val rowParams: List<Int> get() = params.indices.filter { !params[it].header }
@@ -512,6 +519,29 @@ object Types {
      */
     val palette = listOf(Osc, Drone, Steps, Filter, Env, Lfo, Mix)
 
+    /**
+     * Modules collapsed into one box. Its ports are its own rather than its type's -- they
+     * come from the cables that crossed the selection's edge when it was made -- so the type
+     * declares none. Opening one shows what is inside, with [GroupIn] and [GroupOut] as its
+     * rails.
+     */
+    val Group = ModuleType(
+        "Group", emptyList(), emptyList(), Color(0xFFB9C2CE), structural = true,
+    )
+
+    /**
+     * Inside a group, the left rail: each of the group's inputs, as a source for what is
+     * inside. Pinned like In, so the rails' drawing, hit testing and cables all apply.
+     */
+    val GroupIn = ModuleType(
+        "Group in", emptyList(), emptyList(), Color(0xFFB9C2CE), pinned = Edge.LEFT, structural = true,
+    )
+
+    /** Inside a group, the right rail: each of the group's outputs, as a sink for what is inside. */
+    val GroupOut = ModuleType(
+        "Group out", emptyList(), emptyList(), Color(0xFFB9C2CE), pinned = Edge.RIGHT, structural = true,
+    )
+
     val byName: Map<String, ModuleType> =
         (palette + listOf(Out, In)).associateBy { it.name }
 }
@@ -522,15 +552,48 @@ object Types {
  */
 const val OUT_ID = 1L
 const val IN_ID = 2L
+
+/** The patch itself, as a module's parent: not inside any group. */
+const val TOP = 0L
 private const val FIRST_FREE_ID = 100L
 
 /** Free modules live in world units, and one world unit is one dp. */
+/**
+ * A group's ports, shared by the group's box and the two rails inside it, so the box's
+ * inputs are the left rail's outputs and the box's outputs the right rail's inputs by
+ * construction rather than by keeping two lists in step.
+ *
+ * Stored, never recomputed from the cables. A port that only existed while a cable used it
+ * would vanish the moment that cable was unplugged, leaving nothing to plug back into --
+ * and ports must never move, which a derived list re-sorting itself would break.
+ */
+class GroupPorts(
+    val inputs: SnapshotStateList<Port> = mutableStateListOf(),
+    val outputs: SnapshotStateList<Port> = mutableStateListOf(),
+) {
+    fun copy(): GroupPorts = GroupPorts(
+        mutableStateListOf<Port>().apply { addAll(inputs) },
+        mutableStateListOf<Port>().apply { addAll(outputs) },
+    )
+}
+
 class PatchModule(
     val id: Long,
     val type: ModuleType,
     position: Offset,
+    /** Non-null for a group and its two rails, which share one set of ports. */
+    val groupPorts: GroupPorts? = null,
 ) {
     var position by mutableStateOf(position)
+
+    /**
+     * The group this module sits inside, or [TOP] for the patch itself.
+     *
+     * Every module lives in one flat list and says where it belongs, rather than groups
+     * owning lists of their own. The engine's view, undo, saving and every loop over the
+     * patch stay one level deep, and entering a group is a filter on this.
+     */
+    var parent by mutableLongStateOf(TOP)
 
     /** Knob values in real units, one per declared parameter, starting at their defaults. */
     val params: SnapshotStateList<Float> =
@@ -605,21 +668,36 @@ class PatchModule(
      * grows downward, below the side jacks, which [portIn] places from the top -- so exposing
      * a parameter never moves a jack already on the module.
      */
-    val height: Float get() = heightFor(type) + modBandFor(type, modRanges.keys)
+    val height: Float get() = HEADER + portsBody + modBandFor(type, modRanges.keys)
 
-    /** The ports' band. Equal to the body, now that opening a module leaves the canvas. */
-    val portsBody: Float get() = portsBodyFor(type)
+    /**
+     * The ports' band. Equal to the body, now that opening a module leaves the canvas.
+     * Counted from this module's own ports, so a group grows with the ports it was given.
+     */
+    val portsBody: Float
+        get() = maxOf(MIN_BODY, maxOf(ports(PortDirection.INPUT).size, ports(PortDirection.OUTPUT).size, 1) * PORT_PITCH)
 
     val width: Float get() = if (isPinned) RAIL_WIDTH else WIDTH
 
     /** World-space bounds. Meaningless for pinned modules; use Frame.railRect instead. */
     val bounds: Rect get() = Rect(position, Size(width, height))
 
-    /** The side jacks. Empty for [PortDirection.MOD], whose ports are [modRanges]. */
-    fun ports(dir: PortDirection): List<Port> = when (dir) {
-        PortDirection.INPUT -> type.inputs
-        PortDirection.OUTPUT -> type.outputs
-        PortDirection.MOD -> emptyList()
+    /**
+     * The side jacks. Empty for [PortDirection.MOD], whose ports are [modRanges].
+     *
+     * A group's come from [groupPorts]: the box takes inputs and gives outputs, and inside,
+     * the left rail gives the group's inputs to what is there and the right rail takes its
+     * outputs -- which is why the rails' directions are the box's turned around.
+     */
+    fun ports(dir: PortDirection): List<Port> {
+        val shared = groupPorts
+        return when {
+            dir == PortDirection.MOD -> emptyList()
+            shared == null -> if (dir == PortDirection.INPUT) type.inputs else type.outputs
+            type == Types.GroupIn -> if (dir == PortDirection.OUTPUT) shared.inputs else emptyList()
+            type == Types.GroupOut -> if (dir == PortDirection.INPUT) shared.outputs else emptyList()
+            else -> if (dir == PortDirection.INPUT) shared.inputs else shared.outputs
+        }
     }
 
     companion object {
@@ -1328,10 +1406,33 @@ class Patch {
     /** What a cable leaving a port carries. Enforced: see [SignalKind.patchesTo]. */
     fun kindOf(ref: PortRef): SignalKind = port(ref)?.kind ?: SignalKind.AUDIO
 
+    /**
+     * The group being looked at, or [TOP].
+     *
+     * View state, like the camera and the open panel: where you are, not what the patch
+     * is, so it is neither saved nor undone. Anything that removes the group falls back to
+     * the top level through [scopeOrTop].
+     */
+    var scope by mutableLongStateOf(TOP)
+
+    /** [scope], or [TOP] if the group it names has gone -- undone, deleted or ungrouped. */
+    val scopeOrTop: Long
+        get() = scope.takeIf { it == TOP || module(it)?.type == Types.Group } ?: TOP
+
+    /** The modules and rails on screen in [scopeOrTop]. */
+    val shownFree: List<PatchModule> get() = scopeOrTop.let { at -> modules.filter { !it.isPinned && it.parent == at } }
+    val shownRails: List<PatchModule> get() = scopeOrTop.let { at -> modules.filter { it.isPinned && it.parent == at } }
+
+    /** A module in the scope being looked at, rail or free. */
+    fun shown(id: Long): Boolean = module(id)?.parent == scopeOrTop
+
     /** Pinned types are never added; the rails exist for the life of the patch. */
     fun add(type: ModuleType, at: Offset): PatchModule? {
-        if (type.pinned != null) return null
-        return PatchModule(nextId++, type, at).also { modules.add(it) }
+        if (type.pinned != null || type.structural) return null
+        return PatchModule(nextId++, type, at).also {
+            it.parent = scopeOrTop
+            modules.add(it)
+        }
     }
 
     /**
@@ -1340,19 +1441,202 @@ class Patch {
      * that makes nextId derived state rather than another field to keep in the file.
      */
     internal fun adopt(module: PatchModule) {
-        if (module.isPinned) return
+        if (module.isPinned && module.type != Types.GroupIn && module.type != Types.GroupOut) return
         modules.add(module)
         if (module.id >= nextId) nextId = module.id + 1
     }
 
+    /** Removes a module, and a group together with everything inside it. */
     fun remove(module: PatchModule) {
         if (module.isPinned) return
-        connections.removeAll { it.from.moduleId == module.id || it.to.moduleId == module.id }
-        modules.remove(module)
+        val gone = setOf(module.id) + descendants(module.id)
+        connections.removeAll { it.from.moduleId in gone || it.to.moduleId in gone }
+        modules.removeAll { it.id in gone }
     }
 
-    fun duplicate(module: PatchModule): PatchModule? =
-        if (module.isPinned) null else add(module.type, module.position + Offset(28f, 28f))
+    /** Everything inside group [id], at any depth, its rails included. */
+    fun descendants(id: Long): Set<Long> {
+        val found = mutableSetOf<Long>()
+        var frontier = setOf(id)
+        while (frontier.isNotEmpty()) {
+            val next = modules.filter { it.parent in frontier && it.id !in found && it.id != id }.map { it.id }.toSet()
+            found += next
+            frontier = next
+        }
+        return found
+    }
+
+    /** A group's left rail or right rail. */
+    fun groupRail(group: Long, type: ModuleType): PatchModule? =
+        modules.firstOrNull { it.parent == group && it.type == type }
+
+    fun duplicate(module: PatchModule): PatchModule? = when {
+        module.isPinned -> null
+        module.type == Types.Group -> duplicateGroup(module)
+        else -> add(module.type, module.position + Offset(28f, 28f))?.also { it.parent = module.parent }
+    }
+
+    /**
+     * A group copied whole: every module inside it at any depth, with its knobs, sequence
+     * and exposed parameters, and every cable between them -- the rails' wiring included.
+     * Cables to the outside are not copied, as duplicating a single module copies none.
+     */
+    private fun duplicateGroup(group: PatchModule): PatchModule {
+        val inside = descendants(group.id)
+        val originals = modules.filter { it.id == group.id || it.id in inside }
+        val newId = originals.associate { it.id to nextId++ }
+        val sharedCopies = originals.filter { it.type == Types.Group }
+            .associate { it.id to (it.groupPorts ?: GroupPorts()).copy() }
+        originals.forEach { from ->
+            val ports = when (from.type) {
+                Types.Group -> sharedCopies.getValue(from.id)
+                Types.GroupIn, Types.GroupOut -> sharedCopies[from.parent]
+                else -> null
+            }
+            val offset = if (from.id == group.id) Offset(28f, 28f) else Offset.Zero
+            val copy = PatchModule(newId.getValue(from.id), from.type, from.position + offset, ports)
+            from.params.forEachIndexed { i, v -> copy.setParam(i, v) }
+            from.steps.forEachIndexed { i, step -> copy.setStep(i, step) }
+            copy.modRanges = from.modRanges
+            copy.parent = if (from.id == group.id) from.parent else newId.getValue(from.parent)
+            modules.add(copy)
+        }
+        connections.filter { it.from.moduleId in newId && it.to.moduleId in newId }.forEach {
+            connections.add(
+                Connection(
+                    it.from.copy(moduleId = newId.getValue(it.from.moduleId)),
+                    it.to.copy(moduleId = newId.getValue(it.to.moduleId)),
+                ),
+            )
+        }
+        return modules.first { it.id == newId.getValue(group.id) }
+    }
+
+    /**
+     * Collapses [ids] into one group, and returns it -- or null if they cannot be grouped:
+     * none, a rail among them, or not all in the same scope.
+     *
+     * The group's ports come from the cables that crossed the selection's edge, so the
+     * patch sounds exactly as it did: [engineConnections] is the same before and after, and
+     * a synced engine is sent nothing at all. A cable coming in becomes an input port, one
+     * per outside source, feeding every module inside it used to reach; a cable going out
+     * becomes an output port, one per inside source, feeding everything outside it did.
+     */
+    fun group(ids: Set<Long>): PatchModule? {
+        val chosen = modules.filter { it.id in ids }
+        if (chosen.isEmpty() || chosen.size != ids.size || chosen.any { it.isPinned }) return null
+        val at = chosen.first().parent
+        if (chosen.any { it.parent != at }) return null
+
+        val ports = GroupPorts()
+        val group = PatchModule(
+            nextId++, Types.Group,
+            Offset(chosen.minOf { it.position.x }, chosen.minOf { it.position.y }),
+            ports,
+        ).also { it.parent = at }
+        val railIn = PatchModule(nextId++, Types.GroupIn, Offset.Zero, ports).also { it.parent = group.id }
+        val railOut = PatchModule(nextId++, Types.GroupOut, Offset.Zero, ports).also { it.parent = group.id }
+
+        val inside = ids
+        val coming = connections.filter { it.from.moduleId !in inside && it.to.moduleId in inside }
+        val going = connections.filter { it.from.moduleId in inside && it.to.moduleId !in inside }
+        val rewired = mutableListOf<Connection>()
+
+        coming.groupBy { it.from }.forEach { (source, cables) ->
+            val index = ports.inputs.size
+            // Named for what it feeds when that is one thing, since "cutoff" says more
+            // about a group's input than "out" does; otherwise for what feeds it.
+            val name = if (cables.size == 1) port(cables.single().to)?.name else port(source)?.name
+            ports.inputs += Port(name ?: "in", kindOf(source))
+            rewired += Connection(source, PortRef(group.id, PortDirection.INPUT, index))
+            cables.forEach { rewired += Connection(PortRef(railIn.id, PortDirection.OUTPUT, index), it.to) }
+        }
+        going.groupBy { it.from }.forEach { (source, cables) ->
+            val index = ports.outputs.size
+            ports.outputs += Port(port(source)?.name ?: "out", kindOf(source))
+            rewired += Connection(source, PortRef(railOut.id, PortDirection.INPUT, index))
+            cables.forEach { rewired += Connection(PortRef(group.id, PortDirection.OUTPUT, index), it.to) }
+        }
+
+        Snapshot.withMutableSnapshot {
+            connections.removeAll(coming + going)
+            modules.add(group)
+            modules.add(railIn)
+            modules.add(railOut)
+            chosen.forEach { it.parent = group.id }
+            connections.addAll(rewired)
+        }
+        return group
+    }
+
+    /**
+     * Puts a group's contents back where the group was, wiring every cable straight
+     * through its ports again. The inverse of [group]: ungrouping what was just grouped
+     * gives back the same cables.
+     */
+    fun ungroup(group: PatchModule) {
+        if (group.type != Types.Group) return
+        val railIn = groupRail(group.id, Types.GroupIn)
+        val railOut = groupRail(group.id, Types.GroupOut)
+        val through = mutableListOf<Connection>()
+        group.ports(PortDirection.INPUT).indices.forEach { i ->
+            val sources = connections.filter { it.to == PortRef(group.id, PortDirection.INPUT, i) }.map { it.from }
+            val sinks = connections.filter { railIn != null && it.from == PortRef(railIn.id, PortDirection.OUTPUT, i) }.map { it.to }
+            sources.forEach { from -> sinks.forEach { to -> through += Connection(from, to) } }
+        }
+        group.ports(PortDirection.OUTPUT).indices.forEach { i ->
+            val sources = connections.filter { railOut != null && it.to == PortRef(railOut.id, PortDirection.INPUT, i) }.map { it.from }
+            val sinks = connections.filter { it.from == PortRef(group.id, PortDirection.OUTPUT, i) }.map { it.to }
+            sources.forEach { from -> sinks.forEach { to -> through += Connection(from, to) } }
+        }
+        val structure = setOfNotNull(group.id, railIn?.id, railOut?.id)
+        Snapshot.withMutableSnapshot {
+            connections.removeAll { it.from.moduleId in structure || it.to.moduleId in structure }
+            modules.filter { it.parent == group.id && !it.type.structural }.forEach { it.parent = group.parent }
+            modules.removeAll { it.id in structure }
+            through.forEach { if (it !in connections) connections.add(it) }
+        }
+    }
+
+    /** What the engine runs: every module that makes or shapes sound, at any depth. */
+    val engineModules: List<PatchModule> get() = modules.filter { !it.type.structural }
+
+    /**
+     * Every cable the engine should have, with groups flattened away: each one runs from a
+     * real output to a real input, following any chain of group ports in between.
+     *
+     * The engine never learns that groups exist. That is the whole of the design -- a
+     * group is how a patch is shown and organized, and the sound is the same flat graph
+     * whether the modules are loose or nested three deep.
+     */
+    fun engineConnections(): Set<Connection> {
+        val byId = modules.associateBy { it.id }
+        val into = connections.groupBy { it.to }
+        fun sources(ref: PortRef, depth: Int): List<PortRef> {
+            if (depth > 64) return emptyList() // only a corrupt file could nest this deep
+            val module = byId[ref.moduleId] ?: return emptyList()
+            return when (module.type) {
+                // A group's input, seen from inside: whatever feeds the box's input.
+                Types.GroupIn -> into[PortRef(module.parent, PortDirection.INPUT, ref.index)].orEmpty()
+                    .flatMap { sources(it.from, depth + 1) }
+                // A group's output, seen from outside: whatever feeds its right rail.
+                Types.Group -> {
+                    val railOut = modules.firstOrNull { it.parent == module.id && it.type == Types.GroupOut }
+                        ?: return emptyList()
+                    into[PortRef(railOut.id, PortDirection.INPUT, ref.index)].orEmpty()
+                        .flatMap { sources(it.from, depth + 1) }
+                }
+                else -> if (module.type.structural) emptyList() else listOf(ref)
+            }
+        }
+        val flat = mutableSetOf<Connection>()
+        connections.forEach { cable ->
+            val sink = byId[cable.to.moduleId] ?: return@forEach
+            if (sink.type.structural) return@forEach
+            sources(cable.from, 0).forEach { flat += Connection(it, cable.to) }
+        }
+        return flat
+    }
 
     /**
      * Gives a parameter a jack sweeping [range], or moves the brackets of one that has one.

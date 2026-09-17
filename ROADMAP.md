@@ -1524,6 +1524,48 @@ keeps that difference visible. Each end gets a plug in the cable's color, since 
 would otherwise cover the jack's own dot. Crossing a label is better than vanishing behind a
 box -- that was the open half, and the phone answered it.
 
+### Groups: the model and the engine
+
+**Built 2026-09-17, overnight, from decisions taken the evening before:** grouping first
+(abstraction later), a group's ports taken from the cables that crossed the selection's
+edge, and format 5 still readable.
+
+**One flat list, not a tree.** Every module says which group it is in (`parent`), and a
+group owns nothing but its ports. The engine's view, saving, undo and every loop over the
+patch stay one level deep; entering a group is a filter. A tree was the other shape and
+would have put a recursion into each of those.
+
+**A group's inside rails are real pinned modules.** `GroupIn` and `GroupOut` share the
+group's `GroupPorts`, turned around: the box's inputs are the left rail's outputs. So a
+cable inside a group is an ordinary cable to a rail, and the rails' drawing, hit testing and
+cable code apply without a single new port direction. Two new directions were the first
+design, and would have touched every place a cable is normalized.
+
+**Ports are stored, never derived.** Derived from the cables, a port would vanish when its
+last cable was unplugged, leaving nothing to plug back into, and would re-sort as cables
+came and went -- and ports must never move. So grouping creates them and they stay. One
+input port per outside *source*, fanning out inside to everything that source reached; one
+output port per inside source, fanning out outside. Grouping names an input for what it
+feeds when that is one thing ("cut"), since that says more than the source's "out".
+
+**The engine never sees a group.** `engineConnections()` follows each cable's source back
+through any chain of group ports to the real output, so the flattened cables are identical
+before and after grouping, and `GraphSync` -- which now reads only the flattened view --
+sends a playing patch nothing when it is grouped, nested or ungrouped. That is the test
+that matters, because any command there is an audible crossfade.
+
+**Format 6, reading 5.** Groups are additive -- a `parent` on a module, and a group's ports
+and rail ids -- so a format 5 file is a patch with no groups. A parent that is not a group,
+or a loop of groups inside each other, puts the module at the top rather than somewhere
+nothing can reach.
+
+**Two things only mutation checks found.** Dropping every parent on save went unnoticed by
+a byte-for-byte round trip, because the flat patch it reloads to writes the same JSON again
+and sounds the same; the test now compares where each module is. And a group's ports are a
+snapshot list, which compares by identity -- a test comparing the box's ports with a rail's
+passed only because they were the same list, and failed the first time two equal lists were
+different ones.
+
 ### Grids say how much of them there is
 
 **2026-09-16, from the first use of Drone on the phone.** Both grids now carry a scroll bar

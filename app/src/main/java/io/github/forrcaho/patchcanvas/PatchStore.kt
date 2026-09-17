@@ -25,23 +25,33 @@ import java.io.File
  * 2: the Clock module became the patch's tempo. 3: one scale became a list of them.
  * 4: parameters can be exposed for modulation, and cables can land on them.
  * 5: CV and gate retired, taking the monophonic Osc and the VCA with them.
+ * 6: groups. Additive -- a format 5 file is a patch with no groups -- so 5 still reads.
  */
-private const val FORMAT_VERSION = 5
+private const val FORMAT_VERSION = 6
 private const val TAG = "PatchStore"
 
 fun Patch.toJson(): String {
     val modules = JSONArray()
     free.forEach { m ->
-        modules.put(
-            JSONObject()
-                .put("id", m.id)
-                .put("type", m.type.name)
-                .put("x", m.position.x.toDouble())
-                .put("y", m.position.y.toDouble())
-                .put("params", paramsOf(m))
-                .put("steps", stepsOf(m))
-                .put("mod", modOf(m))
-        )
+        val entry = JSONObject()
+            .put("id", m.id)
+            .put("type", m.type.name)
+            .put("x", m.position.x.toDouble())
+            .put("y", m.position.y.toDouble())
+            .put("params", paramsOf(m))
+            .put("steps", stepsOf(m))
+            .put("mod", modOf(m))
+        // Absent at the top level, so a patch with no groups writes exactly what format 5 did.
+        if (m.parent != TOP) entry.put("parent", m.parent)
+        if (m.type == Types.Group) {
+            // The rails inside are not modules in the file: they carry no knobs and no
+            // position, only ids for the cables inside to name, and the group's ports.
+            entry.put("in", groupRail(m.id, Types.GroupIn)?.id ?: -1L)
+            entry.put("out", groupRail(m.id, Types.GroupOut)?.id ?: -1L)
+            entry.put("inputs", portsOf(m.ports(PortDirection.INPUT)))
+            entry.put("outputs", portsOf(m.ports(PortDirection.OUTPUT)))
+        }
+        modules.put(entry)
     }
 
     // The rails hold knobs too -- output level, microphone gain -- and those are part of
@@ -94,6 +104,22 @@ fun Patch.toJson(): String {
         .put("tempo", tempo.toDouble())
         .put("beatsPerBar", beatsPerBar)
         .toString()
+}
+
+/** A group's ports, as name and kind. Positional: a port's index is what its cables name. */
+private fun portsOf(ports: List<Port>): JSONArray {
+    val out = JSONArray()
+    ports.forEach { out.put(JSONObject().put("name", it.name).put("kind", it.kind.name)) }
+    return out
+}
+
+private fun portsFrom(stored: JSONArray?): List<Port> {
+    if (stored == null) return emptyList()
+    return (0 until stored.length()).mapNotNull { i ->
+        val p = stored.optJSONObject(i) ?: return@mapNotNull null
+        val kind = SignalKind.entries.firstOrNull { it.name == p.optString("kind") } ?: return@mapNotNull null
+        Port(p.optString("name", "port"), kind)
+    }
 }
 
 /**
@@ -200,15 +226,34 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
         val modules = root.optJSONArray("modules") ?: JSONArray()
         for (i in 0 until modules.length()) {
             val m = modules.optJSONObject(i) ?: continue
-            val type = Types.byName[m.optString("type")] ?: continue
+            val name = m.optString("type")
+            val type = Types.byName[name] ?: Types.Group.takeIf { it.name == name } ?: continue
             if (type.pinned != null) continue // rails already exist; never duplicate them
             val id = m.optLong("id", -1L)
             if (id < 0L || patch.module(id) != null) continue
+            val shared = if (type == Types.Group) {
+                GroupPorts().also {
+                    it.inputs.addAll(portsFrom(m.optJSONArray("inputs")))
+                    it.outputs.addAll(portsFrom(m.optJSONArray("outputs")))
+                }
+            } else {
+                null
+            }
             val module = PatchModule(
                 id,
                 type,
                 Offset(m.optDouble("x", 0.0).toFloat(), m.optDouble("y", 0.0).toFloat()),
+                shared,
             )
+            module.parent = m.optLong("parent", TOP)
+            if (shared != null) {
+                // The rails come back under the ids the cables inside were saved against.
+                for ((key, railType) in listOf("in" to Types.GroupIn, "out" to Types.GroupOut)) {
+                    val railId = m.optLong(key, -1L)
+                    if (railId < 0L || patch.module(railId) != null) continue
+                    patch.adopt(PatchModule(railId, railType, Offset.Zero, shared).also { it.parent = id })
+                }
+            }
             restoreParams(module, m.optJSONObject("params"))
             // Absent in files written before sequences were editable, which leaves the
             // module on the same default figure it used to have compiled in.
@@ -224,6 +269,21 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
             val module = patch.module(r.optLong("id", -1L)) ?: continue
             if (!module.isPinned) continue
             restoreParams(module, r.optJSONObject("params"))
+        }
+
+        // A parent that is not a group in this file, or a loop of groups inside each other,
+        // puts the module at the top rather than somewhere nothing can reach.
+        patch.modules.filter { !it.isPinned && it.parent != TOP }.forEach { module ->
+            val seen = mutableSetOf(module.id)
+            var at = module.parent
+            while (at != TOP) {
+                val group = patch.module(at)
+                if (group?.type != Types.Group || !seen.add(at)) {
+                    module.parent = TOP
+                    break
+                }
+                at = group.parent
+            }
         }
 
         val cables = root.optJSONArray("connections") ?: JSONArray()
@@ -282,7 +342,8 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
  */
 private fun upgrade(root: JSONObject): JSONObject? {
     val version = root.optInt("version", -1)
-    if (version != FORMAT_VERSION) {
+    // 5 reads as it stands: groups were added to the format, nothing was taken away.
+    if (version != FORMAT_VERSION && version != 5) {
         Log.w(TAG, "unsupported patch version $version")
         return null
     }

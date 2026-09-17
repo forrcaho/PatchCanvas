@@ -94,10 +94,23 @@ fun Patch.replaceWith(source: Patch): Set<Long> {
         val openId = modules.firstOrNull { it.expanded }?.id
 
         connections.clear()
-        modules.removeAll { !it.isPinned }
+        // Every module but the patch's own two rails. A group's rails are pinned too, but they
+        // belong to the group and come and go with it.
+        modules.removeAll { it.id != OUT_ID && it.id != IN_ID }
 
-        source.free.forEach { from ->
-            val copy = PatchModule(from.id, from.type, from.position)
+        // One shared set of ports per group, made first so the rails inside can take it
+        // whichever order the modules arrive in.
+        val shared = source.modules.filter { it.type == Types.Group }
+            .associate { it.id to (it.groupPorts ?: GroupPorts()).copy() }
+
+        source.modules.filter { it.id != OUT_ID && it.id != IN_ID }.forEach { from ->
+            val ports = when (from.type) {
+                Types.Group -> shared[from.id]
+                Types.GroupIn, Types.GroupOut -> shared[from.parent]
+                else -> null
+            }
+            val copy = PatchModule(from.id, from.type, from.position, ports)
+            copy.parent = from.parent
             from.params.forEachIndexed { index, value -> copy.setParam(index, value) }
             from.steps.forEachIndexed { index, step -> copy.setStep(index, step) }
             // Before the cables below, which include any landing on these parameters.
@@ -150,6 +163,7 @@ private fun Patch.changesFrom(source: Patch): Set<Long> {
         // structural equality, so comparing the lists directly is an identity check
         // that is always false, and every module in the patch would pulse.
         if (was.position != now.position ||
+            was.parent != now.parent ||
             was.params.toList() != now.params.toList() ||
             was.steps.toList() != now.steps.toList() ||
             was.modRanges != now.modRanges
