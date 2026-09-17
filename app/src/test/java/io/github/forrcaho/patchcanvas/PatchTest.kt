@@ -230,6 +230,95 @@ class PatchModelTest {
         assertEquals(0, droneBottom(drone, rows, scale))
     }
 
+    /**
+     * The reported bug: the grid jumped when the scale changed. The drag wrote the scroll
+     * position with no limit, so scrolling past the top of 12-TET stored an overshoot the
+     * picture never showed, and a longer scale then clamped that overshoot somewhere else.
+     * Driven through scrolledBy, which is exactly what the drag writes.
+     */
+    @Test
+    fun `a drone keeps its bottom degree when the scale changes`() {
+        val drone = Patch().add(Types.Drone, Offset.Zero)!!
+        val area = droneArea() // eight rows at this size
+        val twelve = Scale.Chromatic
+        val twentyTwo = Scale.equal("22", 22)
+
+        // A long drag upward, far past the top of 12-TET.
+        drone.gridBottom = gridWindow(drone, area, 1f, twelve).scrolledBy(100)
+        val shown = gridWindow(drone, area, 1f, twelve).bottom
+        assertEquals("the top of 12-TET, and nothing stored beyond it", 4, drone.gridBottom)
+        assertEquals(4, shown)
+
+        assertEquals(
+            "the same degree stays on the bottom row in a longer scale",
+            shown, gridWindow(drone, area, 1f, twentyTwo).bottom,
+        )
+        assertEquals(
+            "and coming back leaves it there too",
+            shown, gridWindow(drone, area, 1f, twelve).bottom,
+        )
+    }
+
+    @Test
+    fun `dragging back moves the grid at once, with no overshoot to undo first`() {
+        val drone = Patch().add(Types.Drone, Offset.Zero)!!
+        val area = droneArea()
+        drone.gridBottom = gridWindow(drone, area, 1f, Scale.Chromatic).scrolledBy(100)
+        drone.gridBottom = gridWindow(drone, area, 1f, Scale.Chromatic).scrolledBy(-1)
+        assertEquals(3, gridWindow(drone, area, 1f, Scale.Chromatic).bottom)
+    }
+
+    @Test
+    fun `a scale too short to keep the bottom degree shows all of itself instead`() {
+        val drone = Patch().add(Types.Drone, Offset.Zero)!!
+        drone.gridBottom = 4
+        // Seven degrees fit in eight rows whole, so there is nothing to scroll and degree 0
+        // has to be at the bottom. The stored position survives for the next longer scale.
+        val major = Scale.equal("7", 7)
+        assertEquals(0, gridWindow(drone, droneArea(), 1f, major).bottom)
+        assertFalse(gridWindow(drone, droneArea(), 1f, major).scrolls)
+        assertEquals(4, gridWindow(drone, droneArea(), 1f, Scale.Chromatic).bottom)
+    }
+
+    @Test
+    fun `a sequencer scrolls across its span and never loses a note beyond it`() {
+        val steps = Patch().add(Types.Steps, Offset.Zero)!!
+        val area = Rect(0f, 0f, 400f, 208f)
+        val window = gridWindow(steps, area, 1f, Scale.Chromatic)
+        assertEquals("three octaves below the key", -36, window.lowest)
+        assertEquals("four above", 47, window.highest)
+        assertEquals(window.lowest, window.scrolledBy(-1000))
+        assertEquals(window.highest - window.rows + 1, window.scrolledBy(1000))
+
+        // A note written far above the span widens it, so it can still be scrolled to.
+        steps.setStep(0, Step(90))
+        val wider = gridWindow(steps, area, 1f, Scale.Chromatic)
+        assertEquals(90, wider.highest)
+        assertEquals(90, wider.copy(bottom = wider.scrolledBy(1000)).top)
+    }
+
+    @Test
+    fun `the scroll bar shows where the view is and is absent when nothing is hidden`() {
+        val area = Rect(0f, 0f, 400f, 208f)
+        assertNull(gridScrollBar(area, 1f, GridWindow(bottom = 0, rows = 8, lowest = 0, highest = 6)))
+
+        val atTop = gridScrollBar(area, 1f, GridWindow(bottom = 14, rows = 8, lowest = 0, highest = 21))!!
+        val atBottom = gridScrollBar(area, 1f, GridWindow(bottom = 0, rows = 8, lowest = 0, highest = 21))!!
+        val (track, top) = atTop
+        assertEquals("scrolled to the top, the thumb is at the top", track.top, top.top, 0.01f)
+        assertEquals("scrolled to the bottom, at the bottom", track.bottom, atBottom.second.bottom, 0.01f)
+        assertEquals("and the thumb is the share on screen", track.height * 8 / 22, top.height, 0.01f)
+        assertTrue("beside the grid, not on it", track.left > area.right)
+    }
+
+    @Test
+    fun `a sequencer's thumb keeps a size a finger can see`() {
+        val area = Rect(0f, 0f, 400f, 208f)
+        val (track, thumb) = gridScrollBar(area, 1f, GridWindow(bottom = 0, rows = 8, lowest = -500, highest = 500))!!
+        assertEquals(16f, thumb.height, 0.01f)
+        assertTrue(thumb.top >= track.top && thumb.bottom <= track.bottom)
+    }
+
     @Test
     fun `an output may fan out to several inputs`() {
         val p = Patch()

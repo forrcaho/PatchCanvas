@@ -1096,26 +1096,80 @@ internal fun panelCellAt(
     val area = panelGrid(panel, d, module.type)
     if (!area.contains(at)) return null
 
-    val rows = gridRows(area, d)
-    if (rows <= 0) return null
+    val window = gridWindow(module, area, d, scale)
+    val row = ((at.y - area.top) / (area.height / window.rows)).toInt().coerceIn(0, window.rows - 1)
 
     if (module.type.grid == GridKind.DRONE) {
-        val shown = droneRows(area, d, scale)
         val columns = droneColumns(scale)
         val column = ((at.x - area.left) / (area.width / columns)).toInt().coerceIn(0, columns - 1)
-        val row = ((at.y - area.top) / (area.height / shown)).toInt().coerceIn(0, shown - 1)
-        val degree = droneDegree(module, row, column, shown, scale)
+        val degree = droneDegree(module, row, column, window.rows, scale)
         // A cell is its own index, because a drone's degrees are laid out in order and
         // run no further than its cells do.
         return degree to degree
     }
 
-    val rowHeight = area.height / rows
     val cellWidth = area.width / module.type.stepCount
-
     val column = ((at.x - area.left) / cellWidth).toInt().coerceIn(0, module.type.stepCount - 1)
-    val row = ((at.y - area.top) / rowHeight).toInt().coerceIn(0, rows - 1)
-    return column to (module.gridBottom + (rows - 1 - row))
+    return column to window.degreeAt(row)
+}
+
+/**
+ * Which degrees a grid can scroll across, and which of them are on screen.
+ *
+ * The one place the answer is worked out, because three things need it and they
+ * disagreed: the drawing, the hit test and the drag. The drag used to write the scroll
+ * position with no limit at all and the drawing clamped it, against whichever scale was
+ * sounding -- so a finger could scroll a drone past the top of its scale and keep
+ * going, the stored position running on while the picture stood still. Dragging back then
+ * did nothing until that overshoot was undone, and a change of scale re-clamped the
+ * overshoot against a different size, which is the grid jumping. [bottom] is always
+ * inside the range now, and the drag writes only values that are.
+ *
+ * [lowest] and [highest] are what a scroll bar measures against.
+ */
+internal data class GridWindow(val bottom: Int, val rows: Int, val lowest: Int, val highest: Int) {
+    val top: Int get() = bottom + rows - 1
+
+    /** Every degree the grid can show. */
+    val span: Int get() = highest - lowest + 1
+
+    /** Whether any of it is out of sight, which is when a scroll bar has something to say. */
+    val scrolls: Boolean get() = span > rows
+
+    /** The degree on screen row [row], counted from the top. Degrees ascend up the screen. */
+    fun degreeAt(row: Int): Int = bottom + (rows - 1 - row)
+
+    /** Where the bottom lands after moving it by [by] degrees, kept inside the range. */
+    fun scrolledBy(by: Int): Int = (bottom + by).coerceIn(lowest, (highest - rows + 1).coerceAtLeast(lowest))
+}
+
+/**
+ * How far a sequencer's grid scrolls: three octaves below the key and four above, in
+ * whole periods of the scale. Middle C down three octaves is 33Hz and up four is 4.2kHz,
+ * which is the span a melody lives in; a scroll bar needs a range to be a fraction of, and
+ * the grid used to scroll through every integer there was. Widened, never narrowed, to
+ * take in any step already written outside it -- a note must never be out of reach.
+ */
+private const val SEQUENCE_OCTAVES_BELOW = 3f
+private const val SEQUENCE_OCTAVES_ABOVE = 4f
+
+internal fun gridWindow(module: PatchModule, area: Rect, d: Float, scale: Scale): GridWindow {
+    if (module.type.grid == GridKind.DRONE) {
+        val rows = droneRows(area, d, scale)
+        return GridWindow(droneBottom(module, rows, scale), rows, 0, scale.size - 1)
+    }
+    val rows = gridRows(area, d)
+    val written = module.steps.map { it.degree }
+    val lowest = minOf(
+        floor(-SEQUENCE_OCTAVES_BELOW / scale.period).toInt() * scale.size,
+        written.minOrNull() ?: 0,
+    )
+    val highest = maxOf(
+        ceil(SEQUENCE_OCTAVES_ABOVE / scale.period).toInt() * scale.size - 1,
+        written.maxOrNull() ?: 0,
+    )
+    val bottom = module.gridBottom.coerceIn(lowest, (highest - rows + 1).coerceAtLeast(lowest))
+    return GridWindow(bottom, rows, lowest, highest)
 }
 
 /** A drone shows its scale's degrees, or as many of them as fit. */
@@ -1132,8 +1186,10 @@ internal fun droneColumns(scale: Scale): Int =
 /**
  * The lowest degree on screen, clamped to one period.
  *
- * A sequencer's grid scrolls through every degree there is; a drone's rows are the scale
- * itself, so scrolling past it would show the octave the next column already holds.
+ * A drone's rows are the scale itself, so scrolling past it would show the octave the next
+ * column already holds. The stored position is a degree rather than a fraction of the
+ * scale, so a change of scale leaves the same degree on the bottom row -- unless the new
+ * scale cannot put it there, being too short for this many rows above it.
  */
 internal fun droneBottom(module: PatchModule, rows: Int, scale: Scale): Int =
     module.gridBottom.coerceIn(0, (scale.size - rows).coerceAtLeast(0))
@@ -2079,8 +2135,11 @@ fun PatchCanvas(
                         // the remainder and a drag measured against the nominal value
                         // slides against the grid it is supposed to be moving.
                         val gridArea = panelGrid(panel, frame.density, open.type)
-                        val rowHeight = gridArea.height / gridRows(gridArea, frame.density)
-                        val scrollFrom = open.gridBottom
+                        // Taken from the window rather than worked out again here: a drone
+                        // shows fewer rows than fit when its scale is short, and a drag
+                        // measured against the rows that would fit slid against the grid.
+                        val window = gridWindow(open, gridArea, frame.density, gridScale)
+                        val rowHeight = gridArea.height / window.rows
                         var moved = false
 
                         while (true) {
@@ -2108,7 +2167,11 @@ fun PatchCanvas(
                                 // Down the screen is down in pitch, so dragging the grid
                                 // downward brings higher degrees into view.
                                 val rows = ((change.position.y - down.position.y) / rowHeight)
-                                open.gridBottom = scrollFrom + rows.roundToInt()
+                                // From where the view stood, never from a stored overshoot,
+                                // and never past either end: dragging back must move the
+                                // grid at once, and a scale change must not re-clamp a
+                                // position nobody could see.
+                                open.gridBottom = window.scrolledBy(rows.roundToInt())
                             }
                             change.consume()
                         }
@@ -2558,6 +2621,37 @@ private val GridPlaying = Color(0xFFF2F6FB)
  * no black keys to count against.
  */
 /**
+ * The track and thumb of a grid's scroll bar, or null when everything is on screen.
+ *
+ * Beside the grid on the right, because the left gutter is where a sequencer numbers its
+ * rows and the right one is empty at the grid's height -- the jacks' labels are further
+ * out and the modulation chips sit beside the rows below.
+ *
+ * Only an indicator. The grid itself is what scrolls, under a drag anywhere on it, and a
+ * bar you had to aim at would be a second, smaller way to do what the whole grid already
+ * does. What the grid could not say was that there was more of it, and how much.
+ *
+ * The thumb has a floor on its height so a sequencer's eighty-odd degrees do not shrink it
+ * to a sliver, and travels over what is left of the track, which is the usual way a thumb
+ * with a minimum size keeps its two ends meaning the two ends of the range.
+ */
+internal fun gridScrollBar(area: Rect, d: Float, window: GridWindow): Pair<Rect, Rect>? {
+    if (!window.scrolls) return null
+    val track = Rect(area.right + 10f * d, area.top, area.right + 14f * d, area.bottom)
+    val height = maxOf(track.height * window.rows / window.span, 16f * d).coerceAtMost(track.height)
+    val above = (window.highest - window.top).toFloat()
+    val top = track.top + (track.height - height) * above / (window.span - window.rows)
+    return track to Rect(track.left, top, track.right, top + height)
+}
+
+private fun DrawScope.drawGridScrollBar(area: Rect, d: Float, window: GridWindow, accent: Color) {
+    val (track, thumb) = gridScrollBar(area, d, window) ?: return
+    val radius = CornerRadius(2f * d, 2f * d)
+    drawRoundRect(GridCell, track.topLeft, track.size, radius)
+    drawRoundRect(accent.copy(alpha = 0.7f), thumb.topLeft, thumb.size, radius)
+}
+
+/**
  * Degrees up the rows, octaves across the columns, each cell held on its own.
  *
  * No playhead and no dimming: nothing here is reached in turn, so there is no step being
@@ -2613,7 +2707,8 @@ private fun DrawScope.drawStepGrid(
     playingStep: Int,
 ) {
     val columns = module.type.stepCount
-    val rows = gridRows(area, d)
+    val window = gridWindow(module, area, d, scale)
+    val rows = window.rows
     val cellW = area.width / columns
     val cellH = area.height / rows
     val inset = 1f * d
@@ -2623,7 +2718,7 @@ private fun DrawScope.drawStepGrid(
     // reached. Dimming them says so without hiding the work already in them.
     val length = module.params.getOrNull(0)?.toInt() ?: columns
 
-    val topDegree = module.gridBottom + rows - 1
+    val topDegree = window.top
 
     // The column being played, behind the cells so a lit note still reads as a note.
     // Only when it is inside the loop: a length change can leave the engine reporting a
@@ -2637,7 +2732,7 @@ private fun DrawScope.drawStepGrid(
     }
 
     repeat(rows) { row ->
-        val degree = module.gridBottom + (rows - 1 - row)
+        val degree = window.degreeAt(row)
         val tonic = degree.mod(scale.size) == 0
         val top = area.top + row * cellH
 
@@ -2728,7 +2823,7 @@ private fun DrawScope.drawStepGrid(
         val step = module.steps.getOrNull(column) ?: return@repeat
         if (!step.on) return@repeat
         val above = step.degree > topDegree
-        if (!above && step.degree >= module.gridBottom) return@repeat
+        if (!above && step.degree >= window.bottom) return@repeat
 
         val live = column < length
         val centreX = area.left + (column + 0.5f) * cellW
@@ -3948,15 +4043,16 @@ private fun DrawScope.drawPanel(
         return
     }
 
+    val gridArea = panelGrid(panel, d, module.type)
     when (module.type.grid) {
         GridKind.SEQUENCE -> drawStepGrid(
-            panelGrid(panel, d, module.type), d, module, scale, module.type.accent,
-            measurer, playingStep,
+            gridArea, d, module, scale, module.type.accent, measurer, playingStep,
         )
-        GridKind.DRONE -> drawDroneGrid(
-            panelGrid(panel, d, module.type), d, module, scale, module.type.accent,
-        )
+        GridKind.DRONE -> drawDroneGrid(gridArea, d, module, scale, module.type.accent)
         GridKind.NONE -> {}
+    }
+    if (module.type.grid != GridKind.NONE) {
+        drawGridScrollBar(gridArea, d, gridWindow(module, gridArea, d, scale), module.type.accent)
     }
 
     // Knobs -- the rows only. Walking every parameter drew the interval, which lives in the

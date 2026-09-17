@@ -1523,6 +1523,31 @@ keeps that difference visible. Each end gets a plug in the cable's colour, since
 would otherwise cover the jack's own dot. Crossing a label is better than vanishing behind a
 box -- that was the open half, and the phone answered it.
 
+### Grids say how much of them there is
+
+**2026-09-16, from the first use of Drone on the phone.** Both grids now carry a scroll bar
+beside them: the track is every degree the grid can show, the thumb the ones on screen. It
+is only an indicator -- the grid itself scrolls under a drag anywhere on it, and a bar you
+had to aim at would be a second, smaller way to do the same thing. What the grid could not
+say was that there was more of it.
+
+A scroll bar needs a range to be a fraction of, and a sequencer's grid scrolled through
+every integer there was. It now spans three octaves below the key and four above, in whole
+periods of the scale, widened to take in any step already written outside that.
+
+**Building it exposed why the drone grid jumped.** The drag wrote the scroll position with
+no limit and only the drawing clamped it, against whichever scale was sounding. A finger
+could scroll past the top of the scale and keep going while the picture stood still;
+dragging back then did nothing until that overshoot was undone, and a scale of a different
+size re-clamped it somewhere new. `GridWindow` is now the one place the range is worked
+out, and drawing, hit test and drag all read it.
+
+**That was not all of the jumping.** On the phone, with a scale list alternating 12-TET and
+Harmonic minor, a drone scrolled to show degree 1 at the bottom redraws every four bars as
+seven taller rows with degree 0 at the bottom, because a seven-degree scale fits whole. The
+stored position survives -- back in 12-TET it returns exactly -- but the grid reshaping under
+the hand is a layout question, put to the phone's owner rather than decided here.
+
 ### CV is retired, and the catalogue is seven modules
 
 **Built 2026-09-16**, as the second of the two commits the type system was split from.
