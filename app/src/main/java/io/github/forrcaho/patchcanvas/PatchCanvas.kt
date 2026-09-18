@@ -1935,6 +1935,23 @@ internal fun Patch.groupPortSlotHit(frame: Frame, source: PortRef, screen: Offse
     return (groupPortSlot(frame, rail, railDirFor(source)) - screen).getDistance() <= touchPx
 }
 
+/**
+ * Which group's crumb [screen] landed on, [TOP] for the patch itself, or null for none.
+ *
+ * One definition for the tap that goes there and the long press that renames it, so the
+ * two cannot disagree about where a chip is. Null while a panel is open, since the
+ * breadcrumb is not drawn over one -- the panel's own loop takes those touches anyway,
+ * but a hit test that claims a control nobody can see is the kind of thing that is true
+ * until it quietly is not.
+ */
+internal fun Patch.breadcrumbAt(frame: Frame, screen: Offset): Long? {
+    if (scopeOrTop == TOP || modules.any { it.expanded }) return null
+    scopePath().forEachIndexed { level, id ->
+        if (frame.breadcrumbChip(level).contains(screen)) return id
+    }
+    return null
+}
+
 /** Looks inside a group, or back out: closing any panel, which belongs to where you were. */
 internal fun Patch.enterScope(id: Long) {
     modules.forEach { it.expanded = false }
@@ -2903,6 +2920,7 @@ fun PatchCanvas(
                                 // Holding a history button is not a request for the add menu;
                                 // it is a finger resting on a button. Nothing happens.
                                 val onButton = controls.overHistory(frame, down.position)
+                                val crumb = patch.breadcrumbAt(frame, down.position)
                                 // A rail offers nothing to delete, so it opens no menu -- but
                                 // it does have knobs, and tapping it is already its switch, so
                                 // holding is the way in to its panel.
@@ -2911,6 +2929,11 @@ fun PatchCanvas(
                                 } else if (interaction is Interaction.Selecting) {
                                     // Choosing is taps; a finger that rests does not end it.
                                     interaction
+                                } else if (crumb != null) {
+                                    // Holding a crumb renames that group -- the way to name the
+                                    // one you are inside, whose box is a level up and not on
+                                    // screen. "Patch" is not a group and has no name to give.
+                                    if (crumb == TOP) Interaction.Idle else Interaction.Renaming(crumb)
                                 } else if (hitModule != null && hitModule.isPinned) {
                                     if (hitModule.type.hasPanel) {
                                         patch.modules.forEach { it.expanded = false }
@@ -4481,13 +4504,9 @@ private fun handleTap(
 
     // The breadcrumb, before anything under it: it is how you get back out, so it must
     // never lose a tap to whatever happens to be beneath it on the canvas.
-    if (patch.scopeOrTop != TOP) {
-        patch.scopePath().forEachIndexed { level, id ->
-            if (frame.breadcrumbChip(level).contains(screen)) {
-                if (id != patch.scopeOrTop) patch.enterScope(id)
-                return Interaction.Idle
-            }
-        }
+    patch.breadcrumbAt(frame, screen)?.let { id ->
+        if (id != patch.scopeOrTop) patch.enterScope(id)
+        return Interaction.Idle
     }
 
     if (current is Interaction.Selecting) {

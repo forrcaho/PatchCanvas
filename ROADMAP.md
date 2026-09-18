@@ -1656,6 +1656,13 @@ selected, the new name on the box, in the file, and gone again after one undo; a
 named "Group 1" beside an older unnamed one, and the breadcrumb reading "Patch > Group 1".
 Not yet checked on the phone.
 
+**Renaming from inside, too.** A group's box is a level up and off screen while you are
+working inside it, so the only way to rename it was to leave first. Holding its crumb in
+the breadcrumb does it instead, at its owner's suggestion -- the name is already there,
+and a long press is what renames things everywhere else in this app. "Patch" is not a
+group and does nothing. One `Patch.breadcrumbAt` now answers for both the tap that enters
+a scope and the press that renames it, so the two cannot disagree about where a chip is.
+
 **Still open:** whether 16 characters is the right ceiling for a name on a box that does
 not grow.
 

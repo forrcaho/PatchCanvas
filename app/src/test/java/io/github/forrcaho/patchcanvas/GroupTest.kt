@@ -432,4 +432,31 @@ class GroupTest {
         assertEquals("Group 1", f.patch.module(group.id)?.name)
         assertEquals(named, f.patch.toJson())
     }
+
+    @Test
+    fun `a crumb says which group it is, so holding it can rename that one`() {
+        val f = GroupFixture()
+        val inner = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+        val outer = f.patch.group(setOf(inner.id, f.mix.id))!!
+
+        // Nothing to show at the top level: there is no breadcrumb there at all.
+        f.patch.scope = TOP
+        assertNull(f.patch.breadcrumbAt(frame, frame.breadcrumbChip(0).center))
+
+        f.patch.enterScope(outer.id)
+        f.patch.enterScope(inner.id)
+        // "Patch > Group 2 > Group 1", and each chip answers for its own level.
+        assertEquals(listOf(TOP, outer.id, inner.id), f.patch.scopePath())
+        assertEquals(TOP, f.patch.breadcrumbAt(frame, frame.breadcrumbChip(0).center))
+        assertEquals(outer.id, f.patch.breadcrumbAt(frame, frame.breadcrumbChip(1).center))
+        assertEquals(inner.id, f.patch.breadcrumbAt(frame, frame.breadcrumbChip(2).center))
+
+        // Below the chips is the canvas, where a long press means the add menu.
+        val under = frame.breadcrumbChip(1).let { Offset(it.center.x, it.bottom + 40f) }
+        assertNull(f.patch.breadcrumbAt(frame, under))
+
+        // No breadcrumb is drawn over an open panel, so none is hit either.
+        f.mix.expanded = true
+        assertNull(f.patch.breadcrumbAt(frame, frame.breadcrumbChip(1).center))
+    }
 }
