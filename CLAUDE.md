@@ -191,7 +191,12 @@ are its own, stored in a `GroupPorts` it shares with the two pinned rails inside
 (`GroupIn` on the left, `GroupOut` on the right) -- so inside a group, the existing rail
 drawing, hit testing and cables all apply unchanged. `GraphSync` reads
 `engineModules` and `engineConnections()`, which follow any chain of group ports to the
-real output at the far end. **Grouping or ungrouping a playing patch must send the engine
+real output at the far end. A group's ports are stored, never derived from the cables, so
+unplugging one leaves the jack to plug back into -- but a port whose jack *inside* stops
+existing (its parameter unexposed, its module deleted) is dropped, since nothing could
+reach it again. Dropping one renumbers every cable that named a later port: indices are
+positional, and stale ones fail silently because both ends are wrong by the same amount,
+so the engine hears the right thing while the jack draws off the end of the box. **Grouping or ungrouping a playing patch must send the engine
 nothing**, and `GraphSyncTest` asserts exactly that. Which group you are looking at
 (`Patch.scope`) is view state: not saved, not undone. **A knob reaches out through the
 boundary the same way a cable does.** Inside a group, the chip beside a row promotes that

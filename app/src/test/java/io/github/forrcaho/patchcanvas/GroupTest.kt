@@ -527,4 +527,139 @@ class GroupTest {
         f.patch.replaceWith(patchFromJson(saved)!!)
         assertEquals(saved, f.patch.toJson())
     }
+
+    /**
+     * Forrest's report, 2026-09-17: expose a knob inside a group, give the group a port for
+     * it, then unexpose. The jack the port reached stops existing, and the port was left on
+     * the rail and on the group's box -- a jack you could patch into that went nowhere.
+     */
+    @Test
+    fun `a group port goes when the jack it reached inside stops existing`() {
+        val f = GroupFixture()
+        val group = f.patch.group(setOf(f.lfo.id, f.env.id))!!
+        f.patch.enterScope(group.id)
+
+        val rate = 0
+        f.patch.expose(f.lfo, rate, initialModRange(f.lfo.type.params[rate], f.lfo.params[rate]))
+        val before = group.ports(PortDirection.INPUT).size
+        assertTrue(f.patch.addGroupPort(group.id, PortRef(f.lfo.id, PortDirection.MOD, rate)))
+        assertEquals(before + 1, group.ports(PortDirection.INPUT).size)
+
+        f.patch.unexpose(f.lfo, rate)
+        assertEquals("the port goes with the jack", before, group.ports(PortDirection.INPUT).size)
+        val rail = f.patch.groupRail(group.id, Types.GroupIn)!!
+        assertEquals(before, rail.ports(PortDirection.OUTPUT).size)
+    }
+
+    /**
+     * The same for a module deleted inside a group, and with a second port after the one
+     * that goes -- removing a port renumbers every cable that named a later one.
+     */
+    @Test
+    fun `removing a module inside takes its group ports with it, and the rest still reach`() {
+        val f = GroupFixture()
+        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+        val inputs = group.ports(PortDirection.INPUT).toList()
+        assertEquals("steps, drone, and the lfo onto cutoff", 3, inputs.size)
+
+        // What the last port carries, and where it goes, has to survive losing an earlier one.
+        val engineBefore = f.patch.engineConnections()
+        val lfoCable = engineBefore.filter { it.to.moduleId == f.filter.id && it.to.dir == PortDirection.MOD }
+        assertTrue(lfoCable.isNotEmpty())
+
+        // The Osc takes the two note ports; deleting it leaves them reaching nothing.
+        f.patch.remove(f.osc)
+
+        assertEquals(listOf(SignalKind.MODULATION), group.ports(PortDirection.INPUT).map { it.kind })
+        assertEquals(
+            "the modulation cable still lands where it did",
+            lfoCable.toSet(),
+            f.patch.engineConnections().filter { it.to.moduleId == f.filter.id && it.to.dir == PortDirection.MOD }.toSet(),
+        )
+
+        // The port that survived was the third, and every cable that named it has to say so
+        // now that it is the first. Stale indices happen to resolve -- both ends are wrong
+        // by the same amount -- so the engine hears the right thing while the jack is drawn
+        // off the end of the box.
+        val rail = f.patch.groupRail(group.id, Types.GroupIn)!!
+        val count = group.ports(PortDirection.INPUT).size
+        f.patch.connections.forEach { c ->
+            listOf(c.from, c.to).forEach { ref ->
+                val names = (ref.moduleId == group.id && ref.dir == PortDirection.INPUT) ||
+                    (ref.moduleId == rail.id && ref.dir == PortDirection.OUTPUT)
+                if (names) assertTrue("cable names port ${ref.index} of $count", ref.index < count)
+            }
+        }
+    }
+
+    /**
+     * One port can feed several modules inside. Losing one of them is not losing the port:
+     * it is stored, not derived, and the others are still on it.
+     */
+    @Test
+    fun `a port feeding two modules survives losing one of them`() {
+        val f = GroupFixture()
+        val group = f.patch.group(setOf(f.osc.id, f.env.id))!!
+        val rail = f.patch.groupRail(group.id, Types.GroupIn)!!
+        // Steps feeds both the Osc and the Env, so one port inside goes to two places.
+        val shared = f.patch.connections.filter { it.from.moduleId == rail.id }
+            .groupBy { it.from.index }.entries.first { it.value.size > 1 }
+        assertEquals(2, shared.value.size)
+
+        val before = group.ports(PortDirection.INPUT).size
+        f.patch.remove(f.env)
+        assertEquals("the port stays for what is still on it", before, group.ports(PortDirection.INPUT).size)
+        assertTrue(f.patch.connections.any { it.from.moduleId == rail.id && it.from.index == shared.key })
+    }
+
+    /**
+     * A port left over from before the prune existed, or one added by mistake, has to be
+     * removable by hand: a long press on its jack, from the box outside or the rail inside,
+     * and both have to name the same port.
+     */
+    @Test
+    fun `a group's jack knows which port it is, from either side`() {
+        val f = GroupFixture()
+        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+        val railIn = f.patch.groupRail(group.id, Types.GroupIn)!!
+        val railOut = f.patch.groupRail(group.id, Types.GroupOut)!!
+
+        assertEquals(
+            Triple(group, PortDirection.INPUT, 2),
+            f.patch.groupPortAt(PortRef(group.id, PortDirection.INPUT, 2)),
+        )
+        assertEquals(
+            "the left rail's output is the group's input",
+            Triple(group, PortDirection.INPUT, 2),
+            f.patch.groupPortAt(PortRef(railIn.id, PortDirection.OUTPUT, 2)),
+        )
+        assertEquals(
+            Triple(group, PortDirection.OUTPUT, 0),
+            f.patch.groupPortAt(PortRef(railOut.id, PortDirection.INPUT, 0)),
+        )
+        // The patch's own rails are pinned too, and their ports belong to the audio device.
+        assertNull(f.patch.groupPortAt(PortRef(OUT_ID, PortDirection.INPUT, 0)))
+        assertNull(f.patch.groupPortAt(PortRef(f.osc.id, PortDirection.INPUT, 0)))
+    }
+
+    @Test
+    fun `removing a port by hand takes its cables and leaves the sound of the rest`() {
+        val f = GroupFixture()
+        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+        val before = f.patch.engineConnections()
+        val cutoffCable = before.filter { it.to.moduleId == f.filter.id && it.to.dir == PortDirection.MOD }
+
+        // The first input is Steps' notes; taking it off unpatches Steps from the Osc and
+        // leaves everything else exactly as it was.
+        assertTrue(f.patch.removeGroupPort(group, PortDirection.INPUT, 0))
+        assertEquals(2, group.ports(PortDirection.INPUT).size)
+
+        val after = f.patch.engineConnections()
+        assertTrue(
+            "only the cable through that port is gone",
+            (before - after.toSet()).all { it.from.moduleId == f.steps.id },
+        )
+        assertEquals("what the rest carried is untouched", cutoffCable.toSet(),
+            after.filter { it.to.moduleId == f.filter.id && it.to.dir == PortDirection.MOD }.toSet())
+    }
 }

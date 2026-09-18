@@ -1605,11 +1605,16 @@ class Patch {
     fun remove(module: PatchModule) {
         if (module.isPinned) return
         val gone = setOf(module.id) + descendants(module.id)
+        // Every jack these modules had, so the group around them can drop the ports that
+        // reached only those -- worked out before the cables naming them are cleared.
+        val jacks = connections.flatMap { listOf(it.from, it.to) }.filter { it.moduleId in gone }.toSet()
+        val ports = groupPortsOn(module.parent, jacks)
         connections.removeAll { it.from.moduleId in gone || it.to.moduleId in gone }
         // A knob promoted to a group's edge outlives the module it belongs to otherwise:
         // the panel would not draw it, but the file would keep carrying it.
         modules.forEach { it.groupPorts?.promoted?.removeAll { ref -> ref.moduleId in gone } }
         modules.removeAll { it.id in gone }
+        dropOrphanedGroupPorts(module.parent, ports)
     }
 
     /** Everything inside group [id], at any depth, its rails included. */
@@ -1856,6 +1861,96 @@ class Patch {
      *
      * This is the way a port is added after grouping: patch to the rail's edge.
      */
+    /**
+     * Drops one of a group's ports, closing the gap behind it.
+     *
+     * Ports are positional -- a cable names one by its index -- so every cable that pointed
+     * past this one has to be renumbered, on the box outside and on the rail inside alike.
+     * Cables on the port itself go, which costs the patch no sound: a port whose inside end
+     * is gone already carried nothing, and [engineConnections] never saw it.
+     */
+    fun removeGroupPort(group: PatchModule, dir: PortDirection, index: Int): Boolean {
+        val ports = group.groupPorts ?: return false
+        val list = if (dir == PortDirection.INPUT) ports.inputs else ports.outputs
+        if (index !in list.indices) return false
+        val railType = if (dir == PortDirection.INPUT) Types.GroupIn else Types.GroupOut
+        val railDir = if (dir == PortDirection.INPUT) PortDirection.OUTPUT else PortDirection.INPUT
+        val rail = groupRail(group.id, railType)
+
+        fun names(ref: PortRef): Boolean =
+            (ref.moduleId == group.id && ref.dir == dir) ||
+                (rail != null && ref.moduleId == rail.id && ref.dir == railDir)
+
+        fun shifted(ref: PortRef): PortRef =
+            if (names(ref) && ref.index > index) ref.copy(index = ref.index - 1) else ref
+
+        Snapshot.withMutableSnapshot {
+            connections.removeAll { c ->
+                (names(c.from) && c.from.index == index) || (names(c.to) && c.to.index == index)
+            }
+            val renumbered = connections.map { Connection(shifted(it.from), shifted(it.to)) }
+            connections.clear()
+            connections.addAll(renumbered)
+            list.removeAt(index)
+        }
+        return true
+    }
+
+    /**
+     * Which of [groupId]'s ports reach one of [gone] inside it.
+     *
+     * Read *before* those jacks' cables are removed, since the cable is what says which
+     * port reached them; [dropOrphanedGroupPorts] then decides, after the removal, which
+     * of these are left reaching nothing.
+     */
+    private fun groupPortsOn(groupId: Long, gone: Set<PortRef>): List<Pair<PortDirection, Int>> {
+        val found = mutableListOf<Pair<PortDirection, Int>>()
+        forEachGroupRail(groupId) { dir, rail, railDir ->
+            connections.forEach { c ->
+                val railEnd = if (dir == PortDirection.INPUT) c.from else c.to
+                val other = if (dir == PortDirection.INPUT) c.to else c.from
+                if (railEnd.moduleId == rail.id && railEnd.dir == railDir && other in gone) {
+                    found += dir to railEnd.index
+                }
+            }
+        }
+        return found.distinct()
+    }
+
+    /**
+     * Drops those [candidates] that no longer reach anything inside the group.
+     *
+     * Only ports an edit orphaned, never every port that happens to be unpatched: a port is
+     * stored rather than derived precisely so that unplugging a cable to move it leaves the
+     * jack there to plug back into. What is different about these is that the jack inside is
+     * not coming back -- its parameter was unexposed, or its module deleted -- so the port is
+     * one nothing could reach again, and a jack on the box that goes nowhere is exactly the
+     * kind of thing this project refuses to draw.
+     */
+    private fun dropOrphanedGroupPorts(groupId: Long, candidates: List<Pair<PortDirection, Int>>) {
+        val group = module(groupId)?.takeIf { it.type == Types.Group } ?: return
+        // Highest index first: removing a port renumbers the ones after it.
+        candidates.sortedByDescending { it.second }.forEach { (dir, index) ->
+            val rail = groupRail(groupId, if (dir == PortDirection.INPUT) Types.GroupIn else Types.GroupOut)
+                ?: return@forEach
+            val railDir = if (dir == PortDirection.INPUT) PortDirection.OUTPUT else PortDirection.INPUT
+            val stillReaches = connections.any { c ->
+                val railEnd = if (dir == PortDirection.INPUT) c.from else c.to
+                railEnd.moduleId == rail.id && railEnd.dir == railDir && railEnd.index == index
+            }
+            if (!stillReaches) removeGroupPort(group, dir, index)
+        }
+    }
+
+    /** Each of a group's two rails, with the direction of the box's ports it stands for. */
+    private inline fun forEachGroupRail(
+        groupId: Long,
+        body: (dir: PortDirection, rail: PatchModule, railDir: PortDirection) -> Unit,
+    ) {
+        groupRail(groupId, Types.GroupIn)?.let { body(PortDirection.INPUT, it, PortDirection.OUTPUT) }
+        groupRail(groupId, Types.GroupOut)?.let { body(PortDirection.OUTPUT, it, PortDirection.INPUT) }
+    }
+
     fun addGroupPort(groupId: Long, inside: PortRef): Boolean {
         val group = module(groupId)?.takeIf { it.type == Types.Group } ?: return false
         val ports = group.groupPorts ?: return false
@@ -1930,8 +2025,14 @@ class Patch {
     /** Takes a parameter's jack away, and whatever was patched into it. */
     fun unexpose(module: PatchModule, index: Int) {
         if (index !in module.modRanges) return
-        disconnect(PortRef(module.id, PortDirection.MOD, index))
+        val jack = PortRef(module.id, PortDirection.MOD, index)
+        // Before the cable goes, since the cable is what says which port reached this jack.
+        val ports = groupPortsOn(module.parent, setOf(jack))
+        disconnect(jack)
         module.modRanges = module.modRanges - index
+        // The jack is not coming back, so a group port that reached only it has nothing
+        // left to reach: it would be a jack on the box that quietly went nowhere.
+        dropOrphanedGroupPorts(module.parent, ports)
     }
 
     /** A disabled input rail cannot be patched from, so it reads as present but inert. */
@@ -1997,7 +2098,12 @@ sealed interface Interaction {
      * A context menu is open at [anchor] (screen px). [targetId] is the module that was
      * long-pressed, or null for empty canvas, which decides what the menu offers.
      */
-    data class Menu(val anchor: Offset, val targetId: Long?) : Interaction
+    data class Menu(
+        val anchor: Offset,
+        val targetId: Long?,
+        /** Set when the press landed on a group's port, which has its own one-item menu. */
+        val port: PortRef? = null,
+    ) : Interaction
 
     /**
      * Choosing modules to group. A tap on a module adds or removes it; the Group and Cancel
@@ -2045,9 +2151,35 @@ sealed interface MenuItem {
 
     /** A group's promoted knobs, which is the only way its panel opens: a tap goes inside. */
     data class Knobs(val moduleId: Long) : MenuItem
+
+    /** Takes a port off a group, from the box outside or the rail inside. */
+    data class RemovePort(val groupId: Long, val dir: PortDirection, val index: Int) : MenuItem
 }
 
-private fun menuItems(patch: Patch, targetId: Long?): List<MenuItem> = when {
+/**
+ * Which group's port a jack belongs to, from either side of the boundary.
+ *
+ * The box's own jacks name the group directly; a rail's name it the other way round, since
+ * a group's input is the left rail's output. Null for anything else -- the patch's own
+ * rails are pinned too, and their ports are the audio device's, not a group's.
+ */
+internal fun Patch.groupPortAt(ref: PortRef): Triple<PatchModule, PortDirection, Int>? {
+    val module = module(ref.moduleId) ?: return null
+    return when {
+        module.type == Types.Group && ref.dir != PortDirection.MOD ->
+            Triple(module, ref.dir, ref.index)
+        module.type == Types.GroupIn && ref.dir == PortDirection.OUTPUT ->
+            module(module.parent)?.let { Triple(it, PortDirection.INPUT, ref.index) }
+        module.type == Types.GroupOut && ref.dir == PortDirection.INPUT ->
+            module(module.parent)?.let { Triple(it, PortDirection.OUTPUT, ref.index) }
+        else -> null
+    }
+}
+
+private fun menuItems(patch: Patch, targetId: Long?, port: PortRef? = null): List<MenuItem> = when {
+    port != null -> patch.groupPortAt(port)
+        ?.let { (group, dir, index) -> listOf(MenuItem.RemovePort(group.id, dir, index)) }
+        .orEmpty()
     targetId == null -> Types.palette.map { MenuItem.Add(it) } + MenuItem.StartGroup
     patch.module(targetId)?.type == Types.Group -> listOfNotNull(
         MenuItem.Duplicate(targetId),
@@ -3084,6 +3216,7 @@ fun PatchCanvas(
                                 // it is a finger resting on a button. Nothing happens.
                                 val onButton = controls.overHistory(frame, down.position)
                                 val crumb = patch.breadcrumbAt(frame, down.position)
+                                val heldPort = patch.hitPort(camera, frame, down.position, touchPx)
                                 // A rail offers nothing to delete, so it opens no menu -- but
                                 // it does have knobs, and tapping it is already its switch, so
                                 // holding is the way in to its panel.
@@ -3092,6 +3225,11 @@ fun PatchCanvas(
                                 } else if (interaction is Interaction.Selecting) {
                                     // Choosing is taps; a finger that rests does not end it.
                                     interaction
+                                } else if (heldPort != null && patch.groupPortAt(heldPort) != null) {
+                                    // A group's jack, from either side. Precise rather than
+                                    // anywhere on the box, since the box's own menu is what
+                                    // a press anywhere else on it means.
+                                    Interaction.Menu(down.position, hitModule?.id, heldPort)
                                 } else if (crumb != null) {
                                     // Holding a crumb renames that group -- the way to name the
                                     // one you are inside, whose box is a level up and not on
@@ -3366,7 +3504,10 @@ fun PatchCanvas(
             )
 
             (interaction as? Interaction.Menu)?.let { menu ->
-                drawMenu(menuLayout(menuItems(patch, menu.targetId), menu.anchor, d, size), d, screenMeasurer)
+                drawMenu(
+                menuLayout(menuItems(patch, menu.targetId, menu.port), menu.anchor, d, size),
+                d, screenMeasurer,
+            )
             }
         }
 
@@ -4634,7 +4775,9 @@ private fun handleTap(
     controls: CanvasControls,
 ): Interaction {
     if (current is Interaction.Menu) {
-        val layout = menuLayout(menuItems(patch, current.targetId), current.anchor, frame.density, frame.canvas)
+        val layout = menuLayout(
+            menuItems(patch, current.targetId, current.port), current.anchor, frame.density, frame.canvas,
+        )
         val chosen = layout.tiles.firstOrNull { it.first.contains(screen) }?.second
             ?: return Interaction.Idle // tapped away: dismiss
         when (chosen) {
@@ -4656,6 +4799,9 @@ private fun handleTap(
             is MenuItem.Rename ->
                 return if (patch.module(chosen.moduleId) == null) Interaction.Idle
                 else Interaction.Renaming(chosen.moduleId)
+            is MenuItem.RemovePort -> patch.module(chosen.groupId)?.let {
+                patch.removeGroupPort(it, chosen.dir, chosen.index)
+            }
             is MenuItem.Knobs -> patch.module(chosen.moduleId)?.let { group ->
                 patch.modules.forEach { it.expanded = false }
                 group.expanded = true
@@ -4895,6 +5041,7 @@ private fun MenuItem.label(): String = when (this) {
     is MenuItem.Duplicate -> "Duplicate"
     is MenuItem.Rename -> "Rename\u2026"
     is MenuItem.Knobs -> "Knobs\u2026"
+    is MenuItem.RemovePort -> "Remove port"
     is MenuItem.Delete -> "Delete"
     is MenuItem.StartGroup -> "Group\u2026"
     is MenuItem.Ungroup -> "Ungroup"
@@ -4904,6 +5051,7 @@ private fun MenuItem.tint(): Color = when (this) {
     is MenuItem.Add -> type.accent
     is MenuItem.Duplicate, is MenuItem.Rename -> Color(0xFF8A93A3)
     is MenuItem.Knobs -> Types.Group.accent
+    is MenuItem.RemovePort -> Color(0xFFE07A6B)
     is MenuItem.Delete -> Color(0xFFE07A6B)
     is MenuItem.StartGroup, is MenuItem.Ungroup -> Types.Group.accent
 }

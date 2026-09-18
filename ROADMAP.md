@@ -1752,6 +1752,33 @@ group's own panel would need the same chip for that, which is Phase 7's "promote
 through a second boundary". And a promoted knob cannot yet be given a jack from outside --
 the `[ ]` chip is drawn only on the module's own panel, where the jack would land.
 
+### A port outlived what it reached
+
+**2026-09-17, from the phone.** Expose a knob inside a group, give the group a port for it
+by arming the jack and tapping the slot, then unexpose the knob: the jack inside vanished
+and the port stayed, on the rail and on the box, ready to be patched into and going
+nowhere. Deleting a module inside a group left the same thing behind.
+
+**Ports are stored rather than derived, and that stays.** A port that existed only while a
+cable used it would vanish the moment the cable was unplugged, leaving nothing to plug back
+into. So the rule is narrower than "drop unpatched ports": a port goes when **the jack it
+reached inside stops existing** -- its parameter unexposed, its module deleted -- because
+that is the case where nothing could ever reach it again. A port feeding two modules
+survives losing one of them, which is the test that keeps the narrow rule honest.
+
+**Removing a port renumbers the cables that named a later one.** Ports are positional, so
+this is the part that fails silently: with stale indices *both ends stay wrong by the same
+amount*, so the engine still hears the right thing while the jack is drawn off the end of
+the box. The first test could not see it, and the mutation check is what said so -- the
+assertion that actually bites is that every cable names a port that exists.
+
+**And a port can now be taken off by hand**, since the prune only fires at the moment of
+the edit and Forrest's patch already carried an orphan: a long press on the jack itself,
+from the box outside or the rail inside, offers "Remove port". Precise rather than anywhere
+on the box, which is what the group's own menu means. Confirmed on the phone against the
+real orphan: the port went, the cables that stayed still named their own ports, and the
+engine was sent nothing.
+
 ### Grids say how much of them there is
 
 **2026-09-16, from the first use of Drone on the phone.** Both grids now carry a scroll bar
