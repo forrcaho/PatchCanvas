@@ -1722,12 +1722,31 @@ class Patch {
      * and exposed parameters, and every cable between them -- the rails' wiring included.
      * Cables to the outside are not copied, as duplicating a single module copies none.
      */
-    private fun duplicateGroup(group: PatchModule): PatchModule {
+    private fun duplicateGroup(group: PatchModule): PatchModule =
         // The copy is a new group and takes the next free number; the groups nested inside
         // it keep their names, since those are only ever read from within it.
-        val fresh = nextGroupName()
-        val inside = descendants(group.id)
-        val originals = modules.filter { it.id == group.id || it.id in inside }
+        adoptGroup(this, group, group.position + Offset(28f, 28f), group.parent, nextGroupName())
+
+    /**
+     * Copies [group] and everything inside it out of [source] and into this patch, under
+     * fresh ids, at [at] and inside [parent].
+     *
+     * One routine for duplicating a group and for loading a saved one, because they are the
+     * same operation: the only thing a saved group adds is that [source] is a patch parsed
+     * from a file rather than this one. Ids are allocated here, so a group loaded twice is
+     * two independent groups and a saved file can never collide with what is already in the
+     * patch. Cables to the outside are not copied, exactly as duplicating copies none.
+     */
+    internal fun adoptGroup(
+        source: Patch,
+        group: PatchModule,
+        at: Offset,
+        parent: Long,
+        name: String? = group.name,
+    ): PatchModule {
+        val inside = source.descendants(group.id)
+        // A snapshot before anything is added, since source may be this patch.
+        val originals = source.modules.filter { it.id == group.id || it.id in inside }.toList()
         val newId = originals.associate { it.id to nextId++ }
         val sharedCopies = originals.filter { it.type == Types.Group }
             .associate { it.id to (it.groupPorts ?: GroupPorts()).copy() }
@@ -1737,26 +1756,26 @@ class Patch {
                 Types.GroupIn, Types.GroupOut -> sharedCopies[from.parent]
                 else -> null
             }
-            val offset = if (from.id == group.id) Offset(28f, 28f) else Offset.Zero
-            val copy = PatchModule(newId.getValue(from.id), from.type, from.position + offset, ports)
-            copy.name = if (from.id == group.id) fresh else from.name
+            val where = if (from.id == group.id) at else from.position
+            val copy = PatchModule(newId.getValue(from.id), from.type, where, ports)
+            copy.name = if (from.id == group.id) name else from.name
             from.params.forEachIndexed { i, v -> copy.setParam(i, v) }
             from.steps.forEachIndexed { i, step -> copy.setStep(i, step) }
             copy.modRanges = from.modRanges
-            copy.parent = if (from.id == group.id) from.parent else newId.getValue(from.parent)
+            copy.parent = if (from.id == group.id) parent else newId.getValue(from.parent)
             modules.add(copy)
         }
         // The copies' promoted knobs must name the copies, not the originals they were
         // taken from -- otherwise a duplicated group's panel turns the first group's knobs.
         sharedCopies.forEach { (from, ports) ->
-            val source = modules.first { it.id == from }.groupPorts ?: return@forEach
+            val taken = originals.first { it.id == from }.groupPorts ?: return@forEach
             ports.promoted.clear()
-            source.promoted.forEach { ref ->
+            taken.promoted.forEach { ref ->
                 newId[ref.moduleId]?.let { ports.promoted.add(ref.copy(moduleId = it)) }
             }
         }
 
-        connections.filter { it.from.moduleId in newId && it.to.moduleId in newId }.forEach {
+        source.connections.filter { it.from.moduleId in newId && it.to.moduleId in newId }.forEach {
             connections.add(
                 Connection(
                     it.from.copy(moduleId = newId.getValue(it.from.moduleId)),
