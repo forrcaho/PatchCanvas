@@ -191,8 +191,14 @@ to `getExternalFilesDir/groups`, beside the scales, and reads back through `patc
 -- so a group file gets the patch format's validation, its refusals and its version check
 rather than a second copy of all three. Loading is a **copy**: `adoptGroup` allocates ids
 in the receiving patch, which is the same routine that duplicates a group, so the same file
-loaded twice is two groups sharing nothing. Saving the whole patch groups everything,
-serializes and ungroups again inside one snapshot, which leaves the patch byte-identical.
+loaded twice is two groups sharing nothing. Saving the whole patch groups a *copy* read
+back from the patch's own file -- never the live patch, since ungrouping re-adds the
+boundary's cables at the end of the list and the reordered file became a phantom undo step.
+
+**Anything sized to hold a label reads `Frame.fontScale`.** Labels are sp, boxes are dp, and
+the reference device runs at font scale 1.5; a menu tile sized for 12sp text overflowed
+there and nowhere else. Grow the box with the setting rather than shrinking the text back
+against it.
 
 **Groups never reach the engine.** Every module is in one flat list with a `parent`
 (`TOP`, or the id of the group it is in). A group is a module of type `Group` whose ports

@@ -52,6 +52,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalFontFamilyResolver
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
@@ -60,6 +61,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
@@ -2367,6 +2369,11 @@ internal class Frame(
     val insetTop: Float,
     val insetRight: Float,
     val insetBottom: Float,
+    /**
+     * The user's text size setting, 1.0 at the default. Labels are in sp and scale with it;
+     * a box sized in dp does not, so anything sized to hold a label reads this.
+     */
+    val fontScale: Float = 1f,
 ) {
     fun railRect(module: PatchModule): Rect {
         val d = density
@@ -2877,7 +2884,7 @@ fun PatchCanvas(
     val insetBottom = with(density) { safeArea.calculateBottomPadding().toPx() }
 
     fun frameFor(canvas: Size) =
-        Frame(canvas, density.density, insetLeft, insetTop, insetRight, insetBottom)
+        Frame(canvas, density.density, insetLeft, insetTop, insetRight, insetBottom, density.fontScale)
 
     // Through rememberUpdatedState, because the gesture loop below is keyed on Unit and
     // so captures its closure exactly once. A plain val would freeze canUndo at whatever
@@ -3605,7 +3612,7 @@ fun PatchCanvas(
                 drawMenu(
                 menuLayout(
                     menuItems(patch, menu.targetId, menu.port, savedGroups.takeIf { menu.library }),
-                    menu.anchor, d, size,
+                    menu.anchor, d, size, frame.fontScale,
                 ),
                 d, screenMeasurer,
             )
@@ -5014,7 +5021,7 @@ private fun handleTap(
     if (current is Interaction.Menu) {
         val layout = menuLayout(
             menuItems(patch, current.targetId, current.port, controls.saved.takeIf { current.library }),
-            current.anchor, frame.density, frame.canvas,
+            current.anchor, frame.density, frame.canvas, frame.fontScale,
         )
         val chosen = layout.tiles.firstOrNull { it.first.contains(screen) }?.second
             ?: return Interaction.Idle // tapped away: dismiss
@@ -5263,13 +5270,22 @@ internal fun menuLayout(
     anchor: Offset,
     d: Float,
     canvas: Size,
+    /**
+     * The text size setting. A tile holds a label, and the label is in sp, so at a larger
+     * text size a tile has to be larger too -- at 1.5, the reference device's own setting,
+     * "Save patch..." was half as wide again as its tile. Grown rather than the label
+     * shrunk, because shrinking it undoes the setting the user chose in order to read it.
+     */
+    textScale: Float = 1f,
 ): MenuLayout {
+    val tileW = MenuMetrics.TILE_W * textScale.coerceAtLeast(1f)
+    val tileH = MenuMetrics.TILE_H * textScale.coerceAtLeast(1f)
     // Use as few rows as the column cap allows, then spread the items evenly across
     // them, so four items are 2x2 rather than a row of three and a lonely orphan.
     val rows = ceil(items.size / MenuMetrics.COLS.toFloat()).toInt().coerceAtLeast(1)
     val cols = ceil(items.size / rows.toFloat()).toInt().coerceAtLeast(1)
-    val w = (MenuMetrics.PAD * 2 + cols * MenuMetrics.TILE_W + (cols - 1) * MenuMetrics.GAP) * d
-    val h = (MenuMetrics.PAD * 2 + rows * MenuMetrics.TILE_H + (rows - 1) * MenuMetrics.GAP) * d
+    val w = (MenuMetrics.PAD * 2 + cols * tileW + (cols - 1) * MenuMetrics.GAP) * d
+    val h = (MenuMetrics.PAD * 2 + rows * tileH + (rows - 1) * MenuMetrics.GAP) * d
     val margin = MenuMetrics.SCREEN_MARGIN * d
 
     val left = (anchor.x - w / 2f).coerceIn(margin, maxOf(margin, canvas.width - w - margin))
@@ -5279,9 +5295,9 @@ internal fun menuLayout(
     val tiles = items.mapIndexed { i, item ->
         val c = i % cols
         val r = i / cols
-        val x = left + (MenuMetrics.PAD + c * (MenuMetrics.TILE_W + MenuMetrics.GAP)) * d
-        val y = top + (MenuMetrics.PAD + r * (MenuMetrics.TILE_H + MenuMetrics.GAP)) * d
-        Rect(Offset(x, y), Size(MenuMetrics.TILE_W * d, MenuMetrics.TILE_H * d)) to item
+        val x = left + (MenuMetrics.PAD + c * (tileW + MenuMetrics.GAP)) * d
+        val y = top + (MenuMetrics.PAD + r * (tileH + MenuMetrics.GAP)) * d
+        Rect(Offset(x, y), Size(tileW * d, tileH * d)) to item
     }
     return MenuLayout(Rect(Offset(left, top), Size(w, h)), tiles)
 }
@@ -5341,7 +5357,10 @@ private fun DrawScope.drawMenu(layout: MenuLayout, d: Float, measurer: TextMeasu
             cornerRadius = CornerRadius(6f * d, 6f * d),
             style = Stroke(width = 1f * d),
         )
-        val text = measurer.measure(item.label(), MenuLabelStyle)
+        val text = measurer.fitting(
+            item.label(), MenuLabelStyle,
+            rect.width - 2f * MENU_LABEL_PAD * d, rect.height - 2f * MENU_LABEL_PAD * d,
+        )
         drawText(
             text,
             topLeft = Offset(
@@ -5350,6 +5369,39 @@ private fun DrawScope.drawMenu(layout: MenuLayout, d: Float, measurer: TextMeasu
             ),
         )
     }
+}
+
+/** Clear space either side of a tile's label, in dp. */
+private const val MENU_LABEL_PAD = 6f
+
+/** The smallest a label is scaled to fit before it is cut short instead. */
+private const val MIN_LABEL_SCALE = 0.72f
+
+/**
+ * A label that fits a [width] by [height] tile: on one line at its own size when it can, on
+ * two when it breaks at a space, smaller when it must, and cut short only past all of that.
+ *
+ * Found on the phone, whose font scale is larger than the emulator's: "Save patch..."
+ * spilled out of its tile and ran into "Load..." beside it. A tile's size is in dp and its
+ * label in sp, so how they compare is up to a setting the app does not control -- which is
+ * why this measures rather than assumes. Shrinking alone was tried first and read "Save
+ * pat..." at the smallest size worth reading; wrapping keeps the words, and a saved group's
+ * name in the library is where it matters most, since those are names people type.
+ */
+private fun TextMeasurer.fitting(
+    label: String, style: TextStyle, width: Float, height: Float,
+): TextLayoutResult {
+    val natural = measure(label, style)
+    if (natural.size.width <= width) return natural
+    val box = Constraints(maxWidth = width.toInt().coerceAtLeast(1))
+    val centered = style.copy(textAlign = TextAlign.Center)
+    val wrapped = measure(label, centered, overflow = TextOverflow.Ellipsis, maxLines = 2, constraints = box)
+    if (!wrapped.hasVisualOverflow && wrapped.size.height <= height) return wrapped
+    val scale = (width / natural.size.width).coerceAtLeast(MIN_LABEL_SCALE)
+    val smaller = centered.copy(fontSize = style.fontSize * scale)
+    val shrunk = measure(label, smaller, overflow = TextOverflow.Ellipsis, maxLines = 2, constraints = box)
+    return if (shrunk.size.height <= height) shrunk
+    else measure(label, smaller, overflow = TextOverflow.Ellipsis, maxLines = 1, constraints = box)
 }
 
 // ---------------------------------------------------------------- drawing

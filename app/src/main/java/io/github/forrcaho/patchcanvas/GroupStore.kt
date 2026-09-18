@@ -43,25 +43,26 @@ fun Patch.groupToJson(group: PatchModule, name: String? = group.name): String? {
 }
 
 /**
- * The whole patch as one saved group, without disturbing the patch.
+ * The whole patch as one saved group, without touching the patch.
  *
  * Grouping everything is what this means -- the cables into Out become the group's outputs
  * and the ones out of In its inputs, which is exactly what [Patch.group] does with any
- * selection -- so it groups, serializes, and ungroups again. Every step of that is already
- * silent to the engine and the whole thing happens inside one snapshot, so nothing observes
- * the patch mid-flight: the autosave sees the state it started in and records nothing.
+ * selection -- and it is done to a *copy* read back from this patch's own file.
+ *
+ * The first version grouped the live patch, serialized, and ungrouped again inside one
+ * snapshot, on the reasoning that every step was silent to the engine. The engine agreed.
+ * The file did not: ungrouping re-adds the boundary's cables at the end of the list, so a
+ * patch with a group at its top level came back with its cables reordered, the autosave saw
+ * a new file, and saving became an undo step that did nothing. Found on the phone; the demo
+ * patch the test used happened to re-add its cables in the order they started in. Working
+ * on a copy makes "the patch is untouched" true by construction rather than by care.
  */
 fun Patch.patchToGroupJson(name: String): String? {
-    val ids = modules.filter { !it.isPinned && it.parent == TOP }.map { it.id }.toSet()
+    val copy = patchFromJson(toJson()) ?: return null
+    val ids = copy.modules.filter { !it.isPinned && it.parent == TOP }.map { it.id }.toSet()
     if (ids.isEmpty()) return null
-    var json: String? = null
-    androidx.compose.runtime.snapshots.Snapshot.withMutableSnapshot {
-        val group = group(ids) ?: return@withMutableSnapshot
-        group.name = name
-        json = groupToJson(group)
-        ungroup(group)
-    }
-    return json
+    val group = copy.group(ids) ?: return null
+    return copy.groupToJson(group, name)
 }
 
 /**

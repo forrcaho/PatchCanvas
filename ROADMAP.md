@@ -1798,9 +1798,9 @@ impossible rather than handled -- while the name you see stays inside the file o
 itself. Saving over a name that exists asks: **Replace or Keep both**, "Keep both" saving
 as "Filt Osc 2". Silent replacement was the one option that could lose work.
 
-**Saving the whole patch groups everything, serializes, and ungroups again**, inside one
-snapshot. Every step of that is already silent to the engine, so the patch is byte-identical
-afterwards and the autosave records nothing -- checked on the emulator, not just asserted.
+**Saving the whole patch groups a copy of it**, read back from the patch's own file, so the
+patch you are playing is never touched. The first version grouped the live patch and
+ungrouped it again, and was wrong in a way only the phone showed -- see below.
 
 **The library's own menu is the add menu's grid**, one tile per saved group, rather than a
 card that scrolls. It is the same visual language and it cost nothing; a library past a
@@ -1822,12 +1822,32 @@ the copy. Ten seconds of the engine's own capture: peak 0.45, RMS 0.13, fundamen
 silence and the reason was the master output, which starts switched off; worth remembering
 before reading a silent capture as a fault.
 
+**The phone found two more things the emulator could not.** "Save patch" on Forrest's own
+patch -- a group at its top level, with cables crossing into it -- came back with the same
+cables in a different order. Ungrouping re-adds the boundary's cables at the end of the
+list; the engine diffs sets and heard nothing, but the autosave saw a new file, so saving
+became an undo step that did nothing. The demo patch the test used happened to re-add its
+cables in their original order. It now groups a *copy* read back from the patch's own file,
+which makes "the patch is untouched" true by construction instead of by care.
+
+And the menu's labels spilled out of their tiles: the reference device runs at **font
+scale 1.5**, where 12sp is 18dp in a tile sized for 12. Shrinking the label was tried first
+and read "Save pat\u2026"; the tiles now grow with the text setting instead, since shrinking
+undoes the very setting the user chose in order to read it, and a label that still does not
+fit wraps to two lines before anything is cut -- which is what a saved group's typed name
+needs most. `PatchTest` holds the largest menu to the screen at 1.5.
+
+**Checked on the phone:** "Filter Osc" saved with its promoted knob remapped to the copy;
+the whole patch saved with the patch byte-identical afterwards and nothing sent to the
+engine; Replace over an existing name; the library listing both, the long name on two
+lines; "Filter Osc" loaded back with the same ports as the original and three real modules
+added to the engine; one undo restoring the patch exactly.
+
 **Checked on the emulator:** a group saved, its file holding one top-level group with a
 nested group inside it; loaded back as an independent copy; the same name saved again
 offering Replace or Keep both, and "Keep both" writing "Test voice 2"; the whole patch
 saved with the patch byte-identical afterwards, then loaded into itself as one group, with
-the engine told to add exactly the three real modules and nothing for the group. **Not yet
-on the phone.**
+the engine told to add exactly the three real modules and nothing for the group.
 
 **Still open:** there is no way to delete a saved group from inside the app -- the folder is
 visible over USB, which is the answer for now. Loading always lands in the scope being

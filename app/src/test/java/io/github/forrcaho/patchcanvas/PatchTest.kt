@@ -588,6 +588,32 @@ class MenuLayoutTest {
         }
     }
 
+    /**
+     * The reference device runs at font scale 1.5, where 12sp labels are 18dp tall in
+     * tiles sized for 12: "Save patch..." spilled into the tile beside it. Tiles grow with
+     * the setting, and the biggest menu there is -- every module, Group, Load and Save patch
+     * -- still has to fit the screen at that size, wherever it is opened.
+     */
+    @Test
+    fun `at a large text size the tiles grow and the whole menu still fits`() {
+        val everything = Types.palette.map { MenuItem.Add(it) } +
+            listOf(MenuItem.StartGroup, MenuItem.OpenLibrary, MenuItem.Save(null))
+        val normal = menuLayout(everything, Offset(1200f, 540f), d, screen)
+        val large = menuLayout(everything, Offset(1200f, 540f), d, screen, textScale = 1.5f)
+
+        val tile = { l: MenuLayout -> l.tiles.first().first }
+        assertEquals(tile(normal).width * 1.5f, tile(large).width, 0.5f)
+        assertEquals(tile(normal).height * 1.5f, tile(large).height, 0.5f)
+
+        listOf(Offset(0f, 0f), Offset(screen.width, screen.height), Offset(1200f, 540f)).forEach { anchor ->
+            val r = menuLayout(everything, anchor, d, screen, textScale = 1.5f).rect
+            assertTrue("fits across at $anchor", r.left >= 0f && r.right <= screen.width)
+            assertTrue("fits down at $anchor", r.top >= 0f && r.bottom <= screen.height)
+        }
+        // A smaller text size does not shrink the tiles below what a finger needs.
+        assertEquals(tile(normal).width, tile(menuLayout(everything, Offset.Zero, d, screen, 0.85f)).width, 0.5f)
+    }
+
     @Test
     fun `the menu clears the fingertip that opened it`() {
         val anchor = Offset(1200f, 800f)

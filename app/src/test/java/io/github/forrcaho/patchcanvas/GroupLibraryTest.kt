@@ -149,6 +149,23 @@ class GroupLibraryTest {
         )
     }
 
+    /**
+     * Found on the phone, 2026-09-18: a patch with a group at its top level, and cables
+     * crossing into it, came back from "Save patch" with the same cables in a different
+     * order. The engine heard nothing -- it diffs sets -- but the autosave saw a new file,
+     * so the save became an undo step that did nothing. The demo patch above could not show
+     * it: its cables happen to be re-added in the order they started in.
+     */
+    @Test
+    fun `saving the whole patch leaves a patch with groups byte for byte alone`() {
+        val f = GroupFixture()
+        f.patch.group(setOf(f.osc.id, f.filter.id))
+        val before = f.patch.toJson()
+
+        assertNotNull(f.patch.patchToGroupJson("Whole thing"))
+        assertEquals(before, f.patch.toJson())
+    }
+
     @Test
     fun `the library keeps files beside the scales, and never replaces one silently`() {
         val library = GroupLibrary(folder.newFolder("groups"))
