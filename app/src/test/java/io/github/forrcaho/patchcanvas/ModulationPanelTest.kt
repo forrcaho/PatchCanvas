@@ -26,6 +26,9 @@ class ModulationPanelTest {
     private val panel = panelRect(frame)
     private val exposable = Types.palette.filter { it.rowParams.isNotEmpty() }
 
+    /** The rows a panel shows for an ordinary module: its own, in order. */
+    private fun rows(module: PatchModule) = module.type.rowParams.map { ParamRow(module, it) }
+
     /**
      * A finger on a drone's grid, at the reference device's size. The hit test and the
      * drawing derive their geometry separately, so a cell that lights and a cell that
@@ -132,15 +135,19 @@ class ModulationPanelTest {
         val y = row.center.y
         val middle = (low + high) / 2f
 
-        assertEquals(false, panelBracketAt(panel, d, filter, 0, Offset(low, y)))
-        assertEquals(true, panelBracketAt(panel, d, filter, 0, Offset(high, y)))
-        assertEquals(false, panelBracketAt(panel, d, filter, 0, Offset(middle - 5f, y)))
-        assertEquals(true, panelBracketAt(panel, d, filter, 0, Offset(middle + 5f, y)))
-        assertEquals("far along the bar is still the nearer one", true, panelBracketAt(panel, d, filter, 0, Offset(row.right - 1f, y)))
-        assertNull("another row is not this one", panelBracketAt(panel, d, filter, 0, Offset(low, row.top - 40f * d)))
+        assertEquals(ParamRow(filter, 0) to false, panelBracketAt(panel, d, filter, rows(filter), Offset(low, y)))
+        assertEquals(ParamRow(filter, 0) to true, panelBracketAt(panel, d, filter, rows(filter), Offset(high, y)))
+        assertEquals(ParamRow(filter, 0) to false, panelBracketAt(panel, d, filter, rows(filter), Offset(middle - 5f, y)))
+        assertEquals(ParamRow(filter, 0) to true, panelBracketAt(panel, d, filter, rows(filter), Offset(middle + 5f, y)))
+        assertEquals(
+            "far along the bar is still the nearer one",
+            ParamRow(filter, 0) to true,
+            panelBracketAt(panel, d, filter, rows(filter), Offset(row.right - 1f, y)),
+        )
+        assertNull("another row is not this one", panelBracketAt(panel, d, filter, rows(filter), Offset(low, row.top - 40f * d)))
         assertNull(
             "an unexposed row has none",
-            panelBracketAt(panel, d, filter, 1, Offset(low, panelRow(panel, d, filter.type, 1).center.y)),
+            panelBracketAt(panel, d, filter, rows(filter), Offset(low, panelRow(panel, d, filter.type, 1).center.y)),
         )
     }
 
@@ -155,7 +162,10 @@ class ModulationPanelTest {
         val row = panelRow(panel, d, voice.type, 1)
         val low = panelBracketX(row, d, attack, voice.modRanges.getValue(1).low, closing = false)
         assertEquals("the new range starts at the end of the bar", row.left, low, 0.5f)
-        assertEquals(false, panelBracketAt(panel, d, voice, 1, Offset(row.left - 15f * d, row.center.y)))
+        assertEquals(
+            ParamRow(voice, 1) to false,
+            panelBracketAt(panel, d, voice, rows(voice), Offset(row.left - 15f * d, row.center.y)),
+        )
     }
 
     @Test
@@ -163,9 +173,9 @@ class ModulationPanelTest {
         val patch = Patch()
         val filter = patch.add(Types.Filter, Offset.Zero)!!
         val at = panelRow(panel, d, filter.type, 0).center
-        assertEquals(0, panelKnobAt(panel, d, filter, at))
+        assertEquals(ParamRow(filter, 0), panelKnobAt(panel, d, filter, rows(filter), at))
         patch.expose(filter, 0, ModRange(400f, 2000f))
-        assertNull(panelKnobAt(panel, d, filter, at))
+        assertNull(panelKnobAt(panel, d, filter, rows(filter), at))
     }
 
     @Test
@@ -193,12 +203,58 @@ class ModulationPanelTest {
         patch.expose(filter, 0, ModRange(400f, 2000f))
         val row = panelRow(panel, d, filter.type, 0)
 
-        patch.moveBracket(filter, panel, d, 0, closing = true, screenX = row.right)
+        patch.moveBracket(ParamRow(filter, 0), panel, d, closing = true, screenX = row.right)
         assertEquals(400f, filter.modRanges.getValue(0).low, 0.001f)
         assertEquals(18000f, filter.modRanges.getValue(0).high, 1f)
 
-        patch.moveBracket(filter, panel, d, 0, closing = false, screenX = row.left)
+        patch.moveBracket(ParamRow(filter, 0), panel, d, closing = false, screenX = row.left)
         assertEquals(20f, filter.modRanges.getValue(0).low, 0.01f)
         assertEquals("and the knob stays where it was", 1000f, filter.params[0], 0f)
+    }
+
+    /**
+     * The chip that promotes sits above the one that gives a jack, and both have to stay
+     * inside the panel and clear of each other on every module -- an Osc has five rows, and
+     * five rows are the case where the stack runs out of height.
+     */
+    @Test
+    fun `the promote chip clears the jack chip and stays on the panel`() {
+        exposable.forEach { type ->
+            type.rowParams.forEach { index ->
+                val row = panelRow(panel, d, type, index)
+                val jack = panelModChipOn(row, d)
+                val promote = panelPromoteChipOn(row, d)
+
+                assertTrue("${type.name} $index: over the row", promote.right <= row.left)
+                assertTrue("${type.name} $index: too short to hit", promote.height >= 18f * d)
+                assertTrue("${type.name} $index: too narrow to hit", promote.width >= 30f * d)
+                // The panel's input labels have the outer half of that gutter.
+                assertTrue("${type.name} $index: over the jack labels", promote.left >= panel.left + 58f * d)
+                assertEquals("level with the chip it mirrors", jack.top, promote.top, 0.001f)
+            }
+        }
+    }
+
+    /**
+     * A group's panel draws knobs that belong to modules inside it, so its rows are counted
+     * rather than looked up by parameter. One row must land where one row lands.
+     */
+    @Test
+    fun `a group's rows sit where a module's rows would`() {
+        val patch = Patch()
+        val filter = patch.add(Types.Filter, Offset.Zero)!!
+        val group = patch.group(setOf(filter.id))!!
+        patch.enterScope(group.id)
+        patch.promote(filter, 0)
+
+        val rows = patch.panelRows(group)
+        assertEquals(1, rows.size)
+        assertEquals(
+            panelRowAt(panel, d, Types.Group, 1, 0),
+            panelRowAt(panel, d, Types.Group, rows.size, 0),
+        )
+        // And the knob under it is the filter's, reached through the group's panel.
+        val at = panelRowAt(panel, d, Types.Group, rows.size, 0).center
+        assertEquals(ParamRow(filter, 0), panelKnobAt(panel, d, group, rows, at))
     }
 }

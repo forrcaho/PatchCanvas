@@ -4,6 +4,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -458,5 +459,72 @@ class GroupTest {
         // No breadcrumb is drawn over an open panel, so none is hit either.
         f.mix.expanded = true
         assertNull(f.patch.breadcrumbAt(frame, frame.breadcrumbChip(1).center))
+    }
+
+    @Test
+    fun `a knob promoted to a group's edge is the one inside, not a copy of it`() {
+        val f = GroupFixture()
+        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+        val cutoff = f.filter.type.rowParams.first()
+
+        // Only from inside: the chip that promotes is on a panel opened in this scope.
+        assertFalse("not from the top level", f.patch.promote(f.filter, cutoff))
+        f.patch.enterScope(group.id)
+        assertTrue(f.patch.promote(f.filter, cutoff))
+        assertTrue(f.patch.isPromoted(f.filter, cutoff))
+        assertFalse("twice is once", f.patch.promote(f.filter, cutoff))
+        assertFalse("a module in another scope is not this group's to promote", f.patch.promote(f.mix, 0))
+
+        // The group's panel shows the row, and it is the filter's own.
+        val rows = f.patch.panelRows(group)
+        assertEquals(listOf(ParamRow(f.filter, cutoff)), rows)
+        rows.first().owner.setParam(cutoff, 777f)
+        assertEquals("turning it turns the filter", 777f, f.filter.params[cutoff], 0.001f)
+
+        assertTrue(f.patch.unpromote(f.filter, cutoff))
+        assertTrue(f.patch.panelRows(group).isEmpty())
+    }
+
+    @Test
+    fun `a group carries no more knobs than a module does`() {
+        val f = GroupFixture()
+        val group = f.patch.group(setOf(f.osc.id, f.filter.id, f.lfo.id))!!
+        f.patch.enterScope(group.id)
+
+        val every = listOf(f.osc, f.filter, f.lfo).flatMap { m -> m.type.rowParams.map { m to it } }
+        assertTrue("the fixture has more knobs than a group may take", every.size > MAX_PROMOTED)
+        val taken = every.count { (m, i) -> f.patch.promote(m, i) }
+        assertEquals(MAX_PROMOTED, taken)
+        assertEquals(MAX_PROMOTED, f.patch.panelRows(group).size)
+    }
+
+    @Test
+    fun `promoted knobs survive a save and an undo, and follow a duplicate`() {
+        val f = GroupFixture()
+        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+        val cutoff = f.filter.type.rowParams.first()
+        f.patch.enterScope(group.id)
+        f.patch.promote(f.filter, cutoff)
+        f.patch.scope = TOP
+        val saved = f.patch.toJson()
+
+        val reloaded = patchFromJson(saved)!!
+        assertEquals(
+            listOf(ParamRef(f.filter.id, cutoff)),
+            reloaded.module(group.id)?.groupPorts?.promoted?.toList(),
+        )
+        assertEquals("a reload has to serialize back to the same bytes", saved, reloaded.toJson())
+
+        // A duplicate's knobs are its own copies' knobs, not the original's.
+        val copy = f.patch.duplicate(group)!!
+        val copied = copy.groupPorts!!.promoted.single()
+        assertNotEquals(f.filter.id, copied.moduleId)
+        assertEquals(copy.id, f.patch.module(copied.moduleId)?.parent)
+
+        // And a knob whose module is deleted goes with it, rather than riding along in the file.
+        f.patch.remove(f.filter)
+        assertTrue(group.groupPorts!!.promoted.isEmpty())
+        f.patch.replaceWith(patchFromJson(saved)!!)
+        assertEquals(saved, f.patch.toJson())
     }
 }

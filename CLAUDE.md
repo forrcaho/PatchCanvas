@@ -119,8 +119,9 @@ modules rather than renaming fields, so an older file could only have been conve
 *silently* -- a patch built around a VCA an envelope opened comes back as a filter fed by
 nothing, quieter than it was left, reporting success. So `upgrade` is a version check and
 nothing more; the migration ladder that walked 1 to 4 went with the formats it served.
-Format 6 added groups without taking anything away, so it reads 5 as it stands -- the
-rule is against silent conversion, not against a change that needs none. What
+Format 6 added groups and 7 the knobs promoted to a group's edge, neither taking anything
+away, so 7 reads 6 and 5 as they stand -- the rule is against silent conversion, not
+against a change that needs none. What
 makes that affordable is that `PatchStore.load` moves a refused file to
 `patch.rejected.json` before the demo patch can be autosaved over it. **A refusal must
 never be a delete** -- check that still holds before adding another one.
@@ -192,7 +193,13 @@ drawing, hit testing and cables all apply unchanged. `GraphSync` reads
 `engineModules` and `engineConnections()`, which follow any chain of group ports to the
 real output at the far end. **Grouping or ungrouping a playing patch must send the engine
 nothing**, and `GraphSyncTest` asserts exactly that. Which group you are looking at
-(`Patch.scope`) is view state: not saved, not undone. A group is named "Group N" -- one
+(`Patch.scope`) is view state: not saved, not undone. **A knob reaches out through the
+boundary the same way a cable does.** Inside a group, the chip beside a row promotes that
+knob to the group's edge, and the group's panel -- opened from its menu, since a tap goes
+inside -- draws it. What is stored is a `ParamRef`, never a copy: the value stays on the
+module inside, so there is one number, the engine still reads the node that has it, and
+promoting sends the engine nothing. `panelRows` is what every panel draws and hit-tests
+against, which is why a group can show knobs its own type never declared. A group is named "Group N" -- one
 past the highest number in use anywhere in the patch -- on a `PatchModule.name` that every
 module has and that falls back to the type's name, so a file written before names still
 draws "Group".

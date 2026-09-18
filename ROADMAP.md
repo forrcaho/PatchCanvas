@@ -1615,9 +1615,8 @@ switches no longer get it.
   slot is measured against the rail *as it will be* so it marks where the port truly lands.
 - **A new group lands where the chosen modules' top-left corner was,** which can put its box
   under the top row of chips, as grouping near the top of the demo patch did.
-- **A parameter cannot yet be exposed through a group's boundary** (Phase 7's "promote a
-  port"). A modulation cable crossing the edge when grouping does become a group port and
-  works; exposing a knob later from outside does not exist.
+- ~~**A parameter cannot yet be exposed through a group's boundary**~~ **Built. See
+  *A knob can be promoted* below.**
 - Whether choosing modules by tapping reads as a mode, and whether the rails inside a group
   read as its ports.
 
@@ -1701,6 +1700,57 @@ and cancelling clean when tapped away. Not yet on the phone.
 **Still open:** the sequencer's grid and the scale card have numbers that are not typeable
 yet, and neither is a group's port count. Whether the pad wants an arrow to nudge by one is
 a question for the phone.
+
+### A knob can be promoted
+
+**2026-09-17.** Phase 7 said it from the start -- "a Voice macro whose filter cutoff cannot
+be reached from outside is half a feature" -- and it was the last piece of grouping
+missing. A group with a filter in it had no controls at all from the outside. Inside a
+group, the chip beside a row now sends that knob out to the group's edge, and the group's
+panel draws it.
+
+**What is stored is a reference, never a copy.** `GroupPorts` gains a list of `ParamRef`,
+and the value stays on the module inside. A copy would be a second place for the cutoff to
+live, two numbers to keep in step and one of them wrong whenever they are not -- and the
+engine already reads the module inside, so a promoted knob is not a thing it can be told
+about. `GraphSyncTest` pins that: promoting sends the engine nothing, and turning the knob
+from the group's panel arrives as an ordinary parameter change on the module that holds it.
+
+**One panel drawing, told what its rows are.** Every panel now draws and hit-tests
+`Patch.panelRows(module)` -- a module's own row parameters, or a group's promoted ones --
+so a group shows knobs its type never declared without a second drawing to drift out of
+step with the first. That meant widening the row geometry from "which parameter" to "which
+of how many rows", which is what it always depended on.
+
+**The chip went to the left gutter.** The first drawing stacked it above the `[ ]` chip on
+the right, and it failed on a sequencer: a grid takes two thirds of the panel, so `Steps`
+rows are about a third the height the others get and two chips could not both be tall
+enough to hit. The left gutter is the same 108dp and otherwise empty. It keeps to that
+gutter's inner edge for the same reason the `[ ]` chip keeps to the other one's -- the
+panel's jack labels have the outer half -- which leaves it 32dp of width, and
+`ModulationPanelTest` holds both chips to that on every module in the catalog.
+
+**A group's panel opens from its menu**, chosen over the alternatives on 2026-09-17: a tap
+already goes inside a group, and having one gesture mean two things depending on whether
+the group had knobs was the option that would surprise you later. The entry appears only
+when there is something to show. Its rows are labelled "Steps \u00b7 transp", with the bar in the
+owning module's color, because "transp" alone says which knob but not whose -- and a group
+is exactly where two modules' knobs sit side by side.
+
+**Format 7** carries the promoted knobs and reads 6 and 5 as they stand, taking nothing
+away. Promoting is an ordinary edit: it saves, it undoes, and a duplicated group's knobs
+name the copies rather than the originals, which a test pins because the bug would be
+silent -- one group's panel turning another group's filter.
+
+**Checked on the emulator:** promoting `transp` inside a group, the chip lighting, "Knobs\u2026"
+appearing on the group's menu, its panel showing "Steps \u00b7 transp", turning it writing
+1253 cents to the Steps module in the file, and both edits undoing clean. **Not yet checked
+on the phone** -- it went off USB before the build got there.
+
+**Still open:** a knob two levels down promotes to the group it is in, and no further; the
+group's own panel would need the same chip for that, which is Phase 7's "promote a port up
+through a second boundary". And a promoted knob cannot yet be given a jack from outside --
+the `[ ]` chip is drawn only on the module's own panel, where the jack would land.
 
 ### Grids say how much of them there is
 

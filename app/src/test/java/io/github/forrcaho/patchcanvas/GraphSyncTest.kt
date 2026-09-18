@@ -98,6 +98,31 @@ class GraphSyncTest {
         assertTrue("ungrouping: ${rec.log}", rec.log.isEmpty())
     }
 
+    /**
+     * Promoting a knob is the same promise as grouping: it moves where a control is reached
+     * from, not what it is. The engine holds the module inside either way, and a command
+     * here would be a knob written twice or, worse, a node rebuilt under a playing patch.
+     */
+    @Test
+    fun `promoting a knob to a group's edge sends the engine nothing`() {
+        val f = GroupFixture()
+        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+        sync.sync(f.patch)
+        rec.clear()
+
+        f.patch.enterScope(group.id)
+        assertTrue(f.patch.promote(f.filter, f.filter.type.rowParams.first()))
+        sync.sync(f.patch)
+        assertTrue("promoting: ${rec.log}", rec.log.isEmpty())
+
+        // Turning it from the group's panel is an ordinary parameter change, on the module
+        // that really holds it -- the group is not a node and cannot be sent one.
+        val row = f.patch.panelRows(group).single()
+        row.owner.setParam(row.index, 4321f)
+        sync.sync(f.patch)
+        assertEquals(listOf(Cmd.SetParam(f.filter.id, row.index, 4321f)), rec.log)
+    }
+
     @Test
     fun `a module inside a group is synced like any other`() {
         val f = GroupFixture()

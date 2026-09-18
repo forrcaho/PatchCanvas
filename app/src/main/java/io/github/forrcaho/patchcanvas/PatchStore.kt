@@ -27,7 +27,7 @@ import java.io.File
  * 5: CV and gate retired, taking the monophonic Osc and the VCA with them.
  * 6: groups. Additive -- a format 5 file is a patch with no groups -- so 5 still reads.
  */
-private const val FORMAT_VERSION = 6
+private const val FORMAT_VERSION = 7
 private const val TAG = "PatchStore"
 
 fun Patch.toJson(): String {
@@ -51,6 +51,7 @@ fun Patch.toJson(): String {
             entry.put("out", groupRail(m.id, Types.GroupOut)?.id ?: -1L)
             entry.put("inputs", portsOf(m.ports(PortDirection.INPUT)))
             entry.put("outputs", portsOf(m.ports(PortDirection.OUTPUT)))
+            entry.put("knobs", knobsOf(m.groupPorts?.promoted.orEmpty()))
         }
         modules.put(entry)
     }
@@ -105,6 +106,25 @@ fun Patch.toJson(): String {
         .put("tempo", tempo.toDouble())
         .put("beatsPerBar", beatsPerBar)
         .toString()
+}
+
+/** The knobs promoted to a group's edge, each as the module it belongs to and which knob. */
+private fun knobsOf(refs: List<ParamRef>): JSONArray {
+    val out = JSONArray()
+    refs.forEach { out.put(JSONObject().put("module", it.moduleId).put("param", it.index)) }
+    return out
+}
+
+private fun knobsFrom(array: JSONArray?): List<ParamRef> {
+    val out = mutableListOf<ParamRef>()
+    val source = array ?: return out
+    for (i in 0 until source.length()) {
+        val entry = source.optJSONObject(i) ?: continue
+        val id = entry.optLong("module", -1L)
+        val index = entry.optInt("param", -1)
+        if (id >= 0L && index >= 0) out.add(ParamRef(id, index))
+    }
+    return out
 }
 
 /** A group's ports, as name and kind. Positional: a port's index is what its cables name. */
@@ -236,6 +256,7 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
                 GroupPorts().also {
                     it.inputs.addAll(portsFrom(m.optJSONArray("inputs")))
                     it.outputs.addAll(portsFrom(m.optJSONArray("outputs")))
+                    it.promoted.addAll(knobsFrom(m.optJSONArray("knobs")))
                 }
             } else {
                 null
@@ -344,8 +365,10 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
  */
 private fun upgrade(root: JSONObject): JSONObject? {
     val version = root.optInt("version", -1)
-    // 5 reads as it stands: groups were added to the format, nothing was taken away.
-    if (version != FORMAT_VERSION && version != 5) {
+    // 6 and 5 read as they stand: groups, and then the knobs promoted to a group's edge,
+    // were added to the format and nothing was taken away. The rule is against converting
+    // a file silently, not against a change that needs no conversion.
+    if (version != FORMAT_VERSION && version != 6 && version != 5) {
         Log.w(TAG, "unsupported patch version $version")
         return null
     }

@@ -594,12 +594,36 @@ private const val FIRST_FREE_ID = 100L
 class GroupPorts(
     val inputs: SnapshotStateList<Port> = mutableStateListOf(),
     val outputs: SnapshotStateList<Port> = mutableStateListOf(),
+    /**
+     * The knobs sent out to this group's edge, in the order they were promoted.
+     *
+     * References, not copies: the value stays on the module inside, and the group's panel
+     * turns that one. A copy would be a second place for the cutoff to live, which is two
+     * numbers to keep in step and one of them wrong whenever they are not -- and the
+     * engine already reads the module inside.
+     */
+    val promoted: SnapshotStateList<ParamRef> = mutableStateListOf(),
 ) {
     fun copy(): GroupPorts = GroupPorts(
         mutableStateListOf<Port>().apply { addAll(inputs) },
         mutableStateListOf<Port>().apply { addAll(outputs) },
+        mutableStateListOf<ParamRef>().apply { addAll(promoted) },
     )
 }
+
+/** One module's parameter, named from outside it. */
+data class ParamRef(val moduleId: Long, val index: Int)
+
+/**
+ * One row of an open panel: whose parameter it is, and which.
+ *
+ * A module's own rows name the module itself. A group's rows name the modules inside it,
+ * which is what lets one panel drawing serve both.
+ */
+data class ParamRow(val owner: PatchModule, val index: Int) {
+    val param: Param get() = owner.type.params[index]
+}
+
 
 class PatchModule(
     val id: Long,
@@ -765,6 +789,12 @@ class PatchModule(
         const val PANEL_MOD_CHIP_W = 40f
         const val PANEL_MOD_CHIP_H = 30f
         const val PANEL_MOD_GAP = 14f
+
+        /**
+         * The promote chip is narrower than the [ ] chip it mirrors: the left gutter has to
+         * hold the panel's input labels as well, and 32dp is what is left clear of them.
+         */
+        const val PANEL_PROMOTE_W = 32f
         /** How far past either end of its bar a bracket can still be taken from. */
         const val BRACKET_REACH = 22f
 
@@ -908,13 +938,20 @@ private fun panelControls(panel: Rect, d: Float, type: ModuleType): Rect {
 }
 
 /** A knob's row: label, value and the bar beneath them. */
-internal fun panelRow(panel: Rect, d: Float, type: ModuleType, index: Int): Rect {
-    val area = panelControls(panel, d, type)
-    val rows = type.rowParams
-    val count = rows.size
+internal fun panelRow(panel: Rect, d: Float, type: ModuleType, index: Int): Rect =
     // Placed by its position among the rows, not among the parameters: a parameter that
     // lives in the header takes no row, and must not leave a gap where one would be.
-    val slot = rows.indexOf(index).coerceAtLeast(0)
+    panelRowAt(panel, d, type, type.rowParams.size, type.rowParams.indexOf(index).coerceAtLeast(0))
+
+/**
+ * The [slot]th of [count] rows.
+ *
+ * What a row's geometry actually depends on, and the form a group's panel needs: its rows
+ * are knobs promoted from the modules inside it, which have no place in any list of the
+ * group type's own parameters.
+ */
+internal fun panelRowAt(panel: Rect, d: Float, type: ModuleType, count: Int, slot: Int): Rect {
+    val area = panelControls(panel, d, type)
     val side = PatchModule.PANEL_SIDE * d
     val rowHeight = minOf(PatchModule.PANEL_ROW_MAX * d, area.height / maxOf(count, 1))
     val block = rowHeight * count
@@ -929,13 +966,34 @@ internal fun panelRow(panel: Rect, d: Float, type: ModuleType, index: Int): Rect
  * gutter's inner edge, clear of the output jacks' labels on the panel's outer one. Level with
  * the row's control rather than its label, since that is what it is about.
  */
-internal fun panelModChip(panel: Rect, d: Float, type: ModuleType, index: Int): Rect {
-    val row = panelRow(panel, d, type, index)
+internal fun panelModChip(panel: Rect, d: Float, type: ModuleType, index: Int): Rect =
+    panelModChipOn(panelRow(panel, d, type, index), d)
+
+internal fun panelModChipOn(row: Rect, d: Float): Rect {
     val height = minOf(PatchModule.PANEL_MOD_CHIP_H * d, row.height - 4f * d)
     val center = minOf(row.bottom - 20f * d, row.bottom - height / 2f - 2f * d)
     return Rect(
         Offset(row.right + PatchModule.PANEL_MOD_GAP * d, center - height / 2f),
         Size(PatchModule.PANEL_MOD_CHIP_W * d, height),
+    )
+}
+
+/**
+ * The chip that sends a row's knob out to the group's edge: the left gutter's mirror of the
+ * [ ] chip, level with it.
+ *
+ * Stacking the two in the right-hand gutter was the first drawing and it failed on a
+ * sequencer, whose grid leaves its rows about a third of the height the others get -- two
+ * chips could not both be tall enough to hit. The left gutter is the same 108dp wide and
+ * otherwise empty, and this chip keeps to its inner edge for the same reason the [ ] chip
+ * keeps to the other one's: the panel's jack labels have the outer half.
+ */
+internal fun panelPromoteChipOn(row: Rect, d: Float): Rect {
+    val jack = panelModChipOn(row, d)
+    val width = PatchModule.PANEL_PROMOTE_W * d
+    return Rect(
+        Offset(row.left - PatchModule.PANEL_MOD_GAP * d - width, jack.top),
+        Size(width, jack.height),
     )
 }
 
@@ -990,18 +1048,23 @@ internal fun panelBracketX(row: Rect, d: Float, param: Param, value: Float, clos
  * where a new range puts it for any knob in the bottom fifth of its travel, hard to take hold
  * of at all. Where the two brackets coincide, the side the finger landed on decides.
  */
-internal fun panelBracketAt(panel: Rect, d: Float, module: PatchModule, index: Int, at: Offset): Boolean? {
-    val range = module.modRanges[index] ?: return null
-    val row = panelRow(panel, d, module.type, index)
-    val reach = PatchModule.BRACKET_REACH * d
-    val zone = Rect(row.left - reach, row.top - 6f * d, row.right + reach, row.bottom + 6f * d)
-    if (!zone.contains(at)) return null
-    val param = module.type.params[index]
-    val low = panelBracketX(row, d, param, range.low, closing = false)
-    val high = panelBracketX(row, d, param, range.high, closing = true)
-    val toLow = kotlin.math.abs(at.x - low)
-    val toHigh = kotlin.math.abs(at.x - high)
-    return if (toLow == toHigh) at.x > high else toHigh < toLow
+internal fun panelBracketAt(
+    panel: Rect, d: Float, module: PatchModule, rows: List<ParamRow>, at: Offset,
+): Pair<ParamRow, Boolean>? {
+    rows.forEachIndexed { slot, entry ->
+        val range = entry.owner.modRanges[entry.index] ?: return@forEachIndexed
+        val row = panelRowAt(panel, d, module.type, rows.size, slot)
+        val reach = PatchModule.BRACKET_REACH * d
+        val zone = Rect(row.left - reach, row.top - 6f * d, row.right + reach, row.bottom + 6f * d)
+        if (!zone.contains(at)) return@forEachIndexed
+        val param = entry.param
+        val low = panelBracketX(row, d, param, range.low, closing = false)
+        val high = panelBracketX(row, d, param, range.high, closing = true)
+        val toLow = kotlin.math.abs(at.x - low)
+        val toHigh = kotlin.math.abs(at.x - high)
+        return entry to (if (toLow == toHigh) at.x > high else toHigh < toLow)
+    }
+    return null
 }
 
 /** What a tap on a row's reading is aimed at: the knob's value, or one end of its range. */
@@ -1019,25 +1082,26 @@ enum class ValueTarget { VALUE, LOW, HIGH }
  * A stepped row has no reading: its lit button is the value, and there is nothing to type.
  */
 internal fun panelValueAt(
-    panel: Rect, d: Float, module: PatchModule, at: Offset, widthOf: (String) -> Float,
-): Pair<Int, ValueTarget>? {
-    module.type.rowParams.forEach { i ->
-        val param = module.type.params[i]
-        if (param.curve == ParamCurve.STEPPED) return@forEach
-        val row = panelRow(panel, d, module.type, i)
-        val range = module.modRanges[i]
+    panel: Rect, d: Float, module: PatchModule, rows: List<ParamRow>, at: Offset,
+    widthOf: (String) -> Float,
+): Pair<ParamRow, ValueTarget>? {
+    rows.forEachIndexed { slot, entry ->
+        val param = entry.param
+        if (param.curve == ParamCurve.STEPPED) return@forEachIndexed
+        val row = panelRowAt(panel, d, module.type, rows.size, slot)
+        val range = entry.owner.modRanges[entry.index]
         val text = if (range != null) rangeReading(param, range)
-            else param.format(module.params.getOrElse(i) { param.default })
+            else param.format(entry.owner.params.getOrElse(entry.index) { param.default })
         val width = widthOf(text)
         val zone = Rect(
             row.right - width - 8f * d, row.top - 4f * d,
             row.right + 8f * d, row.top + VALUE_ZONE_H * d,
         )
-        if (!zone.contains(at)) return@forEach
-        if (range == null) return i to ValueTarget.VALUE
+        if (!zone.contains(at)) return@forEachIndexed
+        if (range == null) return entry to ValueTarget.VALUE
         // Split where the dash is: everything left of it is the low number as drawn.
         val dash = row.right - width + widthOf("[${param.format(range.low)} ") + widthOf("\u2013") / 2f
-        return i to (if (at.x < dash) ValueTarget.LOW else ValueTarget.HIGH)
+        return entry to (if (at.x < dash) ValueTarget.LOW else ValueTarget.HIGH)
     }
     return null
 }
@@ -1059,21 +1123,23 @@ internal fun rangeReading(param: Param, range: ModRange): String =
 
 /** Moves one end of a parameter's range to the knob value under [screenX]. */
 internal fun Patch.moveBracket(
-    module: PatchModule, panel: Rect, d: Float, index: Int, closing: Boolean, screenX: Float,
+    row: ParamRow, panel: Rect, d: Float, closing: Boolean, screenX: Float,
 ) {
-    val range = module.modRanges[index] ?: return
-    val value = module.type.params[index].valueAt(panelKnobPosition(panel, d, screenX))
-    expose(module, index, if (closing) range.copy(high = value) else range.copy(low = value))
+    val range = row.owner.modRanges[row.index] ?: return
+    val value = row.param.valueAt(panelKnobPosition(panel, d, screenX))
+    expose(row.owner, row.index, if (closing) range.copy(high = value) else range.copy(low = value))
 }
 
-internal fun panelKnobAt(panel: Rect, d: Float, module: PatchModule, at: Offset): Int? {
-    module.type.rowParams.forEach { i ->
+internal fun panelKnobAt(
+    panel: Rect, d: Float, module: PatchModule, rows: List<ParamRow>, at: Offset,
+): ParamRow? {
+    rows.forEachIndexed { slot, entry ->
         // An exposed row's knob is not the hand's. It shows where the modulator has taken the
         // parameter, and dragging it would set a value nothing is listening to.
-        if (i in module.modRanges) return@forEach
+        if (entry.index in entry.owner.modRanges) return@forEachIndexed
         // Generous vertically: the rows are the only targets on the panel, so a near
         // miss should still land rather than do nothing.
-        if (panelRow(panel, d, module.type, i).inflate(6f * d).contains(at)) return i
+        if (panelRowAt(panel, d, module.type, rows.size, slot).inflate(6f * d).contains(at)) return entry
     }
     return null
 }
@@ -1540,6 +1606,9 @@ class Patch {
         if (module.isPinned) return
         val gone = setOf(module.id) + descendants(module.id)
         connections.removeAll { it.from.moduleId in gone || it.to.moduleId in gone }
+        // A knob promoted to a group's edge outlives the module it belongs to otherwise:
+        // the panel would not draw it, but the file would keep carrying it.
+        modules.forEach { it.groupPorts?.promoted?.removeAll { ref -> ref.moduleId in gone } }
         modules.removeAll { it.id in gone }
     }
 
@@ -1558,6 +1627,66 @@ class Patch {
     /** A group's left rail or right rail. */
     fun groupRail(group: Long, type: ModuleType): PatchModule? =
         modules.firstOrNull { it.parent == group && it.type == type }
+
+    /**
+     * Sends a knob inside this group out to its edge, or takes it back.
+     *
+     * Only from inside, and only a module directly in this group: the chip that calls this
+     * is on that module's panel, and a knob two levels down promotes to the group it is in
+     * and then, once a group's own panel offers the chip, onward. A promoted knob is a
+     * reference, so the value never moves and the engine is not told anything -- which is
+     * why grouping's promise holds here too: promoting changes no sound.
+     */
+    fun promote(module: PatchModule, index: Int): Boolean {
+        val group = module(scopeOrTop)?.takeIf { it.type == Types.Group } ?: return false
+        if (module.parent != group.id || module.isPinned) return false
+        if (index !in module.type.rowParams) return false
+        val ports = group.groupPorts ?: return false
+        val ref = ParamRef(module.id, index)
+        if (ref in ports.promoted || ports.promoted.size >= MAX_PROMOTED) return false
+        ports.promoted.add(ref)
+        return true
+    }
+
+    fun unpromote(module: PatchModule, index: Int): Boolean {
+        val ports = module(scopeOrTop)?.groupPorts ?: return false
+        return ports.promoted.remove(ParamRef(module.id, index))
+    }
+
+    /**
+     * Whether this knob could be sent out to the edge of the group being looked at.
+     *
+     * The chip that does it is drawn only where this holds, so the panel says where
+     * promotion is possible rather than offering it everywhere and refusing most taps.
+     */
+    fun canPromote(module: PatchModule, index: Int): Boolean {
+        val group = module(scopeOrTop)?.takeIf { it.type == Types.Group } ?: return false
+        if (module.parent != group.id || module.isPinned) return false
+        if (index !in module.type.rowParams) return false
+        val ports = group.groupPorts ?: return false
+        return ParamRef(module.id, index) in ports.promoted || ports.promoted.size < MAX_PROMOTED
+    }
+
+    /** Whether this knob is already out at the edge of the group being looked at. */
+    fun isPromoted(module: PatchModule, index: Int): Boolean =
+        module(scopeOrTop)?.groupPorts?.promoted?.contains(ParamRef(module.id, index)) == true
+
+    /**
+     * The rows an open panel shows for [module].
+     *
+     * Its own row parameters, or -- for a group, which has no knobs of its own -- the ones
+     * promoted to its edge, resolved to the modules inside that really hold them. A
+     * reference to a module that has since gone is dropped rather than drawn empty.
+     */
+    fun panelRows(module: PatchModule): List<ParamRow> =
+        if (module.type == Types.Group) {
+            module.groupPorts?.promoted.orEmpty().mapNotNull { ref ->
+                module(ref.moduleId)?.takeIf { ref.index in it.type.params.indices }
+                    ?.let { ParamRow(it, ref.index) }
+            }
+        } else {
+            module.type.rowParams.map { ParamRow(module, it) }
+        }
 
     /**
      * "Group 1", "Group 2", ... -- one past the highest number in use.
@@ -1612,6 +1741,16 @@ class Patch {
             copy.parent = if (from.id == group.id) from.parent else newId.getValue(from.parent)
             modules.add(copy)
         }
+        // The copies' promoted knobs must name the copies, not the originals they were
+        // taken from -- otherwise a duplicated group's panel turns the first group's knobs.
+        sharedCopies.forEach { (from, ports) ->
+            val source = modules.first { it.id == from }.groupPorts ?: return@forEach
+            ports.promoted.clear()
+            source.promoted.forEach { ref ->
+                newId[ref.moduleId]?.let { ports.promoted.add(ref.copy(moduleId = it)) }
+            }
+        }
+
         connections.filter { it.from.moduleId in newId && it.to.moduleId in newId }.forEach {
             connections.add(
                 Connection(
@@ -1903,12 +2042,19 @@ sealed interface MenuItem {
     data object StartGroup : MenuItem
     data class Ungroup(val moduleId: Long) : MenuItem
     data class Rename(val moduleId: Long) : MenuItem
+
+    /** A group's promoted knobs, which is the only way its panel opens: a tap goes inside. */
+    data class Knobs(val moduleId: Long) : MenuItem
 }
 
 private fun menuItems(patch: Patch, targetId: Long?): List<MenuItem> = when {
     targetId == null -> Types.palette.map { MenuItem.Add(it) } + MenuItem.StartGroup
-    patch.module(targetId)?.type == Types.Group -> listOf(
-        MenuItem.Duplicate(targetId), MenuItem.Rename(targetId),
+    patch.module(targetId)?.type == Types.Group -> listOfNotNull(
+        MenuItem.Duplicate(targetId),
+        // Only when it has any: an empty panel would be a door onto nothing, and the way
+        // to put knobs there is inside the group, where the chip is.
+        MenuItem.Knobs(targetId).takeIf { patch.panelRows(patch.module(targetId)!!).isNotEmpty() },
+        MenuItem.Rename(targetId),
         MenuItem.Delete(targetId), MenuItem.Ungroup(targetId),
     )
     else -> listOf(MenuItem.Duplicate(targetId), MenuItem.Rename(targetId), MenuItem.Delete(targetId))
@@ -2725,45 +2871,64 @@ fun PatchCanvas(
                             // The reading before anything under it. It is a tap-only target,
                             // like the chips: a number is typed, never dragged, and the bar
                             // for dragging is in the same row a finger's width below.
+                            // The rows this panel shows: its own knobs, or -- for a group --
+                            // the ones promoted to its edge, which belong to modules inside it.
+                            val rows = patch.panelRows(open)
                             val typed = if (onHistory) null else panelValueAt(
-                                panel, frame.density, open, down.position,
+                                panel, frame.density, open, rows, down.position,
                             ) { screenMeasurer.measure(it, PanelValueStyle).size.width.toFloat() }
                             if (typed != null) {
                                 waitForUpRelease()
                                 interaction = Interaction.Typing(
-                                    NumberTarget.Knob(open.id, typed.first, typed.second),
+                                    NumberTarget.Knob(typed.first.owner.id, typed.first.index, typed.second),
                                 )
                                 return@awaitEachGesture
                             }
 
-                            // The [ ] chips come before the rows beside them. Only the chip itself
-                            // counts, so a near miss on a knob never gives anything a jack.
-                            val chipFor = if (onHistory) null else open.type.rowParams.firstOrNull {
-                                open.canExpose(it) &&
-                                    panelModChip(panel, frame.density, open.type, it).contains(down.position)
+                            // The chips before the rows beside them. Only a chip itself counts,
+                            // so a near miss on a knob never gives anything a jack, and the one
+                            // that promotes is reached generously: five rows leave it 21dp.
+                            val chipRow = if (onHistory) null else rows.withIndex().firstOrNull { (slot, r) ->
+                                r.owner.id == open.id && open.canExpose(r.index) &&
+                                    panelModChipOn(
+                                        panelRowAt(panel, frame.density, open.type, rows.size, slot),
+                                        frame.density,
+                                    ).contains(down.position)
                             }
-                            if (chipFor != null) {
+                            if (chipRow != null) {
                                 waitForUpRelease()
-                                if (chipFor in open.modRanges) {
-                                    patch.unexpose(open, chipFor)
+                                val index = chipRow.value.index
+                                if (index in open.modRanges) {
+                                    patch.unexpose(open, index)
                                 } else {
-                                    val param = open.type.params[chipFor]
-                                    patch.expose(open, chipFor, initialModRange(param, open.params[chipFor]))
+                                    val param = open.type.params[index]
+                                    patch.expose(open, index, initialModRange(param, open.params[index]))
                                 }
+                                return@awaitEachGesture
+                            }
+
+                            val promoteRow = if (onHistory) null else rows.withIndex().firstOrNull { (slot, r) ->
+                                patch.canPromote(r.owner, r.index) &&
+                                    panelPromoteChipOn(
+                                        panelRowAt(panel, frame.density, open.type, rows.size, slot),
+                                        frame.density,
+                                    ).inflate(6f * frame.density).contains(down.position)
+                            }
+                            if (promoteRow != null) {
+                                waitForUpRelease()
+                                val row = promoteRow.value
+                                if (!patch.unpromote(row.owner, row.index)) patch.promote(row.owner, row.index)
                                 return@awaitEachGesture
                             }
 
                             // A bracket before the knob it sits on: dragging `[` or `]` moves that
                             // end of the range, and leaves the knob where it is.
-                            val bracket: Pair<Int, Boolean>? =
+                            val bracket =
                                 if (onHistory) null
-                                else open.modRanges.keys.firstNotNullOfOrNull { index ->
-                                    panelBracketAt(panel, frame.density, open, index, down.position)
-                                        ?.let { index to it }
-                                }
+                                else panelBracketAt(panel, frame.density, open, rows, down.position)
                             val knob =
                                 if (onHistory || bracket != null) null
-                                else panelKnobAt(panel, frame.density, open, down.position)
+                                else panelKnobAt(panel, frame.density, open, rows, down.position)
                             val cell =
                                 if (onHistory || knob != null) null
                                 else panelCellAt(panel, frame.density, open, down.position, gridScale)
@@ -2793,14 +2958,13 @@ fun PatchCanvas(
                                 }
                                 if (bracket != null) {
                                     patch.moveBracket(
-                                        open, panel, frame.density, bracket.first, bracket.second,
+                                        bracket.first, panel, frame.density, bracket.second,
                                         change.position.x,
                                     )
                                 } else if (knob != null) {
-                                    val param = open.type.params[knob]
-                                    open.setParam(
-                                        knob,
-                                        param.valueAt(
+                                    knob.owner.setParam(
+                                        knob.index,
+                                        knob.param.valueAt(
                                             panelKnobPosition(panel, frame.density, change.position.x),
                                         ),
                                     )
@@ -2822,16 +2986,15 @@ fun PatchCanvas(
                                     controls.tapHistory(frame, down.position)
                                 } else if (bracket != null) {
                                     patch.moveBracket(
-                                        open, panel, frame.density, bracket.first, bracket.second,
+                                        bracket.first, panel, frame.density, bracket.second,
                                         down.position.x,
                                     )
                                 } else if (knob != null) {
                                     // A tap on a knob jumps there, which is faster than
                                     // dragging when you already know where you want it.
-                                    val param = open.type.params[knob]
-                                    open.setParam(
-                                        knob,
-                                        param.valueAt(
+                                    knob.owner.setParam(
+                                        knob.index,
+                                        knob.param.valueAt(
                                             panelKnobPosition(panel, frame.density, down.position.x),
                                         ),
                                     )
@@ -4493,6 +4656,10 @@ private fun handleTap(
             is MenuItem.Rename ->
                 return if (patch.module(chosen.moduleId) == null) Interaction.Idle
                 else Interaction.Renaming(chosen.moduleId)
+            is MenuItem.Knobs -> patch.module(chosen.moduleId)?.let { group ->
+                patch.modules.forEach { it.expanded = false }
+                group.expanded = true
+            }
         }
         return Interaction.Idle
     }
@@ -4609,6 +4776,15 @@ internal const val MAX_PORTS = 4
 internal const val MAX_PARAMS = 5
 
 /**
+ * The most knobs a group can carry out to its edge.
+ *
+ * The same as [MAX_PARAMS], for the same reason a module stops there: the panel gives its
+ * rows the height it has, and a sixth is thinner than a finger. Nothing in the engine cares
+ * -- a promoted knob is a reference, and the engine only ever sees the module inside.
+ */
+internal const val MAX_PROMOTED = MAX_PARAMS
+
+/**
  * Mirrors StepsNode::kSteps in nodes.h. A seventeenth step would be written here, saved
  * to the file, and silently dropped on the way to the engine.
  */
@@ -4718,6 +4894,7 @@ private fun MenuItem.label(): String = when (this) {
     is MenuItem.Add -> type.name
     is MenuItem.Duplicate -> "Duplicate"
     is MenuItem.Rename -> "Rename\u2026"
+    is MenuItem.Knobs -> "Knobs\u2026"
     is MenuItem.Delete -> "Delete"
     is MenuItem.StartGroup -> "Group\u2026"
     is MenuItem.Ungroup -> "Ungroup"
@@ -4726,6 +4903,7 @@ private fun MenuItem.label(): String = when (this) {
 private fun MenuItem.tint(): Color = when (this) {
     is MenuItem.Add -> type.accent
     is MenuItem.Duplicate, is MenuItem.Rename -> Color(0xFF8A93A3)
+    is MenuItem.Knobs -> Types.Group.accent
     is MenuItem.Delete -> Color(0xFFE07A6B)
     is MenuItem.StartGroup, is MenuItem.Ungroup -> Types.Group.accent
 }
@@ -5125,18 +5303,36 @@ private fun DrawScope.drawPanel(
     // Knobs -- the rows only. Walking every parameter drew the interval, which lives in the
     // header, as a row of buttons laid over the first real row: it showed intervals where
     // taps set the length.
-    module.type.rowParams.forEach { index ->
-        val param = module.type.params[index]
-        val row = panelRow(panel, d, module.type, index)
-        val range = module.modRanges[index]
+    val rows = patch.panelRows(module)
+    rows.forEachIndexed { slot, entry ->
+        val owner = entry.owner
+        val index = entry.index
+        val param = entry.param
+        // A group's rows are other modules' knobs, which is the only reason any of this is
+        // written against a row rather than against this module's own parameters.
+        val own = owner.id == module.id
+        val accent = if (own) module.type.accent else owner.type.accent
+        val row = panelRowAt(panel, d, module.type, rows.size, slot)
+        val range = owner.modRanges[index]
         // Where the modulator has taken it this frame, for a parameter being modulated; its
-        // knob for anything else.
-        val value = live[index] ?: module.params.getOrElse(index) { param.default }
-        if (module.canExpose(index)) {
-            drawChip(panelModChip(panel, d, module.type, index), d, "[ ]", range != null, ModulationColor, measurer)
+        // knob for anything else. Polled against the open module, so a promoted row shows
+        // its knob rather than a value read off the wrong node.
+        val value = (if (own) live[index] else null) ?: owner.params.getOrElse(index) { param.default }
+        if (own && module.canExpose(index)) {
+            drawChip(panelModChipOn(row, d), d, "[ ]", range != null, ModulationColor, measurer)
+        }
+        // Only inside the group it would promote to, which is where the chip means anything.
+        if (patch.canPromote(owner, index)) {
+            drawChip(
+                panelPromoteChipOn(row, d), d, "\u2191",
+                patch.isPromoted(owner, index), Types.Group.accent, measurer,
+            )
         }
 
-        val name = measurer.measure(param.name, PanelParamStyle)
+        // On a group's panel the module is named too: "cutoff" alone says which knob but
+        // not whose, and a group is exactly where two of them can be side by side.
+        val label = if (own) param.name else "${owner.title}  \u00b7  ${param.name}"
+        val name = measurer.measure(label, PanelParamStyle)
         drawText(name, topLeft = Offset(row.left, row.top + 4f * d))
 
         // A stepped parameter shows no numeric readout: the lit button is the reading,
@@ -5152,12 +5348,12 @@ private fun DrawScope.drawPanel(
         }
 
         if (param.curve == ParamCurve.STEPPED) {
-            drawChoices(row, d, param, value, module.type.accent, measurer)
+            drawChoices(row, d, param, value, accent, measurer)
             if (range != null) {
                 val box = choiceBox(row, d, param, 0)
                 drawBrackets(row, d, param, range, box.top - 4f * d, box.bottom + 4f * d)
             }
-            return@forEach
+            return@forEachIndexed
         }
 
         val barHeight = PatchModule.PANEL_BAR * d
@@ -5172,7 +5368,7 @@ private fun DrawScope.drawPanel(
         )
         val filled = row.width * param.positionOf(value)
         drawRoundRect(
-            color = module.type.accent,
+            color = accent,
             topLeft = Offset(row.left, barTop),
             size = Size(filled.coerceAtLeast(barHeight), barHeight),
             cornerRadius = radius,
