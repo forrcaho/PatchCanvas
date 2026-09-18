@@ -75,6 +75,7 @@ being edited out from under it.
 | `PatchCanvas.kt` | model, camera, gestures, drawing, panel — the bulk of the UI |
 | `GraphSync.kt` | the diff, `NodeType` mirror, `GraphCommands` seam for tests |
 | `PatchStore.kt` | JSON persistence, hand-rolled on `org.json` |
+| `GroupStore.kt` | the group library: a saved group is a patch file holding one group |
 | `History.kt` | undo as a stack of serialized patches, plus `Patch.replaceWith` |
 | `Scale.kt` | the tuning model: degrees in octaves, with a period |
 | `ScalaFile.kt` | `.scl` parsing — untrusted input, every bad shape returns null |
@@ -184,6 +185,14 @@ Node ids 1, 7 and 8 are retired and never reused; `Osc` is id 10, where `Voice` 
 **A module's color is the kind of cable it sends** -- greens for notes, steel blues and
 grays for audio, purples for modulation -- in a shade of that family, never the cable
 color itself. `ModuleColorTest` enforces it, so a new module's accent has to follow it.
+
+**A saved group is a patch file holding one group.** The library (`GroupStore.kt`) writes
+to `getExternalFilesDir/groups`, beside the scales, and reads back through `patchFromJson`
+-- so a group file gets the patch format's validation, its refusals and its version check
+rather than a second copy of all three. Loading is a **copy**: `adoptGroup` allocates ids
+in the receiving patch, which is the same routine that duplicates a group, so the same file
+loaded twice is two groups sharing nothing. Saving the whole patch groups everything,
+serializes and ungroups again inside one snapshot, which leaves the patch byte-identical.
 
 **Groups never reach the engine.** Every module is in one flat list with a `parent`
 (`TOP`, or the id of the group it is in). A group is a module of type `Group` whose ports

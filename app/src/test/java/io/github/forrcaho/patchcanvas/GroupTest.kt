@@ -662,4 +662,29 @@ class GroupTest {
         assertEquals("what the rest carried is untouched", cutoffCable.toSet(),
             after.filter { it.to.moduleId == f.filter.id && it.to.dir == PortDirection.MOD }.toSet())
     }
+
+    /**
+     * Found saving a patch whose top level was two groups, 2026-09-17.
+     *
+     * Ungrouping moved the modules inside back out -- unless they were groups themselves,
+     * which the filter skipped along with the two rails it was written to skip. A nested
+     * group was left pointing at a parent that had just been deleted: still in the patch,
+     * still playing, and drawn in no scope at all, since every view asks for the modules
+     * whose parent is the one being looked at. Only a reload rescued it, because the file
+     * reader puts a module with an unknown parent back at the top.
+     */
+    @Test
+    fun `ungrouping puts a nested group back, not into nowhere`() {
+        val f = GroupFixture()
+        val inner = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+        val outer = f.patch.group(setOf(inner.id, f.lfo.id))!!
+
+        f.patch.ungroup(outer)
+
+        assertEquals("the nested group comes back out", TOP, inner.parent)
+        assertEquals("as does anything beside it", TOP, f.lfo.parent)
+        assertTrue("and it is drawn where it now lives", f.patch.shownFree.any { it.id == inner.id })
+        assertTrue("its own contents came with it", f.patch.descendants(inner.id).contains(f.osc.id))
+        assertNull("the group that held them is gone", f.patch.module(outer.id))
+    }
 }

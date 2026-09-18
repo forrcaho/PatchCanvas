@@ -47,6 +47,7 @@ import androidx.compose.ui.input.pointer.PointerEventTimeoutCancellationExceptio
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalFontFamilyResolver
@@ -65,6 +66,9 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlin.math.PI
 import kotlin.math.ceil
@@ -1866,7 +1870,12 @@ class Patch {
         val structure = setOfNotNull(group.id, railIn?.id, railOut?.id)
         Snapshot.withMutableSnapshot {
             connections.removeAll { it.from.moduleId in structure || it.to.moduleId in structure }
-            modules.filter { it.parent == group.id && !it.type.structural }.forEach { it.parent = group.parent }
+            // Everything inside except this group's own two rails, which go with it. The
+            // test used to be "not structural", which skipped nested groups as well and
+            // left them pointing at a parent that no longer existed: still playing, drawn
+            // in no scope at all, and only rescued by a reload.
+            modules.filter { it.parent == group.id && it.id !in structure }
+                .forEach { it.parent = group.parent }
             modules.removeAll { it.id in structure }
             through.forEach { if (it !in connections) connections.add(it) }
         }
@@ -2122,6 +2131,8 @@ sealed interface Interaction {
         val targetId: Long?,
         /** Set when the press landed on a group's port, which has its own one-item menu. */
         val port: PortRef? = null,
+        /** The library's own menu, whose tiles are the saved groups. */
+        val library: Boolean = false,
     ) : Interaction
 
     /**
@@ -2149,6 +2160,12 @@ sealed interface Interaction {
      * typing would slide out from under the keypad as it opened.
      */
     data class Typing(val target: NumberTarget) : Interaction
+
+    /**
+     * Naming something on its way into the library: a group, or the whole patch when
+     * [moduleId] is null. Over the canvas like [Renaming], and for the same reason.
+     */
+    data class Saving(val moduleId: Long?) : Interaction
 }
 
 /** What a typed number is going to be written to. */
@@ -2173,6 +2190,18 @@ sealed interface MenuItem {
 
     /** Takes a port off a group, from the box outside or the rail inside. */
     data class RemovePort(val groupId: Long, val dir: PortDirection, val index: Int) : MenuItem
+
+    /** Writes a group to the library. Null is the whole patch, saved as one group. */
+    data class Save(val moduleId: Long?) : MenuItem
+
+    /** Opens the library, whose own tiles are the saved groups. */
+    data object OpenLibrary : MenuItem
+
+    /** One saved group, placed where the menu that offered it was opened. */
+    data class Load(val name: String) : MenuItem
+
+    /** The library with nothing in it yet: a tile that says so and dismisses. */
+    data object LibraryEmpty : MenuItem
 }
 
 /**
@@ -2195,21 +2224,43 @@ internal fun Patch.groupPortAt(ref: PortRef): Triple<PatchModule, PortDirection,
     }
 }
 
-private fun menuItems(patch: Patch, targetId: Long?, port: PortRef? = null): List<MenuItem> = when {
+private fun menuItems(
+    patch: Patch,
+    targetId: Long?,
+    port: PortRef? = null,
+    /** Non-null for the library's own menu: its tiles are what is saved. */
+    saved: List<String>? = null,
+): List<MenuItem> = when {
+    saved != null ->
+        saved.take(MAX_SAVED_TILES).map { MenuItem.Load(it) }.ifEmpty { listOf(MenuItem.LibraryEmpty) }
     port != null -> patch.groupPortAt(port)
         ?.let { (group, dir, index) -> listOf(MenuItem.RemovePort(group.id, dir, index)) }
         .orEmpty()
-    targetId == null -> Types.palette.map { MenuItem.Add(it) } + MenuItem.StartGroup
+    targetId == null -> Types.palette.map { MenuItem.Add(it) } +
+        MenuItem.StartGroup + MenuItem.OpenLibrary +
+        // Saving the patch belongs here rather than on a module: it is about all of them,
+        // and the empty canvas is the only thing that stands for the patch as a whole.
+        listOfNotNull(MenuItem.Save(null).takeIf { patch.free.any { m -> m.parent == TOP } })
     patch.module(targetId)?.type == Types.Group -> listOfNotNull(
         MenuItem.Duplicate(targetId),
         // Only when it has any: an empty panel would be a door onto nothing, and the way
         // to put knobs there is inside the group, where the chip is.
         MenuItem.Knobs(targetId).takeIf { patch.panelRows(patch.module(targetId)!!).isNotEmpty() },
         MenuItem.Rename(targetId),
+        MenuItem.Save(targetId),
         MenuItem.Delete(targetId), MenuItem.Ungroup(targetId),
     )
     else -> listOf(MenuItem.Duplicate(targetId), MenuItem.Rename(targetId), MenuItem.Delete(targetId))
 }
+
+/**
+ * How many saved groups the library's menu shows.
+ *
+ * The menu wraps its tiles into rows and would run off the screen before it ran out of
+ * names. A library bigger than this wants a list that scrolls, which is the next thing to
+ * build here rather than a reason to hold this one back.
+ */
+internal const val MAX_SAVED_TILES = 12
 
 /** The groups from the top down to the one being looked at, [TOP] first. */
 internal fun Patch.scopePath(): List<Long> {
@@ -2511,6 +2562,10 @@ internal class CanvasControls(
     val onUndo: () -> Unit = {},
     val onRedo: () -> Unit = {},
     val onResetTransport: () -> Unit = {},
+    /** The saved groups, newest listing first read when the picker opens. */
+    val saved: List<String> = emptyList(),
+    /** Loads a saved group into [Patch] at a world position. The file read is the caller's. */
+    val onLoadGroup: (String, Offset) -> Unit = { _, _ -> },
 )
 
 /**
@@ -2796,6 +2851,10 @@ fun PatchCanvas(
     onResetTransport: () -> Unit = {},
     /** Whatever `.scl` files were found. Never empty; at worst just the fallback. */
     scales: List<Scale> = listOf(Scale.Chromatic),
+    /** Saved groups on disk. Null in previews and tests, where nothing is saved or loaded. */
+    library: GroupLibrary? = null,
+    /** The tuning a loaded group's scale names are resolved against. */
+    scaleLibrary: ScaleLibrary = ScaleLibrary.of(null),
 ) {
     val density = LocalDensity.current
     val layoutDirection = LocalLayoutDirection.current
@@ -2825,9 +2884,29 @@ fun PatchCanvas(
     // it was during the first composition -- which is false -- and the buttons would
     // draw correctly (that lambda is rebuilt every recomposition) while never being
     // hittable. They did exactly that on the device.
+    // The library's names, read when its menu opens rather than kept live: a file dropped
+    // into the folder over USB should be there the next time you look, and nothing needs
+    // the list before then.
+    var savedGroups by remember { mutableStateOf(emptyList<String>()) }
+    val libraryOpen = (interaction as? Interaction.Menu)?.library == true
+    LaunchedEffect(libraryOpen, library) {
+        if (libraryOpen) savedGroups = withContext(Dispatchers.IO) { library?.names().orEmpty() }
+    }
+    val io = rememberCoroutineScope()
+
     val controls by rememberUpdatedState(
         CanvasControls(
             canUndo, canRedo, onToggleOutput, onToggleInput, onUndo, onRedo, onResetTransport,
+            saved = savedGroups,
+            onLoadGroup = { name, at ->
+                io.launch {
+                    val text = withContext(Dispatchers.IO) { library?.read(name) }
+                    // Silently nothing if the file went away or will not parse: the refusal
+                    // is logged where it happened, and a half-loaded group is not a thing
+                    // this can leave behind -- loadGroup either adopts all of it or none.
+                    if (text != null) patch.loadGroup(text, at, scaleLibrary)
+                }
+            },
         ),
     )
 
@@ -3524,7 +3603,10 @@ fun PatchCanvas(
 
             (interaction as? Interaction.Menu)?.let { menu ->
                 drawMenu(
-                menuLayout(menuItems(patch, menu.targetId, menu.port), menu.anchor, d, size),
+                menuLayout(
+                    menuItems(patch, menu.targetId, menu.port, savedGroups.takeIf { menu.library }),
+                    menu.anchor, d, size,
+                ),
                 d, screenMeasurer,
             )
             }
@@ -3540,6 +3622,19 @@ fun PatchCanvas(
         }
         (interaction as? Interaction.Typing)?.let { typing ->
             NumberKeypad(patch, typing.target) { interaction = Interaction.Idle }
+        }
+        (interaction as? Interaction.Saving)?.let { saving ->
+            val group = saving.moduleId?.let { patch.module(it) }
+            SaveOverlay(
+                initial = group?.title ?: "Patch",
+                library = library,
+                // Built when the name is known, since saving the whole patch names the group
+                // it makes on the way out.
+                json = { name ->
+                    if (group != null) patch.groupToJson(group, name)
+                    else patch.patchToGroupJson(name)
+                },
+            ) { interaction = Interaction.Idle }
         }
     }
 }
@@ -3611,6 +3706,129 @@ private fun RenameOverlay(module: PatchModule, onDone: () -> Unit) {
     }
 
     LaunchedEffect(module.id) {
+        focus.requestFocus()
+        keyboard?.show()
+    }
+}
+
+/**
+ * Naming something on its way into the library, and asking before it replaces anything.
+ *
+ * Two steps in one overlay rather than two interactions: typing a name, and -- only when
+ * that name is taken -- Replace or Keep both. Forrest chose the prompt on 2026-09-17 over
+ * silent replacement, which is the only option here that can lose work, and over always
+ * numbering, which fills the folder with versions nobody asked for.
+ *
+ * The write is done on the IO dispatcher and nothing waits for it. A save that fails says
+ * so in the log and leaves the library as it was; there is no state here to get out of step
+ * with the disk, because the list is read afresh every time the picker opens.
+ */
+@Composable
+private fun SaveOverlay(
+    initial: String,
+    library: GroupLibrary?,
+    json: (String) -> String?,
+    onDone: () -> Unit,
+) {
+    var text by remember(initial) {
+        mutableStateOf(TextFieldValue(initial, TextRange(0, initial.length)))
+    }
+    var clash by remember(initial) { mutableStateOf<String?>(null) }
+    val focus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val io = rememberCoroutineScope()
+    val accent = Types.Group.accent
+
+    fun write(name: String) {
+        val body = json(name)
+        keyboard?.hide()
+        if (body != null) io.launch { withContext(Dispatchers.IO) { library?.write(name, body) } }
+        onDone()
+    }
+
+    fun commit() {
+        val name = text.text.trim().take(MAX_NAME)
+        if (name.isEmpty() || GroupLibrary.safeName(name).isEmpty()) return
+        keyboard?.hide()
+        if (library?.exists(name) == true) clash = name else write(name)
+    }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0x99000000))
+            // Tapping away abandons the save. Unlike a rename, nothing has happened yet.
+            .pointerInput(initial) { detectTapGestures { keyboard?.hide(); onDone() } },
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        Column(
+            Modifier
+                .padding(top = 72.dp, start = 24.dp, end = 24.dp)
+                .widthIn(max = 420.dp)
+                .background(Color(0xFF1B1F26), RoundedCornerShape(12.dp))
+                .border(2.dp, accent.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
+                .padding(horizontal = 16.dp, vertical = 14.dp)
+                .pointerInput(Unit) { detectTapGestures { } },
+        ) {
+            BasicText(
+                clash?.let { "\u201c$it\u201d is already saved" } ?: "Save to the library",
+                style = TextStyle(color = Color(0xFF98A0AD), fontSize = 14.sp),
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
+            if (clash == null) {
+                BasicTextField(
+                    value = text,
+                    onValueChange = { if (it.text.length <= MAX_NAME) text = it },
+                    singleLine = true,
+                    textStyle = TextStyle(
+                        color = Color(0xFFE6E9EF),
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Medium,
+                    ),
+                    cursorBrush = SolidColor(accent),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { commit() }),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focus),
+                )
+            } else {
+                Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                    listOf("Replace" to true, "Keep both" to false).forEach { (label, replace) ->
+                        Box(
+                            Modifier
+                                .weight(1f)
+                                .padding(horizontal = 3.dp)
+                                .height(52.dp)
+                                .background(
+                                    if (replace) Color(0xFFE07A6B).copy(alpha = 0.85f)
+                                    else accent.copy(alpha = 0.85f),
+                                    RoundedCornerShape(10.dp),
+                                )
+                                .pointerInput(label) {
+                                    detectTapGestures {
+                                        val name = clash ?: return@detectTapGestures
+                                        write(if (replace) name else library?.freeName(name) ?: name)
+                                    }
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            BasicText(
+                                label,
+                                style = TextStyle(
+                                    color = Color(0xFF12151A),
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Medium,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(initial) {
         focus.requestFocus()
         keyboard?.show()
     }
@@ -4795,7 +5013,8 @@ private fun handleTap(
 ): Interaction {
     if (current is Interaction.Menu) {
         val layout = menuLayout(
-            menuItems(patch, current.targetId, current.port), current.anchor, frame.density, frame.canvas,
+            menuItems(patch, current.targetId, current.port, controls.saved.takeIf { current.library }),
+            current.anchor, frame.density, frame.canvas,
         )
         val chosen = layout.tiles.firstOrNull { it.first.contains(screen) }?.second
             ?: return Interaction.Idle // tapped away: dismiss
@@ -4818,6 +5037,18 @@ private fun handleTap(
             is MenuItem.Rename ->
                 return if (patch.module(chosen.moduleId) == null) Interaction.Idle
                 else Interaction.Renaming(chosen.moduleId)
+            is MenuItem.Save -> return Interaction.Saving(chosen.moduleId)
+            is MenuItem.OpenLibrary ->
+                return Interaction.Menu(current.anchor, null, library = true)
+            is MenuItem.Load -> {
+                // Centered on the press that opened the menu, as a new module is.
+                val world = camera.toWorld(current.anchor)
+                controls.onLoadGroup(
+                    chosen.name,
+                    world - Offset(PatchModule.WIDTH / 2f, PatchModule.heightFor(Types.Group) / 2f),
+                )
+            }
+            is MenuItem.LibraryEmpty -> Unit
             is MenuItem.RemovePort -> patch.module(chosen.groupId)?.let {
                 patch.removeGroupPort(it, chosen.dir, chosen.index)
             }
@@ -4924,7 +5155,7 @@ private fun handleTap(
         // both are returned above. Renaming never arrives here at all: its scrim is a
         // composable over the canvas and takes every touch while it is up.
         is Interaction.Menu, is Interaction.Selecting,
-        is Interaction.Renaming, is Interaction.Typing,
+        is Interaction.Renaming, is Interaction.Typing, is Interaction.Saving,
         -> Interaction.Idle
     }
 }
@@ -5061,6 +5292,10 @@ private fun MenuItem.label(): String = when (this) {
     is MenuItem.Rename -> "Rename\u2026"
     is MenuItem.Knobs -> "Knobs\u2026"
     is MenuItem.RemovePort -> "Remove port"
+    is MenuItem.Save -> if (moduleId == null) "Save patch\u2026" else "Save\u2026"
+    is MenuItem.OpenLibrary -> "Load\u2026"
+    is MenuItem.Load -> name
+    is MenuItem.LibraryEmpty -> "Nothing saved"
     is MenuItem.Delete -> "Delete"
     is MenuItem.StartGroup -> "Group\u2026"
     is MenuItem.Ungroup -> "Ungroup"
@@ -5071,6 +5306,8 @@ private fun MenuItem.tint(): Color = when (this) {
     is MenuItem.Duplicate, is MenuItem.Rename -> Color(0xFF8A93A3)
     is MenuItem.Knobs -> Types.Group.accent
     is MenuItem.RemovePort -> Color(0xFFE07A6B)
+    is MenuItem.Save, is MenuItem.OpenLibrary, is MenuItem.Load -> Types.Group.accent
+    is MenuItem.LibraryEmpty -> Color(0xFF6C7482)
     is MenuItem.Delete -> Color(0xFFE07A6B)
     is MenuItem.StartGroup, is MenuItem.Ungroup -> Types.Group.accent
 }

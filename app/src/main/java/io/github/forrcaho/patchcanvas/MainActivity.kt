@@ -49,6 +49,7 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var store: PatchStore
     private lateinit var scales: ScaleLibrary
+    private lateinit var groups: GroupLibrary
     private lateinit var patch: Patch
 
     // The patch is owned here rather than by the composition so that onStop can save it
@@ -122,6 +123,7 @@ class MainActivity : ComponentActivity() {
         // Seeds the bundled .scl files into a folder the user can add to, then reads
         // whatever is there. Before the patch loads, because the patch names a tuning.
         scales = ScaleLibrary.load(this)
+        groups = GroupLibrary.load(this)
         store = PatchStore(this, scales)
         patch = store.load() ?: demoPatch()
 
@@ -205,6 +207,8 @@ class MainActivity : ComponentActivity() {
                 // so resetting it is neither saved nor undone.
                 onResetTransport = { AudioEngine.resetTransport() },
                 scales = scales.scales,
+                library = groups,
+                scaleLibrary = scales,
             )
         }
     }
@@ -358,6 +362,8 @@ fun PatchCanvasApp(
     onRedo: () -> Unit = {},
     onResetTransport: () -> Unit = {},
     scales: List<Scale> = listOf(Scale.Chromatic),
+    library: GroupLibrary? = null,
+    scaleLibrary: ScaleLibrary = ScaleLibrary.of(null),
 ) {
     // The canvas paints edge to edge, but the initial framing keeps the patch clear of
     // the cutout, the gesture bar and the corner radius. Measured on the reference
@@ -375,6 +381,8 @@ fun PatchCanvasApp(
         onRedo = onRedo,
         onResetTransport = onResetTransport,
         scales = scales,
+        library = library,
+        scaleLibrary = scaleLibrary,
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF14171C)),

@@ -32,10 +32,13 @@ private const val TAG = "PatchGroups"
  * The copy is made into a throwaway patch first rather than written straight out, so that
  * exactly one routine knows how a group is copied -- the same one that duplicates it.
  */
-fun Patch.groupToJson(group: PatchModule): String? {
+fun Patch.groupToJson(group: PatchModule, name: String? = group.name): String? {
     if (group.type != Types.Group) return null
     val lone = Patch()
-    lone.adoptGroup(this, group, Offset.Zero, TOP)
+    // [name] is what the saved copy is called, which is not always what the group in the
+    // patch is called: saving "Filt Osc" to the library as "Bass voice" must not rename
+    // the one you are still playing.
+    lone.adoptGroup(this, group, Offset.Zero, TOP, name)
     return lone.toJson()
 }
 

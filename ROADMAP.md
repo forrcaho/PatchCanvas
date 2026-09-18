@@ -1779,6 +1779,53 @@ on the box, which is what the group's own menu means. Confirmed on the phone aga
 real orphan: the port went, the cables that stayed still named their own ports, and the
 engine was sent nothing.
 
+### A group can be saved and loaded
+
+**2026-09-17, overnight, the four decisions taken beforehand.** A group's long-press menu
+has "Save\u2026"; the empty-canvas menu has "Load\u2026" and "Save patch\u2026". Loading drops a fresh
+copy where the press landed, unpatched, with everything inside it: knobs, sequences,
+exposed parameters, promoted knobs, nested groups and the names of all of them.
+
+**A copy, never a link**, at its owner's choice. Linked instances -- edit the definition and
+every patch using it follows -- is the more powerful idea and the more confusing one, and
+nothing here can yet show you where a definition is used. Ids are allocated by the patch
+doing the loading, so the same file loaded twice is two groups that share nothing.
+
+**Files live beside the scales**, in `getExternalFilesDir/groups`, for the same reason the
+`.scl` files do: a saved group is something to copy off the phone or hand to someone. The
+name typed is sanitised into a file name -- dots dropped as well, which makes ".."
+impossible rather than handled -- while the name you see stays inside the file on the group
+itself. Saving over a name that exists asks: **Replace or Keep both**, "Keep both" saving
+as "Filt Osc 2". Silent replacement was the one option that could lose work.
+
+**Saving the whole patch groups everything, serializes, and ungroups again**, inside one
+snapshot. Every step of that is already silent to the engine, so the patch is byte-identical
+afterwards and the autosave records nothing -- checked on the emulator, not just asserted.
+
+**The library's own menu is the add menu's grid**, one tile per saved group, rather than a
+card that scrolls. It is the same visual language and it cost nothing; a library past a
+dozen wants a list, and `MAX_SAVED_TILES` is where that decision will surface.
+
+**Building it found an older bug.** Ungrouping moved the modules inside back out *unless
+they were groups themselves*: the filter skipped nested groups along with the two rails it
+was written to skip, leaving an inner group pointing at a parent that had just been
+deleted. Still in the patch, still playing, drawn in no scope at all, and only rescued by a
+reload, because the file reader puts a module with an unknown parent back at the top. It
+had been there since groups were built and no test had nested one and ungrouped the outer.
+Saving a patch whose top level was two groups did exactly that, which is how it surfaced.
+
+**Checked on the emulator:** a group saved, its file holding one top-level group with a
+nested group inside it; loaded back as an independent copy; the same name saved again
+offering Replace or Keep both, and "Keep both" writing "Test voice 2"; the whole patch
+saved with the patch byte-identical afterwards, then loaded into itself as one group, with
+the engine told to add exactly the three real modules and nothing for the group. **Not yet
+on the phone.**
+
+**Still open:** there is no way to delete a saved group from inside the app -- the folder is
+visible over USB, which is the answer for now. Loading always lands in the scope being
+looked at, which is right, but a group loaded into a group has no way back out except
+ungrouping. And a library past `MAX_SAVED_TILES` needs the list that scrolls.
+
 ### Grids say how much of them there is
 
 **2026-09-16, from the first use of Drone on the phone.** Both grids now carry a scroll bar
