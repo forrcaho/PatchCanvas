@@ -1814,6 +1814,14 @@ reload, because the file reader puts a module with an unknown parent back at the
 had been there since groups were built and no test had nested one and ungrouped the outer.
 Saving a patch whose top level was two groups did exactly that, which is how it surfaced.
 
+**And a loaded group sounds**, which is the claim none of the above actually made. The
+saved demo patch was loaded back into an empty one, the original chain unpatched from Out
+and the group's own output patched there instead, so the only thing reaching the device was
+the copy. Ten seconds of the engine's own capture: peak 0.45, RMS 0.13, fundamental around
+578Hz -- the sequence playing through the copied Osc and Filter. The first capture was
+silence and the reason was the master output, which starts switched off; worth remembering
+before reading a silent capture as a fault.
+
 **Checked on the emulator:** a group saved, its file holding one top-level group with a
 nested group inside it; loaded back as an independent copy; the same name saved again
 offering Replace or Keep both, and "Keep both" writing "Test voice 2"; the whole patch
