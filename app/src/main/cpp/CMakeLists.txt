@@ -33,6 +33,7 @@ add_library(patchcanvas SHARED
         graph.cpp
         nodes.cpp
         soundfont.cpp
+        processors.cpp
         native_bridge.cpp)
 
 target_include_directories(patchcanvas SYSTEM PRIVATE vendor/daisysp vendor/tinysoundfont)

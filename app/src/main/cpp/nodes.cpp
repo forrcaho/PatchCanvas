@@ -1,5 +1,6 @@
 #include "nodes.h"
 
+#include "processors.h"
 #include "soundfont.h"
 
 #include <algorithm>
@@ -880,6 +881,10 @@ Node *makeNode(NodeType type) {
         case NodeType::Fm: return new FmNode();
         case NodeType::Sf: return new SfNode();
         case NodeType::DotSeq: return new DotSeqNode();
+        case NodeType::Chance: return new ChanceNode();
+        case NodeType::Chord: return new ChordNode();
+        case NodeType::Arp: return new ArpNode();
+        case NodeType::Euclid: return new EuclidNode();
         case NodeType::Lfo: return new LfoNode();
         case NodeType::Drone: return new DroneNode();
         case NodeType::Out: return new OutNode();

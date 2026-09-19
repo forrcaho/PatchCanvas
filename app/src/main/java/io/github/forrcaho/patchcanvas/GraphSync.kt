@@ -26,7 +26,11 @@ enum class NodeType(val id: Int) {
     Pluck(13),
     Fm(14),
     Sf(15),
-    DotSeq(16);
+    DotSeq(16),
+    Chance(17),
+    Chord(18),
+    Arp(19),
+    Euclid(20);
 
     companion object {
         fun of(type: ModuleType): NodeType = when (type.name) {
@@ -43,6 +47,10 @@ enum class NodeType(val id: Int) {
             "FM" -> Fm
             "SF" -> Sf
             "DotSeq" -> DotSeq
+            "Chance" -> Chance
+            "Chord" -> Chord
+            "Arp" -> Arp
+            "Euclid" -> Euclid
             else -> Unknown
         }
     }

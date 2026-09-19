@@ -2368,6 +2368,41 @@ scrolled out of sight leave a bar on the edge they went past, across the steps t
   steps and one added by a tap, both in the file; DotSeq into FM captured with its energy
   per step repeating every eight steps.
 
+### Note processors: Chance, Chord, Arp, Euclid
+
+**Built overnight 2026-09-18**, in `processors.{h,cpp}`. The first modules with notes in *and*
+notes out, which needed nothing new from the graph -- a processor's note input is ordered
+before it like any other, and its output merges downstream like a sequencer's. What each has
+to do is keep a source's promises: every On it sends matched by an Off, the notes a source
+started ended when that source is unpatched (downstream too: `notesCut` queues the Offs and
+the next block sends them), and a held note reported to a cable patched in late. A processor
+answers to its sources' ids and speaks with its own; `NoteLinks` is the table between them.
+
+- **Chance** passes each note with a probability, decided at its On; its Off and Changes
+  follow it, and a dropped note's Off says nothing. The dice are an xorshift, since `rand()`
+  locks.
+- **Chord** makes each note the note and up to three more, in **degrees** of the scale
+  sounding -- so one setting is a triad in any scale that has one, and means something in any
+  tuning. 0 adds nothing; the defaults, 4 and 7, are a major triad in twelve equal steps, the
+  tuning a patch starts in. A held note keeps the chord it started with, and a Change moves it
+  whole.
+- **Arp** holds what arrives, in order of pitch, and plays one on each tick -- up, down, up and
+  down (not repeating either end), or at random -- across one to four octaves, an octave being
+  the sounding scale's size in degrees. Steps' half-step notes and header interval chip.
+- **Euclid** is a generator: pulses spread over steps by Bresenham's line (the same patterns
+  as Bjorklund's up to rotation; 3 over 8 is the tresillo), turned by rotate, at one degree.
+  No grid yet -- the pattern is not drawn, which is the obvious next thing for it.
+- Tested per processor on the host, each mutation-checked: Chance at 0, 1 and about half of a
+  thousand, a dropped Off silent, a cut source ended; Chord's three notes and their degrees,
+  a Change and an Off taking the whole chord; Arp in each mode from notes held out of order,
+  across two octaves, and falling silent when let go; Euclid's patterns and its playing of
+  them. On the emulator a held C-E-G through Arp (up and down, two octaves) into FM came back
+  as 264, 328, 392, 520, 656, 784 and down again, one pitch per sixteenth.
+
+Five note modules pushed the greens past what `ModuleColorTest` passes in a strict green, as
+expected; the family widened to olives, forest and teal-greens and mint, and the 15-point rule
+held. The add menu has fifteen modules and fits, at the reference font scale, on one page.
+
 **Found on the way:** CLAUDE.md said `NodeType` mirroring the C++ enum was asserted. It was
 not -- only that Kotlin's ids were distinct. A test now reads the enum out of `nodes.h` and
 compares, and fails on a wrong id; worth having before six more modules each edit two

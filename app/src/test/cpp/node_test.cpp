@@ -9,11 +9,13 @@
 #include <string>
 #include <vector>
 #include <cstdio>
+#include <initializer_list>
 #include <fstream>
 #include <iterator>
 #include <memory>
 
 #include "nodes.h"
+#include "processors.h"
 #include "soundfont.h"
 #include "test_support.h"
 
@@ -1487,6 +1489,139 @@ void aJumpInTimeEndsWhatWasHeld() {
     check(countKind(reset, NoteKind::On) == 1, "and struck again, since step 0 has a dot");
 }
 
+/** [events] into processor [node] as one block, and what came out. */
+NoteBuffer through(Node &node, std::initializer_list<NoteEvent> events) {
+    NoteBuffer in;
+    for (const auto &e : events) in.push(e);
+    node.setNoteInput(0, &in);
+    node.setTiming(0.0, true, nullptr);
+    node.process(kBlockSize);
+    node.setNoteInput(0, &kNoNotes);
+    return *node.noteOutput(0);
+}
+
+/** One tick at [count] into a clocked node, with [events] arriving on the same sample. */
+NoteBuffer tickWith(Node &node, int64_t count, std::initializer_list<NoteEvent> events = {}) {
+    NoteBuffer in;
+    for (const auto &e : events) in.push(e);
+    node.setNoteInput(0, &in);
+    node.setTiming(0.0, true, nullptr);
+    node.tick(0, count);
+    node.process(kBlockSize);
+    node.setNoteInput(0, &kNoNotes);
+    return *node.noteOutput(0);
+}
+
+/** The degree of the first On in [notes], or -999 if there is none. */
+int firstOnDegree(const NoteBuffer &notes) {
+    for (int32_t i = 0; i < notes.count; ++i) {
+        if (notes.events[i].kind == NoteKind::On) return notes.events[i].degree;
+    }
+    return -999;
+}
+
+void chanceDecidesEachNoteOnce() {
+    std::printf("chance decides each note once, and its off follows it\n");
+    ChanceNode all;
+    all.setParam(0, 1.0f);
+    check(countKind(through(all, {noteOn(1, 0)}), NoteKind::On) == 1, "at 1 every note passes");
+    check(countKind(through(all, {noteOff(1)}), NoteKind::Off) == 1, "and its off");
+
+    ChanceNode none;
+    none.setParam(0, 0.0f);
+    check(countKind(through(none, {noteOn(1, 0)}), NoteKind::On) == 0, "at 0 none does");
+    check(through(none, {noteOff(1)}).count == 0, "and a dropped note's off says nothing");
+
+    ChanceNode half;
+    half.setParam(0, 0.5f);
+    int passed = 0;
+    for (uint32_t id = 1; id <= 1000; ++id) {
+        passed += countKind(through(half, {noteOn(id, 0)}), NoteKind::On);
+        through(half, {noteOff(id)});
+    }
+    check(passed > 420 && passed < 580, "at 0.5, about half: " + std::to_string(passed));
+
+    // Unpatching the source ends what it had passed, downstream too.
+    ChanceNode cut;
+    cut.setParam(0, 1.0f);
+    through(cut, {noteOn(1, 0, 3), noteOn(2, 4, 5)});
+    cut.notesCut(0, 3);
+    const NoteBuffer after = through(cut, {});
+    check(countKind(after, NoteKind::Off) == 1, "a cut source's note is ended in the next block");
+}
+
+void chordMakesEveryNoteAChord() {
+    std::printf("chord makes every note a chord, and ends it whole\n");
+    ChordNode chord; // 4 and 7 by default: a major triad in twelve equal steps
+    const NoteBuffer on = through(chord, {noteOn(1, 2)});
+    check(countKind(on, NoteKind::On) == 3, "three notes for one");
+    check(on.events[0].degree == 2 && on.events[1].degree == 6 && on.events[2].degree == 9,
+          "the note and its intervals, in degrees");
+    check(on.events[0].id != on.events[1].id && on.events[1].id != on.events[2].id, "each its own note");
+
+    NoteEvent move = noteOn(1, 3);
+    move.kind = NoteKind::Change;
+    const NoteBuffer moved = through(chord, {move});
+    check(countKind(moved, NoteKind::Change) == 3 && moved.events[2].degree == 10, "a change moves the chord");
+
+    const NoteBuffer off = through(chord, {noteOff(1)});
+    check(countKind(off, NoteKind::Off) == 3, "and an off ends all of it");
+    for (int32_t i = 0; i < 3; ++i) {
+        check(off.events[i].id == on.events[i].id, "each off matched to its on");
+    }
+
+    ChordNode single;
+    single.setParam(0, 0.0f);
+    single.setParam(1, 0.0f);
+    check(countKind(through(single, {noteOn(1, 0)}), NoteKind::On) == 1, "intervals of 0 add nothing");
+}
+
+void anArpPlaysWhatIsHeld() {
+    std::printf("an arp plays what is held, in each of its modes\n");
+    auto run = [](int mode, int octaves, int ticks) {
+        ArpNode arp;
+        arp.setParam(0, static_cast<float>(mode));
+        arp.setParam(1, static_cast<float>(octaves));
+        std::vector<int> heard;
+        heard.push_back(firstOnDegree(tickWith(arp, 0, {noteOn(1, 7), noteOn(2, 0), noteOn(3, 4)})));
+        for (int t = 1; t < ticks; ++t) heard.push_back(firstOnDegree(tickWith(arp, t)));
+        return heard;
+    };
+    check(run(0, 1, 6) == std::vector<int>{0, 4, 7, 0, 4, 7}, "up, in order of pitch whatever the order held");
+    check(run(1, 1, 4) == std::vector<int>{7, 4, 0, 7}, "down");
+    check(run(2, 1, 7) == std::vector<int>{0, 4, 7, 4, 0, 4, 7}, "up and down, not repeating the ends");
+    check(run(0, 2, 7) == std::vector<int>{0, 4, 7, 12, 16, 19, 0}, "and on up an octave");
+
+    ArpNode arp;
+    tickWith(arp, 0, {noteOn(1, 0)});
+    const NoteBuffer next = tickWith(arp, 1, {noteOff(1)});
+    check(countKind(next, NoteKind::Off) == 1 && countKind(next, NoteKind::On) == 0,
+          "let go of everything and it ends its note and plays no more");
+}
+
+void euclidSpreadsItsPulses() {
+    std::printf("euclid spreads its pulses as evenly as they go\n");
+    std::string tresillo;
+    for (int i = 0; i < 8; ++i) tresillo += EuclidNode::hit(i, 8, 3, 0) ? 'x' : '.';
+    check(tresillo == "x..x..x.", "3 over 8 is the tresillo, got " + tresillo);
+    std::string five;
+    for (int i = 0; i < 8; ++i) five += EuclidNode::hit(i, 8, 5, 0) ? 'x' : '.';
+    check(std::count(five.begin(), five.end(), 'x') == 5, "5 over 8 has five, " + five);
+    std::string turned;
+    for (int i = 0; i < 8; ++i) turned += EuclidNode::hit(i, 8, 3, 1) ? 'x' : '.';
+    check(turned != tresillo && std::count(turned.begin(), turned.end(), 'x') == 3, "rotate turns it, " + turned);
+
+    EuclidNode euclid;
+    euclid.setParam(3, 5.0f);
+    std::string played;
+    for (int64_t t = 0; t < 8; ++t) {
+        const NoteBuffer said = tickWith(euclid, t);
+        played += countKind(said, NoteKind::On) > 0 ? 'x' : '.';
+        if (t == 0) check(firstOnDegree(said) == 5, "at its degree");
+    }
+    check(played == tresillo, "and plays what it spreads, " + played);
+}
+
 void anLfoStaysInsideItsRangeAtItsRate() {
     std::printf("an lfo stays inside its range, at its rate\n");
     for (int wave = 0; wave < 4; ++wave) {
@@ -1727,6 +1862,10 @@ int main() {
     aDotEndsBeforeTheNextStarts();
     dotsLoopAtTheLength();
     aJumpInTimeEndsWhatWasHeld();
+    chanceDecidesEachNoteOnce();
+    chordMakesEveryNoteAChord();
+    anArpPlaysWhatIsHeld();
+    euclidSpreadsItsPulses();
     anLfoStaysInsideItsRangeAtItsRate();
     aDroneHoldsItsNoteWithTheTransportStopped();
     aDroneSoundsSeveralCellsAtOnce();

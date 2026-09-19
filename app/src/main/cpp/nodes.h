@@ -38,6 +38,10 @@ enum class NodeType : int32_t {
     Fm = 14,
     Sf = 15,
     DotSeq = 16,
+    Chance = 17,
+    Chord = 18,
+    Arp = 19,
+    Euclid = 20,
 };
 
 /**

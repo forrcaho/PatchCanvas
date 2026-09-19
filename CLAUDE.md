@@ -85,6 +85,7 @@ being edited out from under it.
 | `transport.h` | musical time: one position every clocked node divides, header-only |
 | `scales.h` | scale tables and the looping scale list; where a degree becomes a pitch |
 | `nodes.{h,cpp}` | the module set, DaisySP-backed |
+| `processors.{h,cpp}` | notes in, notes out: Chance, Chord, Arp, Euclid |
 | `soundfont.{h,cpp}` | the SF node over TinySoundFont; a SoundFont loaded once and shared |
 | `poly.h` | `PolySynth`: voice allocation, stealing, glides -- every synth but its sound |
 | `audio_engine.{h,cpp}` | Oboe streams, ADPF, debug capture |

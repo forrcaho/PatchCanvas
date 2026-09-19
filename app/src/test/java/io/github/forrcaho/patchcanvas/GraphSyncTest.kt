@@ -488,6 +488,17 @@ class ModuleContractTest {
     }
 
     @Test
+    fun `the note processors' limits are the engine's`() {
+        val header = java.io.File("src/main/cpp/processors.h").readText().substringAfter("class EuclidNode")
+        val steps = Regex("""constexpr int32_t kMaxSteps = (\d+);""").find(header)!!.groupValues[1].toInt()
+        assertEquals(steps, EUCLID_STEPS)
+        // The modes the engine counts to, read off its clamp.
+        val source = java.io.File("src/main/cpp/processors.cpp").readText()
+        val top = Regex("""case 0: mode_ = whole\(value, 0, (\d+)\)""").find(source)!!.groupValues[1].toInt()
+        assertEquals(top + 1, ARP_MODES.size)
+    }
+
+    @Test
     fun `no module exceeds the engine's port limit`() {
         Types.byName.values.forEach { type ->
             assertTrue("${type.name} has ${type.inputs.size} inputs", type.inputs.size <= MAX_PORTS)

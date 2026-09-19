@@ -199,7 +199,7 @@ enum class ParamCurve { LINEAR, EXPONENTIAL, STEPPED }
  * reading it needs no translation from the word "saw". DIVISION is a note length from
  * [INTERVALS], and the one choice a panel shows in its header rather than as a row.
  */
-enum class Choice { NUMBER, WAVE, DIVISION, PRESET }
+enum class Choice { NUMBER, WAVE, DIVISION, PRESET, ARP }
 
 data class Param(
     val name: String,
@@ -517,6 +517,64 @@ object Types {
         grid = GridKind.DOTS,
     )
     /**
+     * Passes each note with a probability and drops the rest: the same line with different
+     * gaps each time round. Notes in, notes out.
+     */
+    val Chance = ModuleType(
+        "Chance", listOf(Port("notes", N)), listOf(Port("notes", N)),
+        Color(0xFF2C8864),
+        params = listOf(Param("chance", 0f, 1f, 0.5f, "", LIN)),
+    )
+    /**
+     * Each note becomes a chord: the note and up to three more, counted in degrees of the
+     * scale sounding, so the same knobs are a triad in any scale that has one. 0 adds
+     * nothing. The defaults are a major triad in twelve equal steps, the tuning a patch
+     * starts in. Order mirrors ChordNode::setParam.
+     */
+    val Chord = ModuleType(
+        "Chord", listOf(Port("notes", N)), listOf(Port("notes", N)),
+        Color(0xFFA8F0D8),
+        params = listOf(
+            Param("note 2", -24f, 24f, 4f, "", STEP, short = "n2"),
+            Param("note 3", -24f, 24f, 7f, "", STEP, short = "n3"),
+            Param("note 4", -24f, 24f, 0f, "", STEP, short = "n4"),
+        ),
+    )
+    /**
+     * The notes held at its input, one at a time on the transport's ticks. Hold a chord on
+     * a Drone and it plays it. Order mirrors ArpNode::setParam -- mode, octaves, interval.
+     */
+    val Arp = ModuleType(
+        "Arp", listOf(Port("notes", N)), listOf(Port("notes", N)),
+        Color(0xFF648438),
+        params = listOf(
+            Param("mode", 0f, (ARP_MODES.size - 1).toFloat(), 0f, "", STEP, Choice.ARP),
+            Param("octaves", 1f, 4f, 1f, "", STEP, short = "oct"),
+            Param(
+                "interval", 0f, (INTERVALS.size - 1).toFloat(), DEFAULT_INTERVAL.toFloat(),
+                curve = STEP, choice = Choice.DIVISION, header = true,
+            ),
+        ),
+    )
+    /**
+     * A Euclidean rhythm: pulses spread as evenly as they go over steps, turned by rotate,
+     * each note at one degree. 3 over 8 is the tresillo. Order mirrors EuclidNode::setParam.
+     */
+    val Euclid = ModuleType(
+        "Euclid", emptyList(), listOf(Port("notes", N)),
+        Color(0xFF009040),
+        params = listOf(
+            Param("steps", 1f, EUCLID_STEPS.toFloat(), 8f, "", STEP),
+            Param("pulses", 0f, EUCLID_STEPS.toFloat(), 3f, "", STEP, short = "pul"),
+            Param("rotate", 0f, (EUCLID_STEPS - 1).toFloat(), 0f, "", STEP, short = "rot"),
+            Param("degree", -24f, 24f, 0f, "", STEP, short = "deg"),
+            Param(
+                "interval", 0f, (INTERVALS.size - 1).toFloat(), DEFAULT_INTERVAL.toFloat(),
+                curve = STEP, choice = Choice.DIVISION, header = true,
+            ),
+        ),
+    )
+    /**
      * Notes that stay on until they are turned off, laid out as degrees by octaves.
      *
      * No transport and no parameters: it is the plainest thing a note cable can carry, and
@@ -651,7 +709,7 @@ object Types {
      * inputs as you like, since each input stores its own source. Only summing ever
      * needed a module, and that is Mix.
      */
-    val palette = listOf(Osc, Pluck, Fm, Sf, Drone, Steps, DotSeq, Filter, Env, Lfo, Mix)
+    val palette = listOf(Osc, Pluck, Fm, Sf, Drone, Steps, DotSeq, Euclid, Arp, Chord, Chance, Filter, Env, Lfo, Mix)
 
     /**
      * Modules collapsed into one box. Its ports are its own rather than its type's -- they
@@ -4965,6 +5023,17 @@ private fun DrawScope.drawChoices(
             }
             // Never a row: a preset is chosen from its own page, off the header.
             Choice.PRESET -> {}
+            Choice.ARP -> {
+                val text = measurer.measure(ARP_MODES.getOrNull(i).orEmpty(), PanelValueStyle)
+                drawText(
+                    text,
+                    color = ink,
+                    topLeft = Offset(
+                        box.center.x - text.size.width / 2f,
+                        box.center.y - text.size.height / 2f,
+                    ),
+                )
+            }
             Choice.NUMBER -> {
                 val text = measurer.measure((param.min + i).toInt().toString(), PanelValueStyle)
                 drawText(
@@ -5715,6 +5784,12 @@ internal const val DRONE_CELLS = 64
 
 /** Steps on a dot sequencer's grid. Mirrors DotSeqNode::kSteps. */
 internal const val DOT_STEPS = 32
+
+/** An Arp's modes, as its buttons say them. Mirrors ArpNode::step. */
+internal val ARP_MODES = listOf("up", "down", "up/dn", "rand")
+
+/** A Euclid's longest pattern. Mirrors EuclidNode::kMaxSteps. */
+internal const val EUCLID_STEPS = 32
 
 /** The most options a stepped row draws as buttons; past it, a bar. See [Param.buttons]. */
 internal const val MAX_BUTTONS = 16
