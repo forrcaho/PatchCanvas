@@ -649,7 +649,7 @@ object Types {
      */
     val Fm = ModuleType(
         "FM", listOf(Port("notes", N)), listOf(Port("out", A)),
-        Color(0xFFA46868),
+        Color(0xFF986C5C),
         params = listOf(
             // Whole numbers are harmonic and the rest clang; the keypad types them exactly.
             Param("ratio", 0.25f, 16f, 1f, "x", EXP, short = "rto"),
@@ -1352,10 +1352,10 @@ internal fun rangeReading(param: Param, range: ModRange): String =
 
 /** Moves one end of a parameter's range to the knob value under [screenX]. */
 internal fun Patch.moveBracket(
-    row: ParamRow, panel: Rect, d: Float, closing: Boolean, screenX: Float,
+    row: ParamRow, bar: Rect, closing: Boolean, screenX: Float,
 ) {
     val range = row.owner.modRanges[row.index] ?: return
-    val value = row.param.valueAt(panelKnobPosition(panel, d, screenX))
+    val value = row.param.valueAt(panelKnobPosition(bar, screenX))
     expose(row.owner, row.index, if (closing) range.copy(high = value) else range.copy(low = value))
 }
 
@@ -1875,13 +1875,15 @@ internal fun droneDegree(window: GridWindow, row: Int, column: Int, scale: Scale
 internal fun gridRows(area: Rect, d: Float): Int =
     (area.height / (PatchModule.GRID_ROW * d)).toInt().coerceAtLeast(1)
 
-/** Knob travel, 0..1, from a screen x on the panel. */
-internal fun panelKnobPosition(panel: Rect, d: Float, screenX: Float): Float {
-    val side = PatchModule.PANEL_SIDE * d
-    val left = panel.left + side
-    val right = panel.right - side
-    return ((screenX - left) / (right - left)).coerceIn(0f, 1f)
-}
+/**
+ * Knob travel, 0..1, from a screen x along [bar] -- the row being dragged, not the panel.
+ *
+ * It was the panel once, which was the same thing while every row spanned it. Two columns
+ * made it wrong in a way only a finger finds: a knob in either column took the whole screen
+ * to cross, reported from the phone on the first night of two columns.
+ */
+internal fun panelKnobPosition(bar: Rect, screenX: Float): Float =
+    ((screenX - bar.left) / bar.width).coerceIn(0f, 1f)
 
 data class PortRef(val moduleId: Long, val dir: PortDirection, val index: Int)
 
@@ -3647,6 +3649,13 @@ fun PatchCanvas(
                             val knob =
                                 if (onHistory || bracket != null) null
                                 else panelKnobAt(panel, frame.density, open, rows, down.position)
+                            // The bar each is measured along: its own row, which with two columns
+                            // is half the panel.
+                            val barOf = { entry: ParamRow ->
+                                panelRowAt(panel, frame.density, open.type, rows.size, rows.indexOf(entry))
+                            }
+                            val knobBar = knob?.let(barOf)
+                            val bracketBar = bracket?.first?.let(barOf)
                             val cell =
                                 if (onHistory || knob != null) null
                                 else panelCellAt(panel, frame.density, open, down.position, gridScale)
@@ -3703,15 +3712,12 @@ fun PatchCanvas(
                                     moved = true
                                 }
                                 if (bracket != null) {
-                                    patch.moveBracket(
-                                        bracket.first, panel, frame.density, bracket.second,
-                                        change.position.x,
-                                    )
+                                    patch.moveBracket(bracket.first, bracketBar!!, bracket.second, change.position.x)
                                 } else if (knob != null) {
                                     knob.owner.setParam(
                                         knob.index,
                                         knob.param.valueAt(
-                                            panelKnobPosition(panel, frame.density, change.position.x),
+                                            panelKnobPosition(knobBar!!, change.position.x),
                                         ),
                                     )
                                 } else if (cell != null) {
@@ -3731,17 +3737,14 @@ fun PatchCanvas(
                                 if (onHistory) {
                                     controls.tapHistory(frame, down.position)
                                 } else if (bracket != null) {
-                                    patch.moveBracket(
-                                        bracket.first, panel, frame.density, bracket.second,
-                                        down.position.x,
-                                    )
+                                    patch.moveBracket(bracket.first, bracketBar!!, bracket.second, down.position.x)
                                 } else if (knob != null) {
                                     // A tap on a knob jumps there, which is faster than
                                     // dragging when you already know where you want it.
                                     knob.owner.setParam(
                                         knob.index,
                                         knob.param.valueAt(
-                                            panelKnobPosition(panel, frame.density, down.position.x),
+                                            panelKnobPosition(knobBar!!, down.position.x),
                                         ),
                                     )
                                 } else if (cell != null) {

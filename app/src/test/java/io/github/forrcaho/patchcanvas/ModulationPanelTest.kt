@@ -203,11 +203,11 @@ class ModulationPanelTest {
         patch.expose(filter, 0, ModRange(400f, 2000f))
         val row = panelRow(panel, d, filter.type, 0)
 
-        patch.moveBracket(ParamRow(filter, 0), panel, d, closing = true, screenX = row.right)
+        patch.moveBracket(ParamRow(filter, 0), row, closing = true, screenX = row.right)
         assertEquals(400f, filter.modRanges.getValue(0).low, 0.001f)
         assertEquals(18000f, filter.modRanges.getValue(0).high, 1f)
 
-        patch.moveBracket(ParamRow(filter, 0), panel, d, closing = false, screenX = row.left)
+        patch.moveBracket(ParamRow(filter, 0), row, closing = false, screenX = row.left)
         assertEquals(20f, filter.modRanges.getValue(0).low, 0.01f)
         assertEquals("and the knob stays where it was", 1000f, filter.params[0], 0f)
     }
@@ -293,6 +293,23 @@ class ModulationPanelTest {
                 }
                 assertTrue(chip.left >= panel.left && chip.right <= panel.right)
             }
+        }
+    }
+
+    /**
+     * Found on the phone: with two columns a knob took the whole panel's width to cross,
+     * because travel was measured against the panel rather than the row. Each row's own ends
+     * are its knob's.
+     */
+    @Test
+    fun `a knob in either column travels its own row`() {
+        val fm = Patch().add(Types.Fm, Offset.Zero)!!
+        val rows = fm.type.rowParams
+        rows.indices.forEach { slot ->
+            val bar = panelRowAt(panel, d, fm.type, rows.size, slot)
+            assertEquals("slot $slot at its left", 0f, panelKnobPosition(bar, bar.left), 0.001f)
+            assertEquals("slot $slot at its right", 1f, panelKnobPosition(bar, bar.right), 0.001f)
+            assertEquals("slot $slot halfway", 0.5f, panelKnobPosition(bar, bar.center.x), 0.001f)
         }
     }
 

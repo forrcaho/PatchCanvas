@@ -2275,9 +2275,17 @@ partial is a third of the fundamental at the strike and under 2% a second on, th
 still at full level. Each mutation-checked. On the emulator a held C-E-G through the app
 came back with the three notes level and their sidebands gone after a few seconds.
 
-**The audio family goes warm.** No blue passes `ModuleColorTest` any more, so FM is a
-dusty red (`A46868`) -- still nearest the gray audio cable by 16 points. The family is now
-"steel blues, grays and warm grays".
+**The audio family goes warm.** No blue passes `ModuleColorTest` any more, so FM went warm.
+The first shade, a dusty red (`A46868`), read on the phone as one of the LFO's purples --
+at 55% over the dark fill a red border loses its warmth -- so it is a brown now
+(`986C5C`), well clear of both purples and still nearest the gray audio cable. The family is
+now "steel blues, grays and warm grays".
+
+**Found on the phone the next morning: two-column knobs travelled the whole panel.** A
+knob's position was measured from the panel's edges rather than its row's -- the same thing
+while every row spanned the panel -- so a knob in either column took the whole screen to
+cross. The geometry test had checked where rows are drawn and not what a drag in one does;
+it now checks each row's own ends and middle.
 
 ### SF, a SoundFont player
 
