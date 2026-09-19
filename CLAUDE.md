@@ -189,7 +189,7 @@ always a VCA with its level on a knob. `Filter` lost its cutoff jack and `Steps`
 and gate outputs, so a sequencer says a note once rather than the same thing three ways.
 Node ids 1, 7 and 8 are retired and never reused; `Osc` is id 10, where `Voice` was.
 
-**A module's color is the kind of cable it sends** -- greens for notes, steel blues and
+**A module's color is the kind of cable it sends** -- greens for notes, steel blues, warm grays and
 grays for audio, purples for modulation -- in a shade of that family, never the cable
 color itself. `ModuleColorTest` enforces it, so a new module's accent has to follow it.
 

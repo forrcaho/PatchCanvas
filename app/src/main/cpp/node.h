@@ -11,13 +11,13 @@
 constexpr int32_t kBlockSize = 32;
 constexpr int32_t kMaxPorts = 4;
 /**
- * Five, not four, since a polyphonic voice's envelope wants all of A, D, S and R and its
- * waveform is a fifth control that a panel row can hold. Nothing is stored per parameter,
- * so this bounds a command's index and nothing else; the panel divides its body by the
- * number of rows, so the rows get shorter rather than overlapping. A sequencer is where
- * that runs out, because its grid already takes two thirds of the body.
+ * Eight, since FM: two operators want a ratio, an index and its decay besides an
+ * envelope's A, D, S and R. Five was the old limit, set by what a panel's single column of
+ * rows could hold at a finger's height; past five the panel goes to two columns. Nothing is
+ * stored per parameter beyond a routing slot and a published value, so this bounds a
+ * command's index and little else.
  */
-constexpr int32_t kMaxParams = 5;
+constexpr int32_t kMaxParams = 8;
 
 /**
  * A graph node.
@@ -65,7 +65,7 @@ public:
     /**
      * One step of a sequence changed.
      *
-     * Separate from setParam because a pattern is not a knob: kMaxParams is 4, which is
+     * Separate from setParam because a pattern is not a knob: kMaxParams is 8, which is
      * the right size for the controls a panel shows and nowhere near a sequence. The note
      * arrives as a degree, and is resolved against whichever scale is sounding on the
      * beat it starts -- which only the audio thread can know to the sample.

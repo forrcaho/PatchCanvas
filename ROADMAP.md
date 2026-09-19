@@ -2182,8 +2182,25 @@ decision already taken for FM on 2026-09-15.
 fit. The landscape panel is about 980dp wide, so a half-width bar is still long enough to
 set finely, and nothing is hidden behind a chip. `kMaxParams` rises from 5 to 8 with it.
 
-**The app ships a small soundfont**, so SF sounds out of the box -- its license and size to
-be put to Forrest before it is added.
+**The app ships GeneralUser GS**, S. Christian Collins' GM bank, whole: 29.8MB, 259
+presets and 11 kits, under a custom license that explicitly allows bundling in free
+software, modified or not. Chosen 2026-09-18 over the alternatives that turned up: the
+small GM sets are GPL (TimGM6mb) or not redistributable (the 3MB Roland/Microsoft set),
+and MuseScore General is MIT but either SF3, which TinySoundFont cannot read, or 208MB.
+TinySoundFont holds samples as floats, so a loaded bank costs about twice its file --
+paid only while an SF module exists.
+
+**Decided the same evening, before an overnight build:**
+
+- **FM is two operators and seven knobs** -- ratio, index, index decay, A, D, S, R --
+  rather than Bespoke's three stacked, which would want pages rather than two columns.
+  The index's own decay is what makes FM a bell or an electric piano: brightness falling
+  faster than loudness.
+- **DotSeq: tap an empty cell for a one-step dot, drag from a dot's end to change its
+  length, tap a dot to remove it.** Velocity waits.
+- **The green family widens** for the note processors -- yellow-greens and teal-greens --
+  and the 15-point border rule stays. Loosening the rule was the alternative, and it
+  exists because pairs at 7 to 11 were indistinguishable on the phone.
 
 ### The voices share one engine
 
@@ -2225,6 +2242,38 @@ brighter and rings longer, as in Plaits.
   decay 0.97, loaded from a file, output switched on. The engine's capture has harmonics at
   524, 1047, 1570, 2094 and 2617Hz, peak 0.37 -- the whole path, from the file through
   `GraphSync` and the node factory to the stream. Not yet played on the phone.
+
+### Two columns, and FM
+
+**Built overnight 2026-09-18.** `kMaxParams` is 8. Past five rows a panel lays its rows
+out in two columns -- the first half down the left, the rest down the right, so the
+parameters are still read in order -- with a gutter between them as wide as a side one,
+since it holds the same two chips: the left column's `[ ]` and the right column's promote.
+All of it is inside `panelRowAt`, which every panel's drawing and hit test was already
+placed by, so the chips, brackets, typed values and group panels followed without being
+touched. On the reference device an eight-row panel's rows are 276dp wide and keep the full 76dp
+height a row is capped at, since four to a column fit without shrinking. A
+test reads `kMaxParams` and `kMaxPorts` out of `node.h` now, as it does the node ids.
+
+**FM**: two sines per voice, the modulator at `ratio` times the note and pushing the
+carrier's phase by `index` radians. The index follows the amplitude envelope (Chowning's
+brass: brighter as louder) and velocity, and falls on its own with time constant `fall`
+(the bell and the electric piano: brightness dying before loudness). A fresh voice starts
+both phases at zero so every attack is the same shape; a stolen one runs on, like an
+`Osc`'s. `ratio` is continuous from 0.25 to 16 -- whole numbers are harmonic and the rest
+clang, and the keypad types them exactly, which is the answer to "a slider cannot land on
+3" until snapping proves necessary.
+
+Tested by where the energy is rather than by ear: index 0 is a sine at the note with
+nothing at 2f; ratio 1 puts energy at 2f; ratio 2 puts it at 3f and none at 2f, which
+catches a ratio ignored or applied to the wrong operator; and with `fall` at 0.1s the 2f
+partial is a third of the fundamental at the strike and under 2% a second on, the note
+still at full level. Each mutation-checked. On the emulator a held C-E-G through the app
+came back with the three notes level and their sidebands gone after a few seconds.
+
+**The audio family goes warm.** No blue passes `ModuleColorTest` any more, so FM is a
+dusty red (`A46868`) -- still nearest the gray audio cable by 16 points. The family is now
+"steel blues, grays and warm grays".
 
 **Found on the way:** CLAUDE.md said `NodeType` mirroring the C++ enum was asserted. It was
 not -- only that Kotlin's ids were distinct. A test now reads the enum out of `nodes.h` and

@@ -257,4 +257,51 @@ class ModulationPanelTest {
         val at = panelRowAt(panel, d, Types.Group, rows.size, 0).center
         assertEquals(ParamRow(filter, 0), panelKnobAt(panel, d, group, rows, at))
     }
+
+    /**
+     * Eight rows, which is what FM needs, on the reference device. In one column each would
+     * be 40dp with its label, reading and bar all inside -- so past five they go to two.
+     */
+    @Test
+    fun `eight rows go to two columns that keep a finger's height and a long bar`() {
+        val count = MAX_PARAMS
+        val rows = (0 until count).map { panelRowAt(panel, d, Types.Mix, count, it) }
+
+        rows.forEachIndexed { i, a ->
+            assertTrue("row $i is ${a.height / d}dp tall", a.height >= 60f * d)
+            assertTrue("row $i is only ${a.width / d}dp wide", a.width >= 200f * d)
+            rows.forEachIndexed { j, b ->
+                if (i != j) assertTrue("rows $i and $j overlap", !a.overlaps(b))
+            }
+        }
+        // In the order read: down the left, then down the right.
+        assertTrue(rows[0].left == rows[3].left && rows[4].left > rows[3].right)
+        assertTrue(rows[1].top > rows[0].top && rows[4].top == rows[0].top)
+
+        // Both chips sit clear of every row, the middle gutter included, and inside the panel.
+        rows.forEach { row ->
+            listOf(panelModChipOn(row, d), panelPromoteChipOn(row, d)).forEach { chip ->
+                rows.forEach { other ->
+                    assertTrue("a chip lands on a row", !chip.overlaps(other))
+                }
+                rows.forEach { other ->
+                    if (other != row) {
+                        listOf(panelModChipOn(other, d), panelPromoteChipOn(other, d)).forEach {
+                            assertTrue("two chips overlap", !chip.overlaps(it))
+                        }
+                    }
+                }
+                assertTrue(chip.left >= panel.left && chip.right <= panel.right)
+            }
+        }
+    }
+
+    @Test
+    fun `five rows or fewer stay in one column, as they were`() {
+        (1..PANEL_ONE_COLUMN).forEach { count ->
+            val rows = (0 until count).map { panelRowAt(panel, d, Types.Mix, count, it) }
+            assertEquals(1, rows.map { it.left }.distinct().size)
+            assertEquals(panel.width - 2f * PatchModule.PANEL_SIDE * d, rows[0].width, 0.01f)
+        }
+    }
 }

@@ -462,6 +462,16 @@ class ModuleContractTest {
         assertEquals(engine, NodeType.entries.associate { it.name to it.id })
     }
 
+    /** The same, for the limits: a knob past kMaxParams is dropped by the engine silently. */
+    @Test
+    fun `the port and parameter limits are the engine's`() {
+        val header = java.io.File("src/main/cpp/node.h").readText()
+        fun constant(name: String) =
+            Regex("""constexpr int32_t $name = (\d+);""").find(header)!!.groupValues[1].toInt()
+        assertEquals(constant("kMaxParams"), MAX_PARAMS)
+        assertEquals(constant("kMaxPorts"), MAX_PORTS)
+    }
+
     @Test
     fun `no module exceeds the engine's port limit`() {
         Types.byName.values.forEach { type ->

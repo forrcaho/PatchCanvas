@@ -533,6 +533,29 @@ object Types {
             Param("R", 0.01f, 10f, 1f, "s", EXP),
         ),
     )
+    /**
+     * Two-operator FM for every note: a sine whose phase another sine pushes around.
+     *
+     * The modulator runs at [ratio] times the note and pushes by [index] radians; the index
+     * follows the envelope and falls on its own over [fall], which is what makes a bell or
+     * an electric piano -- brightness dying before loudness. Seven knobs, the reason the
+     * limit is eight and the panel goes to two columns. Order mirrors FmNode::setParam.
+     */
+    val Fm = ModuleType(
+        "FM", listOf(Port("notes", N)), listOf(Port("out", A)),
+        Color(0xFFA46868),
+        params = listOf(
+            // Whole numbers are harmonic and the rest clang; the keypad types them exactly.
+            Param("ratio", 0.25f, 16f, 1f, "x", EXP, short = "rto"),
+            Param("index", 0f, 10f, 2f, "", LIN, short = "idx"),
+            // How fast the brightness dies away on its own, under the envelope's loudness.
+            Param("fall", 0.01f, 20f, 1f, "s", EXP),
+            Param("A", 0.001f, 5f, 0.005f, "s", EXP),
+            Param("D", 0.001f, 5f, 0.3f, "s", EXP),
+            Param("S", 0f, 1f, 0.5f, "", LIN),
+            Param("R", 0.001f, 10f, 0.4f, "s", EXP),
+        ),
+    )
     val Mix = ModuleType(
         "Mix",
         listOf(Port("a", A), Port("b", A), Port("c", A), Port("d", A)),
@@ -569,7 +592,7 @@ object Types {
      * inputs as you like, since each input stores its own source. Only summing ever
      * needed a module, and that is Mix.
      */
-    val palette = listOf(Osc, Pluck, Drone, Steps, Filter, Env, Lfo, Mix)
+    val palette = listOf(Osc, Pluck, Fm, Drone, Steps, Filter, Env, Lfo, Mix)
 
     /**
      * Modules collapsed into one box. Its ports are its own rather than its type's -- they
@@ -981,10 +1004,23 @@ internal fun panelRow(panel: Rect, d: Float, type: ModuleType, index: Int): Rect
 internal fun panelRowAt(panel: Rect, d: Float, type: ModuleType, count: Int, slot: Int): Rect {
     val area = panelControls(panel, d, type)
     val side = PatchModule.PANEL_SIDE * d
-    val rowHeight = minOf(PatchModule.PANEL_ROW_MAX * d, area.height / maxOf(count, 1))
-    val block = rowHeight * count
-    val top = area.top + (area.height - block) / 2f + slot * rowHeight
-    return Rect(panel.left + side, top, panel.right - side, top + rowHeight)
+    // Past five rows, two columns: the first half down the left, the rest down the right,
+    // so reading order is still top to bottom and the parameters' order is kept.
+    val columns = if (count > PANEL_ONE_COLUMN) 2 else 1
+    val perColumn = (count + columns - 1) / columns
+    val column = slot / maxOf(perColumn, 1)
+    val within = slot % maxOf(perColumn, 1)
+    val rowHeight = minOf(PatchModule.PANEL_ROW_MAX * d, area.height / maxOf(perColumn, 1))
+    val block = rowHeight * perColumn
+    val top = area.top + (area.height - block) / 2f + within * rowHeight
+    // The gap between the columns is a gutter as wide as a side one, because it has the
+    // same work to do: the left column's [ ] chip and the right column's promote chip both
+    // sit in it, each against its own row.
+    val left = panel.left + side
+    val right = panel.right - side
+    val width = (right - left - (columns - 1) * side) / columns
+    val x = left + column * (width + side)
+    return Rect(x, top, x + width, top + rowHeight)
 }
 
 /**
@@ -5197,14 +5233,21 @@ private fun handleTap(
  */
 internal const val MAX_PORTS = 4
 
-/** Mirrors kMaxParams in node.h. A sixth knob would simply never reach the engine. */
-internal const val MAX_PARAMS = 5
+/** Mirrors kMaxParams in node.h. A ninth knob would simply never reach the engine. */
+internal const val MAX_PARAMS = 8
+
+/**
+ * The most rows a panel stacks in one column. Past this it lays them out in two, side by
+ * side: the landscape panel is wide and not tall, and at eight rows in one column each is
+ * thinner than a finger, while half the panel's width is still a long bar.
+ */
+internal const val PANEL_ONE_COLUMN = 5
 
 /**
  * The most knobs a group can carry out to its edge.
  *
- * The same as [MAX_PARAMS], for the same reason a module stops there: the panel gives its
- * rows the height it has, and a sixth is thinner than a finger. Nothing in the engine cares
+ * The same as [MAX_PARAMS], for the same reason a module stops there: the panel lays out at
+ * most two columns of four, and a ninth row is thinner than a finger. Nothing in the engine cares
  * -- a promoted knob is a reference, and the engine only ever sees the module inside.
  */
 internal const val MAX_PROMOTED = MAX_PARAMS

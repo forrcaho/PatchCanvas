@@ -23,7 +23,8 @@ enum class NodeType(val id: Int) {
     Osc(10),
     Lfo(11),
     Drone(12),
-    Pluck(13);
+    Pluck(13),
+    Fm(14);
 
     companion object {
         fun of(type: ModuleType): NodeType = when (type.name) {
@@ -37,6 +38,7 @@ enum class NodeType(val id: Int) {
             "LFO" -> Lfo
             "Drone" -> Drone
             "Pluck" -> Pluck
+            "FM" -> Fm
             else -> Unknown
         }
     }

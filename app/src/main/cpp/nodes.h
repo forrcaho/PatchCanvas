@@ -35,6 +35,7 @@ enum class NodeType : int32_t {
     Lfo = 11,
     Drone = 12,
     Pluck = 13,
+    Fm = 14,
 };
 
 /**
@@ -378,6 +379,67 @@ private:
     float bright_ = 0.5f;
     float stiff_ = 0.3f;
     float release_ = 1.0f;
+};
+
+/**
+ * One note of an FM: a sine whose phase is pushed around by another sine.
+ *
+ * Two operators, as decided when it was designed: a modulator at [ratio] times the note,
+ * and the carrier at the note, the modulator's depth being the index -- in radians of
+ * phase, the classic measure. The index follows the amplitude envelope, which is
+ * Chowning's brass (brighter as it gets louder), and falls on its own with time constant
+ * [fall], which is the bell and the electric piano: brightness dying faster than loudness.
+ * Velocity scales both loudness and index, so a harder note is a brighter one.
+ */
+struct FmVoice {
+    daisysp::Adsr env;
+
+    void init(float sampleRate);
+    void strike(float hz, float velocity, bool stolen);
+    void setFreq(float hz);
+    float render(bool gate, bool &finished);
+
+    float sampleRate = 48000.0f;
+    float hz = 0.0f;
+    float ratio = 1.0f;
+    float index = 2.0f;
+    /** The index's own decay, as a per-sample multiplier on [brightness]. */
+    float fallStep = 1.0f;
+    float velocity = 1.0f;
+    /** Where the index's fall has got to: 1 at the strike, towards 0 after. */
+    float brightness = 1.0f;
+    /** Phases in cycles, 0..1, and how far each moves a sample. */
+    float carrier = 0.0f;
+    float modulator = 0.0f;
+    float carrierStep = 0.0f;
+    float modulatorStep = 0.0f;
+};
+
+/**
+ * Two-operator FM: notes in, sound out. Order of knobs mirrors PatchCanvas.kt: ratio,
+ * index, fall, A, D, S, R -- seven, which is what raised kMaxParams to eight and sent the
+ * panel to two columns.
+ *
+ * A module rather than two oscillators patched together, and not only because modulation
+ * runs once a block: each note needs its own modulator following its own pitch, and an
+ * Osc sends the sum of its voices, so one patched into another would bend a chord by the
+ * mixture of all of them.
+ */
+class FmNode : public PolySynth<FmVoice, 8> {
+public:
+    void prepare(int32_t sampleRate) override;
+    void setParam(int32_t index, float value) override;
+
+private:
+    void applyAll();
+
+    float ratio_ = 1.0f;
+    float index_ = 2.0f;
+    float fall_ = 1.0f;
+    float attack_ = 0.005f;
+    float decay_ = 0.3f;
+    float sustain_ = 0.5f;
+    float release_ = 0.4f;
 };
 
 /**

@@ -1198,6 +1198,83 @@ void aPluckIsLetGoOverItsRelease() {
     check(left[1] > 0.05f, "a long one lets it ring, " + std::to_string(left[1]));
 }
 
+/**
+ * How much of [hz] is in [samples], by Goertzel over a Hann window: the size of one bin of
+ * a DFT, without computing the rest. Relative, not calibrated -- the FM tests compare one
+ * partial against another in the same signal.
+ */
+float magnitudeAt(const std::vector<float> &samples, float hz) {
+    const double w = 2.0 * M_PI * hz / kRate;
+    const double coefficient = 2.0 * std::cos(w);
+    double s1 = 0.0, s2 = 0.0;
+    const std::size_t n = samples.size();
+    for (std::size_t i = 0; i < n; ++i) {
+        const double hann = 0.5 - 0.5 * std::cos(2.0 * M_PI * i / (n - 1));
+        const double s0 = samples[i] * hann + coefficient * s1 - s2;
+        s2 = s1;
+        s1 = s0;
+    }
+    return static_cast<float>(std::sqrt(s1 * s1 + s2 * s2 - coefficient * s1 * s2) / n);
+}
+
+/** An FM holding middle C, with its envelope flat so only the knobs under test move. */
+void holdFm(FmNode &fm, float ratio, float index, float fall) {
+    fm.prepare(kRate);
+    fm.setParam(0, ratio);
+    fm.setParam(1, index);
+    fm.setParam(2, fall);
+    fm.setParam(3, 0.001f); // A
+    fm.setParam(4, 0.001f); // D
+    fm.setParam(5, 1.0f);   // S
+    play(fm, noteOn(1, 0));
+}
+
+void fmWithNoIndexIsASine() {
+    std::printf("fm with no index is a sine at the note\n");
+    FmNode fm;
+    holdFm(fm, 1.0f, 0.0f, 20.0f);
+    const auto tone = voiceIdle(fm, 400);
+    const float heard = pitchOf(tone);
+    check(std::fabs(1200.0f * std::log2(heard / kMiddleC)) < 5.0f,
+          "at middle C, heard " + std::to_string(heard));
+    const float fundamental = magnitudeAt(tone, kMiddleC);
+    check(magnitudeAt(tone, 2.0f * kMiddleC) < 0.01f * fundamental, "and nothing at twice it");
+    check(peak(tone) > 0.9f && peak(tone) < 1.1f, "at full level, " + std::to_string(peak(tone)));
+}
+
+void fmIndexAndRatioPlaceTheSidebands() {
+    std::printf("fm's index makes sidebands, and its ratio places them\n");
+    // Ratio 1: sidebands at every multiple of the note, so the second harmonic appears.
+    FmNode one;
+    holdFm(one, 1.0f, 3.0f, 20.0f);
+    const auto harmonic = voiceIdle(one, 400);
+    check(magnitudeAt(harmonic, 2.0f * kMiddleC) > 0.2f * magnitudeAt(harmonic, kMiddleC),
+          "at ratio 1 an index puts energy at twice the note");
+
+    // Ratio 2: sidebands at f +- 2kf, which is odd multiples only -- 3f strong, 2f absent.
+    // A ratio that were ignored, or applied to the carrier, would fail one or the other.
+    FmNode two;
+    holdFm(two, 2.0f, 2.0f, 20.0f);
+    const auto odd = voiceIdle(two, 400);
+    const float base = magnitudeAt(odd, kMiddleC);
+    check(magnitudeAt(odd, 3.0f * kMiddleC) > 0.2f * base, "at ratio 2, three times the note");
+    check(magnitudeAt(odd, 2.0f * kMiddleC) < 0.01f * base, "and nothing at twice it");
+}
+
+void fmBrightnessFallsFasterThanLoudness() {
+    std::printf("fm's brightness falls faster than its loudness\n");
+    FmNode fm;
+    holdFm(fm, 1.0f, 4.0f, 0.1f); // a tenth of a second
+    const auto early = voiceIdle(fm, 20);
+    voiceIdle(fm, kRate / kBlockSize); // a second later
+    const auto late = voiceIdle(fm, 20);
+    const float earlyRatio = magnitudeAt(early, 2.0f * kMiddleC) / magnitudeAt(early, kMiddleC);
+    const float lateRatio = magnitudeAt(late, 2.0f * kMiddleC) / magnitudeAt(late, kMiddleC);
+    check(earlyRatio > 0.3f, "bright when struck, " + std::to_string(earlyRatio));
+    check(lateRatio < 0.02f, "mellow a second on, " + std::to_string(lateRatio));
+    check(peak(late) > 0.9f, "and still as loud, held at full sustain");
+}
+
 void anLfoStaysInsideItsRangeAtItsRate() {
     std::printf("an lfo stays inside its range, at its rate\n");
     for (int wave = 0; wave < 4; ++wave) {
@@ -1426,6 +1503,9 @@ int main() {
     aPluckSoundsItsNoteAtItsPitch();
     aPluckRingsOutWhileHeld();
     aPluckIsLetGoOverItsRelease();
+    fmWithNoIndexIsASine();
+    fmIndexAndRatioPlaceTheSidebands();
+    fmBrightnessFallsFasterThanLoudness();
     anLfoStaysInsideItsRangeAtItsRate();
     aDroneHoldsItsNoteWithTheTransportStopped();
     aDroneSoundsSeveralCellsAtOnce();
