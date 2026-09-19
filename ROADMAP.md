@@ -2275,6 +2275,64 @@ came back with the three notes level and their sidebands gone after a few second
 dusty red (`A46868`) -- still nearest the gray audio cable by 16 points. The family is now
 "steel blues, grays and warm grays".
 
+### SF, a SoundFont player
+
+**Built overnight 2026-09-18.** TinySoundFont (MIT, one header, vendored with no edits) plays
+GeneralUser GS, shipped in the APK's assets and read from there rather than copied out --
+32MB, and the APK is 62MB now. Files the user drops into `soundfonts`, beside `scales` and
+`groups`, are listed after it. The panel has one knob, `level`; the instrument is chosen
+from a chip in the header that names it and opens a page of tiles -- the fonts along the
+top when there is more than one, the presets below, scrolled by dragging in whole rows,
+numbered from 1 as GM charts are. The preset is stored as `bank * 128 + program`, so a patch
+moved to another bank asks it for the same GM instrument; one the bank lacks plays its first.
+The module's font is a name on the module (`"font"` in the file, like `"name"`), never
+null on an SF so a patch keeps the bank it was made with if the shipped one changes.
+
+- **Pitch is ours, not MIDI's.** Each note gets a channel of its own and plays on the
+  nearest key, and the channel's tuning -- fractional semitones -- carries the rest, so a
+  19-TET degree sounds where it should and a Change glides the channel (a block at a time,
+  over the usual 30ms). Sixteen channels, the one released longest ago reused first, since
+  a releasing tail takes the next note's tuning.
+- **Nothing it does on the audio thread allocates**, which TinySoundFont does lazily by
+  default: its voices are preallocated and capped (64, since a note can layer regions), and
+  every channel is touched once when the node's synth is built. Built where? Not in the
+  node: a font loads in the background and seconds after the node exists. So the graph
+  grew a **Resource** -- anything built off the audio thread for a node, handed across by
+  pointer with `SetResource`, the replaced one returned through `collectGarbage` exactly as
+  a scale list is. Each SF node's synth is a `tsf_copy` sharing the one loaded bank; copies
+  are made and closed on the interface's thread, since TinySoundFont's reference count is a
+  plain int.
+- **A node keeps its notes while it has no font, and strikes them when one lands.** Found
+  on the emulator: a drone's chord, sent in the sync that made the node, reached it a
+  quarter of a second before its font, and a held chord is sent once -- so it was never
+  heard. Switching fonts re-strikes a held chord the same way.
+- **Fonts load when a module wants one**, not at launch, and stay loaded for the process.
+  GeneralUser GS parses in 184ms on the emulator (287 presets); on the phone it is not yet
+  measured. A second font costs its own ~60MB and is not freed when nothing plays it --
+  worth revisiting if anyone keeps several.
+- **The level is TinySoundFont's own**, measured rather than guessed: at 0dB one note peaks
+  from 0.4 (an electric piano) to 1.3 (a square lead), an Osc's range. 12dB was the guess
+  and peaked at 3.4.
+- **The bank is not in tune with itself**, which the tests learned the hard way: GeneralUser
+  GS's piano is stretched 12 cents sharp at C5 and its flute 6, and the organs sound an
+  octave down by design. Pitch tests use GM 81, the saw lead, within half a cent at both Cs,
+  so what they find wrong is the node's. TinySoundFont also skips SoundFont modulators,
+  which GeneralUser uses heavily, so some presets will not sound as their author voiced them.
+- Tested on the host against the shipped bank: it loads with its piano and drum kits; a
+  note and a quarter tone land within 5 cents; a Change glides; an Off lets go; a note held
+  before the font arrives sounds once it does; replacing a synth hands the old one back
+  (ASan would call a dropped one a leak). GraphSync hands a node its font once both exist,
+  again after a font change or an engine restart, and to nothing that is not an SF. Each
+  mutation-checked. On the emulator: the page opened, scrolled, chose Nylon Guitar into the
+  file, switched to a second bank and handed the node its new synth; a C-E-G through the
+  piano was captured.
+- UBSan reported a left shift of a negative number inside TinySoundFont's parser on every
+  load. Defined behavior in C++20 and on every compiler here; the host build compiles
+  vendored code with `-fno-sanitize=shift` rather than editing upstream.
+
+**Still to do:** after switching fonts the page opens at the top rather than at the
+current instrument, since the new bank's list is not loaded when the choice is made.
+
 **Found on the way:** CLAUDE.md said `NodeType` mirroring the C++ enum was asserted. It was
 not -- only that Kotlin's ids were distinct. A test now reads the enum out of `nodes.h` and
 compares, and fails on a wrong id; worth having before six more modules each edit two

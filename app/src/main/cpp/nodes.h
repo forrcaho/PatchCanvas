@@ -36,6 +36,7 @@ enum class NodeType : int32_t {
     Drone = 12,
     Pluck = 13,
     Fm = 14,
+    Sf = 15,
 };
 
 /**

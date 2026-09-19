@@ -112,6 +112,7 @@ fun Patch.replaceWith(source: Patch): Set<Long> {
             val copy = PatchModule(from.id, from.type, from.position, ports)
             copy.parent = from.parent
             copy.name = from.name
+            copy.font = from.font
             from.params.forEachIndexed { index, value -> copy.setParam(index, value) }
             from.steps.forEachIndexed { index, step -> copy.setStep(index, step) }
             // Before the cables below, which include any landing on these parameters.
@@ -166,6 +167,7 @@ private fun Patch.changesFrom(source: Patch): Set<Long> {
         if (was.position != now.position ||
             was.parent != now.parent ||
             was.name != now.name ||
+            was.font != now.font ||
             was.params.toList() != now.params.toList() ||
             was.steps.toList() != now.steps.toList() ||
             was.modRanges != now.modRanges

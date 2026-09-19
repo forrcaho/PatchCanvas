@@ -1,5 +1,7 @@
 #include "nodes.h"
 
+#include "soundfont.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -770,6 +772,7 @@ Node *makeNode(NodeType type) {
         case NodeType::Osc: return new OscNode();
         case NodeType::Pluck: return new PluckNode();
         case NodeType::Fm: return new FmNode();
+        case NodeType::Sf: return new SfNode();
         case NodeType::Lfo: return new LfoNode();
         case NodeType::Drone: return new DroneNode();
         case NodeType::Out: return new OutNode();

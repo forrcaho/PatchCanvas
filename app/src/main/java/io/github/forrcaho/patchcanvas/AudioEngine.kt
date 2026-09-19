@@ -80,6 +80,31 @@ object AudioEngine {
         available && started && nativeSetStep(id, index, degree, gate)
 
     /**
+     * Parses a SoundFont and returns its handle, or 0 if it is not one this build reads.
+     *
+     * Needs the library but not a running stream: fonts outlive the engine's starts and
+     * stops, and are loaded on a background thread before any node wants one.
+     */
+    fun loadSoundFont(bytes: ByteArray): Long = if (available) nativeLoadSoundFont(bytes) else 0L
+
+    /** A loaded font's instruments. */
+    fun soundFontPresets(handle: Long): List<SoundFontPreset> =
+        if (!available || handle == 0L) emptyList()
+        else nativeSoundFontPresets(handle).mapNotNull { entry ->
+            val parts = entry.split('\t', limit = 3)
+            if (parts.size < 3) null
+            else SoundFontPreset(parts[0].toIntOrNull() ?: return@mapNotNull null,
+                parts[1].toIntOrNull() ?: return@mapNotNull null, parts[2].trim())
+        }
+
+    /**
+     * Gives SF node [id] a synth over font [handle]. The synth is built natively on this
+     * thread -- it allocates -- and only its pointer crosses.
+     */
+    fun setNodeFont(id: Long, handle: Long): Boolean =
+        available && started && handle != 0L && nativeSetNodeFont(id, handle)
+
+    /**
      * The patch's scales, in order, with each entry's length in beats.
      *
      * Flattened into arrays because that is what JNI copies cheaply. The engine builds its
@@ -220,6 +245,9 @@ object AudioEngine {
         roots: FloatArray,
     ): Boolean
     private external fun nativeScaleEntry(): Int
+    private external fun nativeLoadSoundFont(bytes: ByteArray): Long
+    private external fun nativeSoundFontPresets(handle: Long): Array<String>
+    private external fun nativeSetNodeFont(id: Long, handle: Long): Boolean
     private external fun nativeStepOf(id: Long): Int
     private external fun nativeParamOf(id: Long, index: Int): Float
     private external fun nativeSetTempo(bpm: Float): Boolean

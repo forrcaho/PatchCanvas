@@ -1,9 +1,11 @@
 #include <jni.h>
 
 #include <algorithm>
+#include <string>
 
 #include "audio_engine.h"
 #include "nodes.h"
+#include "soundfont.h"
 
 namespace {
 
@@ -188,6 +190,53 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetScales(JNIEnv *env, job
     env->ReleaseFloatArrayElements(roots, r, JNI_ABORT);
 
     return engine().graph().postSetScales(list) ? JNI_TRUE : JNI_FALSE;
+}
+
+/**
+ * Parses a SoundFont, off the UI thread -- the interface calls this from its IO
+ * dispatcher, since it converts every sample to float. The handle is the SoundFont itself,
+ * kept for the life of the process.
+ */
+JNIEXPORT jlong JNICALL
+Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeLoadSoundFont(JNIEnv *env, jobject,
+                                                                    jbyteArray data) {
+    const jsize size = env->GetArrayLength(data);
+    jbyte *bytes = env->GetByteArrayElements(data, nullptr);
+    if (bytes == nullptr) return 0;
+    SoundFont *font = SoundFont::load(bytes, size);
+    env->ReleaseByteArrayElements(data, bytes, JNI_ABORT);
+    return reinterpret_cast<jlong>(font);
+}
+
+/** "bank<TAB>program<TAB>name" per preset, in the font's own order. */
+JNIEXPORT jobjectArray JNICALL
+Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSoundFontPresets(JNIEnv *env, jobject,
+                                                                       jlong handle) {
+    auto *font = reinterpret_cast<SoundFont *>(handle);
+    const int32_t count = font != nullptr ? font->presetCount() : 0;
+    jobjectArray out = env->NewObjectArray(count, env->FindClass("java/lang/String"), nullptr);
+    for (int32_t i = 0; i < count; ++i) {
+        std::string entry = std::to_string(font->presetBank(i)) + "\t" +
+                            std::to_string(font->presetProgram(i)) + "\t";
+        // Names are fixed 20-byte fields in the file; anything not ASCII is dropped rather
+        // than handed to NewStringUTF, which takes modified UTF-8 and nothing else.
+        for (const char *c = font->presetName(i); c != nullptr && *c != 0; ++c) {
+            if (static_cast<unsigned char>(*c) >= 32 && static_cast<unsigned char>(*c) < 127) entry += *c;
+        }
+        jstring text = env->NewStringUTF(entry.c_str());
+        env->SetObjectArrayElement(out, i, text);
+        env->DeleteLocalRef(text);
+    }
+    return out;
+}
+
+/** Builds SF node [id] a synth over font [handle], here, and hands it across. */
+JNIEXPORT jboolean JNICALL
+Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetNodeFont(JNIEnv *, jobject, jlong id,
+                                                                  jlong handle) {
+    auto *font = reinterpret_cast<SoundFont *>(handle);
+    if (font == nullptr) return JNI_FALSE;
+    return engine().graph().postSetResource(id, new SoundFontSynth(*font)) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jint JNICALL

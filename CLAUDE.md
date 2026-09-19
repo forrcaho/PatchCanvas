@@ -75,6 +75,7 @@ being edited out from under it.
 | `PatchCanvas.kt` | model, camera, gestures, drawing, panel — the bulk of the UI |
 | `GraphSync.kt` | the diff, `NodeType` mirror, `GraphCommands` seam for tests |
 | `PatchStore.kt` | JSON persistence, hand-rolled on `org.json` |
+| `SoundFontStore.kt` | the fonts: the shipped bank in assets, the user's in `soundfonts`, loaded on demand |
 | `GroupStore.kt` | the group library: a saved group is a patch file holding one group |
 | `History.kt` | undo as a stack of serialized patches, plus `Patch.replaceWith` |
 | `Scale.kt` | the tuning model: degrees in octaves, with a period |
@@ -84,6 +85,7 @@ being edited out from under it.
 | `transport.h` | musical time: one position every clocked node divides, header-only |
 | `scales.h` | scale tables and the looping scale list; where a degree becomes a pitch |
 | `nodes.{h,cpp}` | the module set, DaisySP-backed |
+| `soundfont.{h,cpp}` | the SF node over TinySoundFont; a SoundFont loaded once and shared |
 | `poly.h` | `PolySynth`: voice allocation, stealing, glides -- every synth but its sound |
 | `audio_engine.{h,cpp}` | Oboe streams, ADPF, debug capture |
 
@@ -174,6 +176,12 @@ the project has left it: CV and gate are now *modulation* and *pulse*, which are
 voltages and do not interchange, so `patchesTo` is like-to-like and a mismatch is refused.
 Audio-rate modulation does not need the loophole — a module that wants it declares an
 audio input, and `MODULATION` is applied once per block and could not carry it anyway.
+
+**Anything a node needs that is too big to build on the audio thread is a `Resource`**,
+built on the interface's thread and handed across with `postSetResource`; what it replaces
+comes back through `collectGarbage`, as a scale list does. An SF node's synth is the first:
+its font loads in the background, so the node exists before its synth and must keep the
+notes it is sent in the meantime.
 
 **Every synth is polyphonic, and shares one voice engine.** A synth is a `Voice` inside
 `PolySynth` (`poly.h`), which owns allocation, stealing, Off-by-source-and-id, glides and

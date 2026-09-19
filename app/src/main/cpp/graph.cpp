@@ -92,6 +92,18 @@ bool Graph::postSetScales(ScaleList *list) {
     return true;
 }
 
+bool Graph::postSetResource(int64_t id, Resource *resource) {
+    Command cmd;
+    cmd.type = CommandType::SetResource;
+    cmd.id = id;
+    cmd.resource = resource;
+    if (!commands_.push(cmd)) {
+        delete resource;
+        return false;
+    }
+    return true;
+}
+
 int32_t Graph::scaleEntry() const {
     return scaleEntry_.load(std::memory_order_relaxed);
 }
@@ -163,6 +175,10 @@ void Graph::collectGarbage() {
     while (retiredScales_.pop(replaced)) {
         delete replaced;
     }
+    Resource *retired = nullptr;
+    while (retiredResources_.pop(retired)) {
+        delete retired;
+    }
 }
 
 void Graph::reset() {
@@ -171,6 +187,7 @@ void Graph::reset() {
     while (commands_.pop(cmd)) {
         if (cmd.type == CommandType::Add) delete cmd.node;
         if (cmd.type == CommandType::SetScales) delete cmd.scales;
+        if (cmd.type == CommandType::SetResource) delete cmd.resource;
     }
     // Resent by the interface on the next start, like everything else the graph held.
     delete scales_;
@@ -516,6 +533,16 @@ void Graph::applyCommands() {
                 if (scales_ != nullptr) retiredScales_.push(scales_);
                 scales_ = cmd.scales;
                 break;
+            case CommandType::SetResource: {
+                // The node takes it and gives back what it had; a node that is gone gives
+                // back what it was offered. Leaks if the return queue is full, the trade
+                // SetScales makes rather than freeing here.
+                const int32_t slot = indexOf(cmd.id);
+                Resource *back = slot >= 0 ? nodes_[slot].node->swapResource(cmd.resource)
+                                           : cmd.resource;
+                if (back != nullptr) retiredResources_.push(back);
+                break;
+            }
             case CommandType::SetTempo:
                 transport_.setTempo(cmd.value);
                 break;

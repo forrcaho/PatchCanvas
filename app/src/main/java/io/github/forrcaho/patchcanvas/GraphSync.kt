@@ -24,7 +24,8 @@ enum class NodeType(val id: Int) {
     Lfo(11),
     Drone(12),
     Pluck(13),
-    Fm(14);
+    Fm(14),
+    Sf(15);
 
     companion object {
         fun of(type: ModuleType): NodeType = when (type.name) {
@@ -39,6 +40,7 @@ enum class NodeType(val id: Int) {
             "Drone" -> Drone
             "Pluck" -> Pluck
             "FM" -> Fm
+            "SF" -> Sf
             else -> Unknown
         }
     }
@@ -75,6 +77,8 @@ interface GraphCommands {
     fun setScales(entries: List<ScaleEntry>, beatsPerBar: Int)
     /** The transport's rate, in beats per minute. */
     fun setTempo(bpm: Float)
+    /** Gives SF node [id] a synth over the loaded font [font], a native handle. */
+    fun setFont(id: Long, font: Long)
     fun collectGarbage()
 }
 
@@ -151,6 +155,11 @@ object EngineCommands : GraphCommands {
         AudioEngine.setTempo(bpm)
     }
 
+    override fun setFont(id: Long, font: Long) {
+        trace { "font $id = $font" }
+        AudioEngine.setNodeFont(id, font)
+    }
+
     override fun collectGarbage() { AudioEngine.collectGarbage() }
 }
 
@@ -175,6 +184,7 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
     private var syncedScales: List<ScaleEntry>? = null
     private var syncedBeatsPerBar: Int? = null
     private var syncedTempo: Float? = null
+    private var syncedFonts = emptyMap<Long, Long>()
 
     /** Forget what the engine has, so the next sync re-sends everything. */
     fun invalidate() {
@@ -186,9 +196,15 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
         syncedScales = null
         syncedBeatsPerBar = null
         syncedTempo = null
+        syncedFonts = emptyMap()
     }
 
-    fun sync(patch: Patch) {
+    /**
+     * [fonts] is which SoundFonts are loaded, by name, as native handles. An SF module whose
+     * font is not among them yet is sent nothing and stays silent; the sync after its font
+     * lands hands it over.
+     */
+    fun sync(patch: Patch, fonts: Map<String, Long> = emptyMap()) {
         // The patch flattened: groups and their rails are not nodes, and a cable through a
         // group's ports arrives as the one cable it stands for. So grouping modules that are
         // already playing sends the engine nothing at all.
@@ -257,6 +273,16 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
             }
         }
 
+        // A font before the knobs, though either order sounds the same: the node applies
+        // its preset whenever either arrives. Resent to a node that was just made, and to
+        // one whose font changed or has only now finished loading.
+        val wanted = sounding.filter { it.type == Types.Sf }
+            .mapNotNull { m -> fonts[m.font ?: DEFAULT_SOUNDFONT]?.let { m.id to it } }
+            .toMap()
+        wanted.forEach { (id, handle) ->
+            if (id in fresh || syncedFonts[id] != handle) commands.setFont(id, handle)
+        }
+
         // Knobs last, and every knob of a node that was just added: the engine's node
         // starts at its own C++ defaults, which are not required to agree with the ones
         // declared here, and a patch loaded from disk has values for all of them.
@@ -305,6 +331,7 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
         syncedScales = patch.scales
         syncedBeatsPerBar = patch.beatsPerBar
         syncedTempo = patch.tempo
+        syncedFonts = wanted
 
         // Whatever the audio thread retired during the last block is ours to free.
         commands.collectGarbage()

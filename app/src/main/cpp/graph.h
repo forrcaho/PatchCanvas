@@ -101,6 +101,13 @@ public:
      * back through collectGarbage. Freed here if it cannot be queued.
      */
     bool postSetScales(ScaleList *list);
+    /**
+     * Hands node [id] a [resource] built off the audio thread, which the graph owns from
+     * here. Whatever it replaces -- or the resource itself, if the node is gone or has no use
+     * for it -- comes back through collectGarbage, as a replaced scale list does. Freed here
+     * if it cannot be queued.
+     */
+    bool postSetResource(int64_t id, Resource *resource);
     /** Which scale is sounding, published once per block for the interface. */
     int32_t scaleEntry() const;
     /**
@@ -154,7 +161,7 @@ public:
 private:
     enum class CommandType : int32_t {
         Add, Remove, Connect, Disconnect, SetParam, SetStep, SetTempo, ResetTransport,
-        SetScales, SetModRange, ConnectMod, DisconnectMod,
+        SetScales, SetModRange, ConnectMod, DisconnectMod, SetResource,
     };
 
     struct Command {
@@ -176,6 +183,8 @@ private:
         int32_t degree = 0;
         /** SetScales only: the list to swap in. */
         ScaleList *scales = nullptr;
+        /** SetResource only: what the node takes. */
+        Resource *resource = nullptr;
     };
 
     /**
@@ -359,4 +368,5 @@ private:
     SpscQueue<Command, kCommandCapacity> commands_;
     SpscQueue<Node *, kCommandCapacity> garbage_;
     SpscQueue<ScaleList *, 16> retiredScales_;
+    SpscQueue<Resource *, 64> retiredResources_;
 };

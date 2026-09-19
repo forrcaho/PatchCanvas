@@ -9,8 +9,12 @@
 #include <string>
 #include <vector>
 #include <cstdio>
+#include <fstream>
+#include <iterator>
+#include <memory>
 
 #include "nodes.h"
+#include "soundfont.h"
 #include "test_support.h"
 
 using testing::check;
@@ -1275,6 +1279,126 @@ void fmBrightnessFallsFasterThanLoudness() {
     check(peak(late) > 0.9f, "and still as loud, held at full sustain");
 }
 
+/**
+ * The bank the app ships, loaded once for every SF test: parsing it is most of a second
+ * under the sanitizers. Null if the file is not where the build keeps it.
+ */
+const SoundFont *shippedBank() {
+    static std::unique_ptr<SoundFont> bank = [] {
+        std::ifstream in("src/main/assets/soundfonts/GeneralUser GS.sf2", std::ios::binary);
+        std::vector<char> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        return std::unique_ptr<SoundFont>(
+                bytes.empty() ? nullptr : SoundFont::load(bytes.data(), static_cast<int32_t>(bytes.size())));
+    }();
+    return bank.get();
+}
+
+/** An SF node playing [program] of bank 0 from the shipped bank. */
+void readySf(SfNode &sf, int32_t program) {
+    sf.prepare(kRate);
+    sf.setParam(0, static_cast<float>(program));
+    Resource *none = sf.swapResource(new SoundFontSynth(*shippedBank()));
+    check(none == nullptr, "a fresh node had no synth to give back");
+}
+
+/**
+ * GM 81, the sawtooth lead, for anything measuring pitch. A bank's presets are not all in
+ * tune with themselves -- in GeneralUser GS the piano is stretched 12 cents sharp at C5 and
+ * the flute 6 -- and this one is within half a cent at both Cs, so what a test finds wrong is
+ * the node's and not the bank's. The flute was tried first and read 5 cents flat.
+ */
+constexpr int32_t kLead = 81;
+
+void theShippedBankLoadsWithItsPresets() {
+    std::printf("the shipped bank loads, with its presets\n");
+    const SoundFont *bank = shippedBank();
+    check(bank != nullptr, "GeneralUser GS parses");
+    if (bank == nullptr) return;
+    check(bank->presetCount() > 200, "with its instruments, " + std::to_string(bank->presetCount()));
+    bool piano = false, drums = false;
+    for (int32_t i = 0; i < bank->presetCount(); ++i) {
+        if (bank->presetBank(i) == 0 && bank->presetProgram(i) == 0) piano = true;
+        if (bank->presetBank(i) == 128) drums = true;
+    }
+    check(piano, "program 0 of bank 0 is there, which is what a new SF plays");
+    check(drums, "and the drum kits, in bank 128");
+    const char junk[] = "RIFF....not a soundfont";
+    check(SoundFont::load(junk, sizeof(junk)) == nullptr, "and anything else is refused");
+}
+
+void anSfPlaysItsNoteInTune() {
+    std::printf("an sf plays its note in tune, a quarter tone included\n");
+    if (shippedBank() == nullptr) return;
+    const float cents[2] = {0.0f, 50.0f};
+    for (float c : cents) {
+        SfNode sf;
+        readySf(sf, kLead);
+        NoteEvent note = noteOn(1, 12); // an octave above middle C
+        note.cents = c;
+        play(sf, note);
+        voiceIdle(sf, 100); // past the attack
+        const auto tone = voiceIdle(sf, 300);
+        const float wanted = 2.0f * kMiddleC * std::exp2(c / 1200.0f);
+        const float heard = pitchOf(tone);
+        // A quarter tone is between two keys, so this is the channel's tuning at work: the
+        // path every non-12 scale takes.
+        check(std::fabs(1200.0f * std::log2(heard / wanted)) < 5.0f,
+              "at " + std::to_string(wanted) + "Hz, heard " + std::to_string(heard));
+        check(peak(tone) > 0.1f && peak(tone) < 1.5f, "at a level beside an Osc's, " + std::to_string(peak(tone)));
+    }
+}
+
+void anSfGlidesAndLetsGo() {
+    std::printf("an sf glides a held note, and lets it go\n");
+    if (shippedBank() == nullptr) return;
+    SfNode sf;
+    readySf(sf, kLead);
+    play(sf, noteOn(1, 12));
+    voiceIdle(sf, 100);
+    NoteEvent move = noteOn(1, 16);
+    move.kind = NoteKind::Change;
+    play(sf, move);
+    voiceIdle(sf, 100); // well past the 30ms glide
+    const float wanted = 2.0f * kMiddleC * std::exp2(4.0f / 12.0f);
+    const float heard = pitchOf(voiceIdle(sf, 300));
+    check(std::fabs(1200.0f * std::log2(heard / wanted)) < 5.0f,
+          "a Change moves it to " + std::to_string(wanted) + "Hz, heard " + std::to_string(heard));
+    check(sf.notesHeld() == 1, "and it is still the one note");
+
+    play(sf, noteOff(1));
+    check(sf.notesHeld() == 0, "an off lets it go");
+    check(peak(voiceAfter(sf, 3 * kRate / kBlockSize)) < 0.001f, "and it falls silent");
+}
+
+void anSfWithoutItsFontIsSilent() {
+    std::printf("an sf without its font is silent, and takes one later\n");
+    SfNode sf;
+    sf.prepare(kRate);
+    sf.setParam(0, static_cast<float>(kLead));
+    play(sf, noteOn(1, 12));
+    check(peak(voiceIdle(sf, 20)) == 0.0f, "silent while the font loads");
+    if (shippedBank() == nullptr) return;
+
+    // The note it was sent before its font is struck when the font arrives: a drone's
+    // chord is sent once, and a node that dropped it would stay silent until retoggled.
+    delete sf.swapResource(new SoundFontSynth(*shippedBank()));
+    voiceIdle(sf, 100);
+    const float heard = pitchOf(voiceIdle(sf, 300));
+    check(std::fabs(1200.0f * std::log2(heard / (2.0f * kMiddleC))) < 5.0f,
+          "a note held before the font sounds once it lands, heard " + std::to_string(heard));
+    play(sf, noteOff(1));
+    voiceIdle(sf, 3 * kRate / kBlockSize);
+    // Swapping in a synth hands back the one it replaces, for the graph to free off the
+    // audio thread. Under ASan a dropped one is a leak, and a double free a crash.
+    delete sf.swapResource(new SoundFontSynth(*shippedBank()));
+    Resource *old = sf.swapResource(new SoundFontSynth(*shippedBank()));
+    check(old != nullptr, "a second synth gives the first back");
+    delete old;
+    sf.setParam(0, static_cast<float>(kLead));
+    play(sf, noteOn(2, 0));
+    check(peak(voiceIdle(sf, 200)) > 0.05f, "and sounds once it has one");
+}
+
 void anLfoStaysInsideItsRangeAtItsRate() {
     std::printf("an lfo stays inside its range, at its rate\n");
     for (int wave = 0; wave < 4; ++wave) {
@@ -1506,6 +1630,10 @@ int main() {
     fmWithNoIndexIsASine();
     fmIndexAndRatioPlaceTheSidebands();
     fmBrightnessFallsFasterThanLoudness();
+    theShippedBankLoadsWithItsPresets();
+    anSfPlaysItsNoteInTune();
+    anSfGlidesAndLetsGo();
+    anSfWithoutItsFontIsSilent();
     anLfoStaysInsideItsRangeAtItsRate();
     aDroneHoldsItsNoteWithTheTransportStopped();
     aDroneSoundsSeveralCellsAtOnce();

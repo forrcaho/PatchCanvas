@@ -22,6 +22,7 @@ private sealed interface Cmd {
     ) : Cmd
     data class ConnectMod(val src: Long, val srcPort: Int, val dst: Long, val index: Int) : Cmd
     data class DisconnectMod(val src: Long, val srcPort: Int, val dst: Long, val index: Int) : Cmd
+    data class SetFont(val id: Long, val font: Long) : Cmd
 }
 
 private class Recorder : GraphCommands {
@@ -49,6 +50,7 @@ private class Recorder : GraphCommands {
         )
     }
     override fun setTempo(bpm: Float) { log += Cmd.SetTempo(bpm) }
+    override fun setFont(id: Long, font: Long) { log += Cmd.SetFont(id, font) }
     override fun setModRange(id: Long, index: Int, low: Float, high: Float, exponential: Boolean) {
         log += Cmd.SetModRange(id, index, low, high, exponential)
     }
@@ -606,8 +608,14 @@ class SteppedParamTest {
     private val wave = Types.Osc.params.first { it.name == "wave" }
     private val len = Types.Steps.params.first { it.name == "len" }
 
+    /**
+     * Every stepped parameter a finger drags or taps along a row. Not an SF's preset, which
+     * is stepped only because it is a whole number: it has no row and no travel, and is
+     * chosen from a page of names.
+     */
     private fun stepped() =
-        Types.byName.values.flatMap { it.params }.filter { it.curve == ParamCurve.STEPPED }
+        Types.byName.values.flatMap { it.params }
+            .filter { it.curve == ParamCurve.STEPPED && it.choice != Choice.PRESET }
 
     @Test
     fun `the option count is the span plus one`() {
@@ -1094,5 +1102,80 @@ class ModulationSyncTest {
         sync.invalidate()
         sync.sync(patch)
         assertTrue(Cmd.SetModRange(filter.id, 0, 400f, 2000f, true) in rec.log)
+    }
+}
+
+/**
+ * An SF module is handed its font by the sync after both exist: the module, and the font
+ * finished loading. Loading takes seconds, so the two arrive in either order, and a font
+ * that is never sent is a module that never makes a sound -- silently, like every other
+ * thing this flow once forgot to send.
+ */
+class SoundFontSyncTest {
+
+    private val bank = 0x5F0L
+    private val other = 0x6F0L
+
+    private fun sfPatch(): Pair<Patch, PatchModule> {
+        val patch = Patch()
+        val sf = patch.add(Types.Sf, Offset.Zero)!!
+        return patch to sf
+    }
+
+    @Test
+    fun `a new SF plays the default bank, and is sent it once it has loaded`() {
+        val (patch, sf) = sfPatch()
+        assertEquals(DEFAULT_SOUNDFONT, sf.font)
+
+        val rec = Recorder()
+        val sync = GraphSync(rec)
+        sync.sync(patch)
+        assertTrue("nothing to send while the font loads", rec.log.none { it is Cmd.SetFont })
+
+        rec.log.clear()
+        sync.sync(patch, mapOf(DEFAULT_SOUNDFONT to bank))
+        assertEquals(listOf(Cmd.SetFont(sf.id, bank)), rec.log.filterIsInstance<Cmd.SetFont>())
+
+        rec.log.clear()
+        sync.sync(patch, mapOf(DEFAULT_SOUNDFONT to bank))
+        assertTrue("and not again", rec.log.isEmpty())
+    }
+
+    @Test
+    fun `a font already loaded goes with the node that is added`() {
+        val (patch, sf) = sfPatch()
+        val rec = Recorder()
+        GraphSync(rec).sync(patch, mapOf(DEFAULT_SOUNDFONT to bank))
+        val add = rec.log.indexOf(Cmd.Add(sf.id, NodeType.Sf))
+        val font = rec.log.indexOf(Cmd.SetFont(sf.id, bank))
+        assertTrue("added, then given its font", add >= 0 && font > add)
+    }
+
+    @Test
+    fun `changing the font sends the new one, and a restart sends it again`() {
+        val (patch, sf) = sfPatch()
+        val rec = Recorder()
+        val sync = GraphSync(rec)
+        val fonts = mapOf(DEFAULT_SOUNDFONT to bank, "Other" to other)
+        sync.sync(patch, fonts)
+
+        rec.log.clear()
+        sf.font = "Other"
+        sync.sync(patch, fonts)
+        assertEquals(listOf(Cmd.SetFont(sf.id, other)), rec.log.filterIsInstance<Cmd.SetFont>())
+
+        // The engine restarting forgets every node, and its synth with it.
+        rec.log.clear()
+        sync.invalidate()
+        sync.sync(patch, fonts)
+        assertEquals(listOf(Cmd.SetFont(sf.id, other)), rec.log.filterIsInstance<Cmd.SetFont>())
+    }
+
+    @Test
+    fun `nothing but an SF is sent a font`() {
+        val patch = demoPatch()
+        val rec = Recorder()
+        GraphSync(rec).sync(patch, mapOf(DEFAULT_SOUNDFONT to bank))
+        assertTrue(rec.log.none { it is Cmd.SetFont })
     }
 }

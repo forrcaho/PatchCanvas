@@ -199,7 +199,7 @@ enum class ParamCurve { LINEAR, EXPONENTIAL, STEPPED }
  * reading it needs no translation from the word "saw". DIVISION is a note length from
  * [INTERVALS], and the one choice a panel shows in its header rather than as a row.
  */
-enum class Choice { NUMBER, WAVE, DIVISION }
+enum class Choice { NUMBER, WAVE, DIVISION, PRESET }
 
 data class Param(
     val name: String,
@@ -556,6 +556,25 @@ object Types {
             Param("R", 0.001f, 10f, 0.4f, "s", EXP),
         ),
     )
+    /**
+     * A SoundFont player: notes in, one instrument of a bank out.
+     *
+     * The instrument is chosen from a page opened by the chip in the panel's header, as a
+     * sequencer's interval is, and stored as bank * 128 + program -- a GM number, so a
+     * patch moved to another bank asks it for the same instrument. Which bank is the
+     * module's [PatchModule.font]. Order mirrors SfNode::setParam.
+     */
+    val Sf = ModuleType(
+        "SF", listOf(Port("notes", N)), listOf(Port("out", A)),
+        Color(0xFF00849C),
+        params = listOf(
+            Param(
+                "preset", 0f, (129 * 128 - 1).toFloat(), 0f,
+                curve = STEP, choice = Choice.PRESET, header = true,
+            ),
+            Param("level", 0f, 2f, 1f, "", LIN, short = "lvl"),
+        ),
+    )
     val Mix = ModuleType(
         "Mix",
         listOf(Port("a", A), Port("b", A), Port("c", A), Port("d", A)),
@@ -592,7 +611,7 @@ object Types {
      * inputs as you like, since each input stores its own source. Only summing ever
      * needed a module, and that is Mix.
      */
-    val palette = listOf(Osc, Pluck, Fm, Drone, Steps, Filter, Env, Lfo, Mix)
+    val palette = listOf(Osc, Pluck, Fm, Sf, Drone, Steps, Filter, Env, Lfo, Mix)
 
     /**
      * Modules collapsed into one box. Its ports are its own rather than its type's -- they
@@ -706,6 +725,13 @@ class PatchModule(
 
     /** The name to draw: the given one, or the type's. */
     val title: String get() = name ?: type.name
+
+    /**
+     * Which SoundFont an SF module plays, by the name the library lists it under; null on
+     * everything else. A name rather than a handle, so the file says what it was saved with
+     * and a patch opened where that font is missing says so rather than guessing.
+     */
+    var font by mutableStateOf<String?>(null)
 
     /** Knob values in real units, one per declared parameter, starting at their defaults. */
     val params: SnapshotStateList<Float> =
@@ -1322,6 +1348,39 @@ private fun DrawScope.drawChip(
     }
 }
 
+/** An SF panel's page: the fonts along the top when there is a choice, the instruments below. */
+private fun DrawScope.drawPresetPage(panel: Rect, d: Float, sf: SfView, code: Int, measurer: TextMeasurer) {
+    val body = panelBody(panel, d)
+    drawRect(color = PanelScrim, topLeft = body.topLeft, size = body.size)
+    val page = presetPage(panel, d, sf.fonts.size, sf.fontScale)
+    page.fonts.forEachIndexed { i, rect ->
+        drawChip(rect, d, sf.fonts[i], sf.fonts[i] == sf.fontName, scaleAccent, measurer)
+    }
+    val presets = sf.font?.presets.orEmpty()
+    if (presets.isEmpty()) {
+        val note = measurer.measure(
+            if (sf.failed) "${sf.fontName} is not a SoundFont this can read" else "Loading ${sf.fontName}\u2026",
+            PanelParamStyle,
+        )
+        drawText(note, topLeft = page.area.center - Offset(note.size.width / 2f, note.size.height / 2f))
+        return
+    }
+    page.tiles(presets.size, sf.scroll).forEach { (i, rect) ->
+        drawTile(rect, d, presets[i].name, presetDetail(presets[i]), presets[i].code == code, measurer)
+    }
+    // How far down the list the page is, in the margin to its right: 274 instruments and no
+    // sign of where you are among them would be a list you could only get lost in.
+    val max = page.maxScroll(presets.size)
+    if (max > 0) {
+        val track = Rect(page.area.right + 2f * d, page.area.top, page.area.right + 6f * d, page.area.bottom)
+        val shown = page.rows.toFloat() / (page.rows + max)
+        val thumbH = maxOf(track.height * shown, 24f * d)
+        val top = track.top + (track.height - thumbH) * sf.scroll / max
+        drawRoundRect(ChipEdge, track.topLeft, track.size, CornerRadius(2f * d, 2f * d))
+        drawRoundRect(scaleAccent, Offset(track.left, top), Size(track.width, thumbH), CornerRadius(2f * d, 2f * d))
+    }
+}
+
 /** A tile in a chooser: a name, and a quieter line of detail beneath it. */
 private fun DrawScope.drawTile(
     rect: Rect,
@@ -1369,6 +1428,114 @@ internal fun panelIntervalChip(panel: Rect, d: Float): Rect {
         Offset(panel.right - width - 14f * d, panel.top + (PatchModule.PANEL_HEADER * d - height) / 2f),
         Size(width, height),
     )
+}
+
+/**
+ * The chip in an SF panel's header that names its instrument and opens the page of them.
+ * Where a sequencer's interval chip sits, and wider: it holds a name, not "1/8".
+ */
+internal fun panelPresetChip(panel: Rect, d: Float): Rect {
+    val height = 28f * d
+    val width = PRESET_CHIP_W * d
+    return Rect(
+        Offset(panel.right - width - 14f * d, panel.top + (PatchModule.PANEL_HEADER * d - height) / 2f),
+        Size(width, height),
+    )
+}
+
+internal const val PRESET_CHIP_W = 240f
+internal const val PRESET_TILE_W = 188f
+internal const val PRESET_TILE_H = 44f
+/** The strip of fonts above the presets: one line of text, so shorter than a tile. */
+internal const val PRESET_STRIP_H = 34f
+
+/**
+ * An SF panel's page of instruments: a strip of fonts along the top when there is more
+ * than one to choose, and the presets beneath, row after row, scrolled by dragging.
+ *
+ * A bank holds hundreds -- GeneralUser GS has 274 -- so unlike the interval's page this one
+ * scrolls, in whole rows so a tile never sits half off the page.
+ */
+internal class PresetPage(
+    /** One per font, left to right. Empty when there is only one font. */
+    val fonts: List<Rect>,
+    /** Where the preset tiles go. */
+    val area: Rect,
+    val columns: Int,
+    /** How many rows are on the page at once. */
+    val rows: Int,
+    val tileW: Float,
+    val tileH: Float,
+    /** Between neighboring tiles, in px. */
+    val gap: Float,
+) {
+    /** How far the page can scroll, in rows, for [count] presets. */
+    fun maxScroll(count: Int): Int = maxOf(0, (count + columns - 1) / columns - rows)
+
+    /** The presets on the page at [scroll], as their index in the list and where each is drawn. */
+    fun tiles(count: Int, scroll: Int): List<Pair<Int, Rect>> {
+        val first = scroll.coerceIn(0, maxScroll(count)) * columns
+        return (first until minOf(count, first + rows * columns)).map { i ->
+            val at = i - first
+            i to Rect(
+                Offset(area.left + (at % columns) * tileW, area.top + (at / columns) * tileH),
+                Size(tileW - gap, tileH - gap),
+            )
+        }
+    }
+
+    /** The scroll that puts preset [index] on the page, as near the top as it can be. */
+    fun scrollTo(index: Int, count: Int): Int = (index / columns).coerceIn(0, maxScroll(count))
+}
+
+internal fun presetPage(panel: Rect, d: Float, fontCount: Int, fontScale: Float = 1f): PresetPage {
+    val body = panelBody(panel, d).deflate(10f * d)
+    // Two lines of text to a tile, in sp, so the tile grows with the text setting -- the
+    // reference device runs at 1.5 (see Frame.fontScale).
+    val tileH = PRESET_TILE_H * d * maxOf(1f, fontScale)
+    val strip = if (fontCount > 1) PRESET_STRIP_H * d * maxOf(1f, fontScale) + 6f * d else 0f
+    val fonts = if (fontCount > 1) {
+        val width = minOf(PRESET_TILE_W * d, body.width / fontCount)
+        (0 until fontCount).map { i ->
+            Rect(Offset(body.left + i * width, body.top), Size(width - 6f * d, strip - 6f * d))
+        }
+    } else {
+        emptyList()
+    }
+    val area = Rect(body.left, body.top + strip, body.right - 10f * d, body.bottom)
+    // As many columns as fit at the tile's width, then widened to fill the row: a gap at the
+    // right end is width a long name could have had.
+    val columns = maxOf(1, (area.width / (PRESET_TILE_W * d)).toInt())
+    val tileW = area.width / columns
+    return PresetPage(
+        fonts, area,
+        columns = columns,
+        rows = maxOf(1, (area.height / tileH).toInt()),
+        tileW = tileW, tileH = tileH, gap = 6f * d,
+    )
+}
+
+/** The preset parameter's index on an SF module. */
+internal const val SF_PRESET = 0
+
+/** What an SF panel draws beyond its knobs: its font, and whether its page is open and where. */
+internal class SfView(
+    val menu: Boolean,
+    val scroll: Int,
+    val fontName: String,
+    /** Null until the font has loaded, and for good if it could not be read. */
+    val font: LoadedFont?,
+    val failed: Boolean,
+    val fonts: List<String>,
+    /** The text setting, which the page's tiles grow with. */
+    val fontScale: Float = 1f,
+)
+
+/** How a preset is described on its tile: which program, counted from 1 as GM charts are. */
+internal fun presetDetail(preset: SoundFontPreset): String = when (preset.bank) {
+    0 -> "${preset.program + 1}"
+    128 -> "kit ${preset.program + 1}"
+    else -> "${preset.program + 1} \u00b7 bank ${preset.bank}"
 }
 
 /** Where each of [count] chooser tiles lands inside a panel's body. */
@@ -1650,6 +1817,9 @@ class Patch {
         if (type.pinned != null || type.structural) return null
         return PatchModule(nextId++, type, at).also {
             it.parent = scopeOrTop
+            // Said outright rather than left null to mean "the default", so a patch keeps
+            // the font it was made with if the bundled one ever changes.
+            if (type == Types.Sf) it.font = DEFAULT_SOUNDFONT
             modules.add(it)
         }
     }
@@ -1778,6 +1948,7 @@ class Patch {
         else -> add(module.type, module.position + Offset(28f, 28f))?.also {
             it.parent = module.parent
             it.name = module.name
+            it.font = module.font
         }
     }
 
@@ -1823,6 +1994,7 @@ class Patch {
             val where = if (from.id == group.id) at else from.position
             val copy = PatchModule(newId.getValue(from.id), from.type, where, ports)
             copy.name = if (from.id == group.id) name else from.name
+            copy.font = from.font
             from.params.forEachIndexed { i, v -> copy.setParam(i, v) }
             from.steps.forEachIndexed { i, step -> copy.setStep(i, step) }
             copy.modRanges = from.modRanges
@@ -2920,6 +3092,8 @@ fun PatchCanvas(
     library: GroupLibrary? = null,
     /** The tuning a loaded group's scale names are resolved against. */
     scaleLibrary: ScaleLibrary = ScaleLibrary.of(null),
+    /** The SoundFonts an SF panel chooses from. Null in previews and tests. */
+    soundFonts: SoundFontLibrary? = null,
 ) {
     val density = LocalDensity.current
     val layoutDirection = LocalLayoutDirection.current
@@ -2989,6 +3163,17 @@ fun PatchCanvas(
     // above, wearing a different hat.
     var intervalMenu by remember { mutableStateOf(false) }
     LaunchedEffect(openModule?.id) { intervalMenu = false }
+
+    // An SF panel's page of instruments: whether it is open, how far it is scrolled in rows,
+    // and the fonts there are to switch between -- read when the page opens, like the group
+    // library's names, so a file dropped in over USB is there the next time you look.
+    var presetMenu by remember { mutableStateOf(false) }
+    var presetScroll by remember { mutableIntStateOf(0) }
+    var fontNames by remember { mutableStateOf(emptyList<String>()) }
+    LaunchedEffect(openModule?.id) { presetMenu = false }
+    LaunchedEffect(presetMenu, soundFonts) {
+        if (presetMenu) fontNames = withContext(Dispatchers.IO) { soundFonts?.names().orEmpty() }
+    }
 
     // The floating cards. Unkeyed, for the same reason as the chooser above, and left alone
     // when a panel opens or closes: they float over both, so neither of them owns them.
@@ -3142,6 +3327,54 @@ fun PatchCanvas(
                             // panel and overhang its bottom edge -- where a tap would
                             // otherwise be read as tapping away to close.
                             val onHistory = controls.overHistory(frame, down.position)
+
+                            // An SF's page of instruments owns the panel while it is open, as
+                            // the interval chooser does below -- but it scrolls, so a drag is
+                            // read before anything is chosen, and only a tap chooses.
+                            if (open.type == Types.Sf && !onHistory) {
+                                val d = frame.density
+                                val fontName = open.font ?: DEFAULT_SOUNDFONT
+                                val loadedFont = soundFonts?.loaded?.get(fontName)
+                                val presets = loadedFont?.presets.orEmpty()
+                                val page = presetPage(panel, d, fontNames.size, frame.fontScale)
+                                if (presetMenu) {
+                                    val scrollFrom = presetScroll
+                                    var moved = false
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull { it.pressed } ?: break
+                                        if ((change.position - down.position).getDistance() > slop) moved = true
+                                        if (moved) {
+                                            // Up the page is on through the list, like any list.
+                                            val rows = ((change.position.y - down.position.y) / page.tileH).roundToInt()
+                                            presetScroll = (scrollFrom - rows).coerceIn(0, page.maxScroll(presets.size))
+                                        }
+                                        change.consume()
+                                    }
+                                    if (!moved) {
+                                        val font = page.fonts.indexOfFirst { it.contains(down.position) }
+                                        if (font >= 0) {
+                                            // Another bank, and the page stays open on it: the
+                                            // instrument is chosen next, from its list.
+                                            open.font = fontNames[font]
+                                            presetScroll = 0
+                                        } else {
+                                            page.tiles(presets.size, presetScroll)
+                                                .firstOrNull { it.second.contains(down.position) }
+                                                ?.let { (i, _) -> open.setParam(SF_PRESET, presets[i].code.toFloat()) }
+                                            presetMenu = false
+                                        }
+                                    }
+                                    return@awaitEachGesture
+                                }
+                                if (panelPresetChip(panel, d).contains(down.position)) {
+                                    waitForUpRelease()
+                                    val current = presets.indexOfFirst { it.code == open.params[SF_PRESET].roundToInt() }
+                                    presetScroll = if (current >= 0) page.scrollTo(current, presets.size) else 0
+                                    presetMenu = true
+                                    return@awaitEachGesture
+                                }
+                            }
 
                             // The interval chooser owns the panel while it is open: nothing
                             // behind it is reachable, so a stray tap picks nothing and changes
@@ -3611,9 +3844,19 @@ fun PatchCanvas(
             }
 
             patch.modules.firstOrNull { it.expanded }?.let { open ->
+                val sfView = if (open.type == Types.Sf) {
+                    val name = open.font ?: DEFAULT_SOUNDFONT
+                    SfView(
+                        menu = presetMenu, scroll = presetScroll, fontName = name,
+                        font = soundFonts?.loaded?.get(name), failed = soundFonts?.failed(name) == true,
+                        fonts = fontNames, fontScale = frame.fontScale,
+                    )
+                } else {
+                    null
+                }
                 drawPanel(
                     open, patch, panelRect(frame), d, screenMeasurer, playing, playingStep,
-                    intervalMenu, liveParams,
+                    intervalMenu, liveParams, sfView,
                 )
             }
 
@@ -4513,6 +4756,8 @@ private fun DrawScope.drawChoices(
                     ),
                 )
             }
+            // Never a row: a preset is chosen from its own page, off the header.
+            Choice.PRESET -> {}
             Choice.NUMBER -> {
                 val text = measurer.measure((param.min + i).toInt().toString(), PanelValueStyle)
                 drawText(
@@ -5714,6 +5959,8 @@ private fun DrawScope.drawPanel(
     intervalMenu: Boolean,
     /** Where each modulated parameter has got to, from the engine. A missing one shows its knob. */
     live: Map<Int, Float> = emptyMap(),
+    /** An SF panel's font and its page of instruments; null for every other module. */
+    sf: SfView? = null,
 ) {
     val corner = CornerRadius(14f * d, 14f * d)
 
@@ -5795,6 +6042,20 @@ private fun DrawScope.drawPanel(
         else module.params.getOrElse(intervalParam) { DEFAULT_INTERVAL.toFloat() }.roundToInt()
     INTERVALS.getOrNull(chosenInterval)?.let {
         drawChip(panelIntervalChip(panel, d), d, it.label, intervalMenu, scaleAccent, measurer)
+    }
+
+    if (sf != null) {
+        val code = module.params.getOrElse(SF_PRESET) { 0f }.roundToInt()
+        val label = when {
+            sf.font != null -> sf.font.presetFor(code)?.name ?: "Not in ${sf.fontName}"
+            sf.failed -> "Can't read ${sf.fontName}"
+            else -> "Loading ${sf.fontName}\u2026"
+        }
+        drawChip(panelPresetChip(panel, d), d, label, sf.menu, scaleAccent, measurer)
+        if (sf.menu) {
+            drawPresetPage(panel, d, sf, code, measurer)
+            return
+        }
     }
 
     if (intervalParam >= 0 && intervalMenu) {

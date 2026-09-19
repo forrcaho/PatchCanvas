@@ -14,6 +14,19 @@
 constexpr float kMiddleC = 261.6256f;
 
 /**
+ * A note's pitch in octaves from middle C, against the scale of the beat it carries.
+ *
+ * The one place a note becomes a pitch for everything that sounds one -- the voices here,
+ * and the SoundFont player, which has its own voices and needs the same answer.
+ */
+inline float pitchOf(const NoteEvent &event, const ScaleList *scales) {
+    // The engine still never learns what a semitone is: a table lookup and an exp2.
+    const float octaves = scales != nullptr ? scales->tableAt(event.beat).octavesOf(event.degree)
+                                            : ScaleTable{}.octavesOf(event.degree);
+    return octaves + event.cents / 1200.0f;
+}
+
+/**
  * Notes in, sound out, with the voices inside it: everything a polyphonic synth does that
  * is not the sound itself.
  *
@@ -214,14 +227,7 @@ private:
         }
     }
 
-    /** A note's pitch in octaves from middle C, against the scale of the beat it carries. */
-    float pitchOf(const NoteEvent &event) const {
-        // The engine still never learns what a semitone is: a table lookup and an exp2.
-        const float octaves = scales_ != nullptr
-                ? scales_->tableAt(event.beat).octavesOf(event.degree)
-                : ScaleTable{}.octavesOf(event.degree);
-        return octaves + event.cents / 1200.0f;
-    }
+    float pitchOf(const NoteEvent &event) const { return ::pitchOf(event, scales_); }
 
     /** How long a glide takes: 30ms, like every crossfade in the engine. */
     int32_t glideFrames_ = 1440;

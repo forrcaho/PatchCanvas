@@ -23,14 +23,20 @@ add_library(daisysp STATIC
 target_include_directories(daisysp PUBLIC vendor/daisysp)
 target_compile_options(daisysp PRIVATE -w)
 
+# TinySoundFont, MIT, for the SF module. Its implementation compiles here, on its own and
+# under its own warnings. See vendor/tinysoundfont/README.md.
+add_library(tinysoundfont STATIC vendor/tinysoundfont/tsf.cpp)
+target_compile_options(tinysoundfont PRIVATE -w)
+
 add_library(patchcanvas SHARED
         audio_engine.cpp
         graph.cpp
         nodes.cpp
+        soundfont.cpp
         native_bridge.cpp)
 
-target_include_directories(patchcanvas SYSTEM PRIVATE vendor/daisysp)
+target_include_directories(patchcanvas SYSTEM PRIVATE vendor/daisysp vendor/tinysoundfont)
 
 target_compile_features(patchcanvas PRIVATE cxx_std_17)
 target_compile_options(patchcanvas PRIVATE -Wall -Wextra -ffast-math)
-target_link_libraries(patchcanvas PRIVATE daisysp oboe::oboe android log)
+target_link_libraries(patchcanvas PRIVATE daisysp tinysoundfont oboe::oboe android log)

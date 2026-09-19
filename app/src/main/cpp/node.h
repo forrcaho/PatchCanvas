@@ -20,6 +20,16 @@ constexpr int32_t kMaxPorts = 4;
 constexpr int32_t kMaxParams = 8;
 
 /**
+ * Something a node needs that is too big, or too slow, to build on the audio thread -- a
+ * SoundFont's synth, first. Built on the interface's thread, handed across by pointer like a
+ * node, and freed back on that thread when it is replaced; see Graph::postSetResource.
+ */
+class Resource {
+public:
+    virtual ~Resource() = default;
+};
+
+/**
  * A graph node.
  *
  * Outputs are owned buffers; inputs are borrowed pointers into whatever upstream node
@@ -133,6 +143,15 @@ public:
         (void) port;
         (void) source;
     }
+
+    /**
+     * Takes [incoming] and returns what it replaces, or [incoming] itself if this node has
+     * no use for one. Either way the returned pointer goes back to be freed off the audio
+     * thread, and nothing the node keeps may be touched there again.
+     *
+     * Audio thread, same rules as setParam: swap pointers, set fields, allocate nothing.
+     */
+    virtual Resource *swapResource(Resource *incoming) { return incoming; }
 
     virtual void process(int32_t frames) = 0;
 

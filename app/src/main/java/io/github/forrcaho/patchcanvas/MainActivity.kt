@@ -50,6 +50,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var store: PatchStore
     private lateinit var scales: ScaleLibrary
     private lateinit var groups: GroupLibrary
+    private lateinit var soundFonts: SoundFontLibrary
     private lateinit var patch: Patch
 
     // The patch is owned here rather than by the composition so that onStop can save it
@@ -124,6 +125,7 @@ class MainActivity : ComponentActivity() {
         // whatever is there. Before the patch loads, because the patch names a tuning.
         scales = ScaleLibrary.load(this)
         groups = GroupLibrary.load(this)
+        soundFonts = SoundFontLibrary.load(this)
         store = PatchStore(this, scales)
         patch = store.load() ?: demoPatch()
 
@@ -182,10 +184,24 @@ class MainActivity : ComponentActivity() {
                     patch.scales,
                     patch.beatsPerBar,
                     patch.tempo,
+                    // Which font each SF plays, and which fonts have finished loading: a
+                    // module is handed its font by the first sync after both are true.
+                    patch.modules.map { it.font },
+                    soundFonts.handles(),
                 )
             }
                 .distinctUntilChanged()
-                .collect { graphSync.sync(patch) }
+                .collect { graphSync.sync(patch, soundFonts.handles()) }
+        }
+
+        // Fonts load when a module wants one, not at launch: GeneralUser GS is seconds of
+        // parsing and 60MB of memory, and a patch with no SF module should pay neither.
+        scope.launch {
+            snapshotFlow {
+                patch.modules.filter { it.type == Types.Sf }.map { it.font ?: DEFAULT_SOUNDFONT }.toSet()
+            }
+                .distinctUntilChanged()
+                .collect { names -> names.forEach { launch { soundFonts.ensure(it) } } }
         }
 
         setContent {
@@ -209,6 +225,7 @@ class MainActivity : ComponentActivity() {
                 scales = scales.scales,
                 library = groups,
                 scaleLibrary = scales,
+                soundFonts = soundFonts,
             )
         }
     }
@@ -364,6 +381,7 @@ fun PatchCanvasApp(
     scales: List<Scale> = listOf(Scale.Chromatic),
     library: GroupLibrary? = null,
     scaleLibrary: ScaleLibrary = ScaleLibrary.of(null),
+    soundFonts: SoundFontLibrary? = null,
 ) {
     // The canvas paints edge to edge, but the initial framing keeps the patch clear of
     // the cutout, the gesture bar and the corner radius. Measured on the reference
@@ -383,6 +401,7 @@ fun PatchCanvasApp(
         scales = scales,
         library = library,
         scaleLibrary = scaleLibrary,
+        soundFonts = soundFonts,
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF14171C)),
