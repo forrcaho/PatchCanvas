@@ -395,6 +395,112 @@ void StepsNode::setParam(int32_t index, float value) {
     }
 }
 
+// ---------------------------------------------------------------- DotSeq
+
+void DotSeqNode::setDot(int32_t slot, int32_t step, int32_t degree, int32_t length) {
+    if (slot < 0 || slot >= kMaxDots) return;
+    dotStep_[slot] = std::max(0, std::min(step, kSteps - 1));
+    dotDegree_[slot] = degree;
+    dotLength_[slot] = std::max(0, std::min(length, kSteps));
+}
+
+void DotSeqNode::tick(int32_t offset, int64_t count) {
+    if (pendingCount_ < kMaxPending) {
+        pending_[pendingCount_].offset = offset;
+        pending_[pendingCount_].count = count;
+        ++pendingCount_;
+    }
+}
+
+void DotSeqNode::endAll(NoteBuffer &notes, uint16_t offset) {
+    for (int32_t h = 0; h < heldCount_; ++h) {
+        NoteEvent off;
+        off.id = held_[h].id;
+        off.kind = NoteKind::Off;
+        off.offset = offset;
+        notes.push(off);
+    }
+    heldCount_ = 0;
+}
+
+void DotSeqNode::process(int32_t frames) {
+    NoteBuffer &notes = notesOut(0);
+    notes.clear();
+    (void) frames;
+
+    for (int32_t p = 0; p < pendingCount_; ++p) {
+        const int64_t count = pending_[p].count;
+        const auto offset = static_cast<uint16_t>(pending_[p].offset);
+        const Interval interval = kIntervals[intervalIndex_];
+
+        // The ticks a held note is waiting for are consecutive; anything else and it may
+        // wait forever, so it ends here instead.
+        if (lastCount_ >= 0 && count != lastCount_ + 1) endAll(notes, offset);
+        lastCount_ = count;
+
+        // Ends before starts, so a dot followed at once by another at the same degree is
+        // two notes rather than one whose Off lands after the second's On.
+        for (int32_t h = 0; h < heldCount_;) {
+            if (held_[h].endCount <= count) {
+                NoteEvent off;
+                off.id = held_[h].id;
+                off.kind = NoteKind::Off;
+                off.offset = offset;
+                notes.push(off);
+                held_[h] = held_[--heldCount_];
+            } else {
+                ++h;
+            }
+        }
+
+        const int64_t length = length_ > 0 ? length_ : 1;
+        step_ = static_cast<int32_t>(((count % length) + length) % length);
+        // The beat the boundary falls on, in integers, which decides the scale -- as Steps.
+        const int64_t beat = floorDiv(count * interval.num, interval.den);
+        for (int32_t d = 0; d < kMaxDots; ++d) {
+            if (dotLength_[d] <= 0 || dotStep_[d] != step_) continue;
+            if (heldCount_ >= kMaxHeld) break;
+            NoteEvent on;
+            on.id = nextNoteId_++;
+            on.kind = NoteKind::On;
+            on.offset = offset;
+            on.degree = dotDegree_[d];
+            on.beat = beat;
+            on.cents = transposeCents_;
+            on.velocity = 1.0f;
+            if (!notes.push(on)) break;
+            held_[heldCount_++] = Held{on.id, on.degree, beat, count + dotLength_[d]};
+        }
+    }
+    pendingCount_ = 0;
+}
+
+void DotSeqNode::heldNotes(int32_t port, NoteBuffer &into) const {
+    (void) port;
+    for (int32_t h = 0; h < heldCount_; ++h) {
+        NoteEvent on;
+        on.id = held_[h].id;
+        on.kind = NoteKind::On;
+        on.degree = held_[h].degree;
+        on.beat = held_[h].beat;
+        on.cents = transposeCents_;
+        on.velocity = 1.0f;
+        into.push(on);
+    }
+}
+
+void DotSeqNode::setParam(int32_t index, float value) {
+    switch (index) {
+        case 0: length_ = static_cast<int32_t>(clampf(value, 1.0f, static_cast<float>(kSteps)) + 0.5f); break;
+        case 1: transposeCents_ = clampf(value, -kTuneRange, kTuneRange); break;
+        case 2:
+            intervalIndex_ = static_cast<int32_t>(
+                    clampf(value, 0.0f, static_cast<float>(kIntervalCount - 1)) + 0.5f);
+            break;
+        default: break;
+    }
+}
+
 // ---------------------------------------------------------------- Voice
 
 void OscVoice::init(float sampleRate) {
@@ -773,6 +879,7 @@ Node *makeNode(NodeType type) {
         case NodeType::Pluck: return new PluckNode();
         case NodeType::Fm: return new FmNode();
         case NodeType::Sf: return new SfNode();
+        case NodeType::DotSeq: return new DotSeqNode();
         case NodeType::Lfo: return new LfoNode();
         case NodeType::Drone: return new DroneNode();
         case NodeType::Out: return new OutNode();

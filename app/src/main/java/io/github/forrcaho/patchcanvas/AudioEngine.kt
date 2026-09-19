@@ -79,6 +79,10 @@ object AudioEngine {
     fun setStep(id: Long, index: Int, degree: Int, gate: Boolean): Boolean =
         available && started && nativeSetStep(id, index, degree, gate)
 
+    /** One dot of a dot sequencer, by slot; a length of 0 clears it. */
+    fun setDot(id: Long, slot: Int, step: Int, degree: Int, length: Int): Boolean =
+        available && started && nativeSetDot(id, slot, step, degree, length)
+
     /**
      * Parses a SoundFont and returns its handle, or 0 if it is not one this build reads.
      *
@@ -245,6 +249,7 @@ object AudioEngine {
         roots: FloatArray,
     ): Boolean
     private external fun nativeScaleEntry(): Int
+    private external fun nativeSetDot(id: Long, slot: Int, step: Int, degree: Int, length: Int): Boolean
     private external fun nativeLoadSoundFont(bytes: ByteArray): Long
     private external fun nativeSoundFontPresets(handle: Long): Array<String>
     private external fun nativeSetNodeFont(id: Long, handle: Long): Boolean

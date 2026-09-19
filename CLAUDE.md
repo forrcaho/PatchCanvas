@@ -123,9 +123,11 @@ modules rather than renaming fields, so an older file could only have been conve
 *silently* -- a patch built around a VCA an envelope opened comes back as a filter fed by
 nothing, quieter than it was left, reporting success. So `upgrade` is a version check and
 nothing more; the migration ladder that walked 1 to 4 went with the formats it served.
-Format 6 added groups and 7 the knobs promoted to a group's edge, neither taking anything
-away, so 7 reads 6 and 5 as they stand -- the rule is against silent conversion, not
-against a change that needs none. What
+Format 6 added groups, 7 the knobs promoted to a group's edge, and 8 new modules with their
+dots and fonts, none taking anything away, so 8 reads 7, 6 and 5 as they stand -- the rule is against silent conversion, not
+against a change that needs none. **Adding a module type bumps the version** even though
+nothing needs converting: an older build reads an unknown type as retired, skips it, and
+autosaves the patch without it -- the bump makes that build refuse the file instead. What
 makes that affordable is that `PatchStore.load` moves a refused file to
 `patch.rejected.json` before the demo patch can be autosaved over it. **A refusal must
 never be a delete** -- check that still holds before adding another one.

@@ -241,6 +241,14 @@ data class Param(
      */
     val steps: Int get() = (max - min).toInt() + 1
 
+    /**
+     * Whether this row is drawn as buttons, one per option. A stepped parameter with more
+     * options than fit a finger each is a bar with a whole-number reading instead: DotSeq's
+     * length has 32, and as buttons they ran into each other and over the row's label --
+     * found on the emulator, the first time one was drawn.
+     */
+    val buttons: Boolean get() = curve == ParamCurve.STEPPED && steps <= MAX_BUTTONS
+
     /** Which option a value is, 0-based. */
     fun indexOf(value: Float): Int =
         (value - min).roundToInt().coerceIn(0, steps - 1)
@@ -294,6 +302,13 @@ data class Param(
 data class Step(val degree: Int, val on: Boolean = true)
 
 /**
+ * A note on a dot sequencer's grid: which step it starts on, which degree, and how many
+ * steps it lasts. Bespoke's DotSequencer is the shape, and the reason notes are events
+ * with a start and an end rather than a gate a sequencer holds for half a step.
+ */
+data class Dot(val step: Int, val degree: Int, val length: Int = 1)
+
+/**
  * What an exposed parameter sweeps between when something modulates it, in its own units.
  *
  * Stored on the parameter's module rather than on the cable, which is Bespoke's shape and
@@ -332,6 +347,12 @@ internal const val MOD_SPREAD = 0.2f
  */
 enum class GridKind {
     NONE,
+
+    /**
+     * Columns are steps and rows are degrees, as in a sequence, but a cell holds a dot: a
+     * note with its own length, as many to a column as make a chord. See [Dot].
+     */
+    DOTS,
 
     /** Columns are steps in time and each holds one degree: a melody. */
     SEQUENCE,
@@ -477,6 +498,25 @@ object Types {
         grid = GridKind.SEQUENCE,
     )
     /**
+     * A dot sequencer: notes on a grid of steps by degrees, each dot its own length and a
+     * column as many as a chord. Tap an empty cell for a one-step dot, drag a dot sideways
+     * to lengthen or shorten it, tap one to remove it. The grid shows as many steps as the
+     * sequence is long. Order mirrors DotSeqNode::setParam -- length, transpose, interval.
+     */
+    val DotSeq = ModuleType(
+        "DotSeq", emptyList(), listOf(Port("notes", N)),
+        Color(DOTSEQ_ACCENT),
+        params = listOf(
+            Param("len", 1f, DOT_STEPS.toFloat(), 16f, "", STEP),
+            Param("transp", -TUNE_RANGE, TUNE_RANGE, 0f, "\u00A2", LIN, marks = true, short = "trn"),
+            Param(
+                "interval", 0f, (INTERVALS.size - 1).toFloat(), DEFAULT_INTERVAL.toFloat(),
+                curve = STEP, choice = Choice.DIVISION, header = true,
+            ),
+        ),
+        grid = GridKind.DOTS,
+    )
+    /**
      * Notes that stay on until they are turned off, laid out as degrees by octaves.
      *
      * No transport and no parameters: it is the plainest thing a note cable can carry, and
@@ -611,7 +651,7 @@ object Types {
      * inputs as you like, since each input stores its own source. Only summing ever
      * needed a module, and that is Mix.
      */
-    val palette = listOf(Osc, Pluck, Fm, Sf, Drone, Steps, Filter, Env, Lfo, Mix)
+    val palette = listOf(Osc, Pluck, Fm, Sf, Drone, Steps, DotSeq, Filter, Env, Lfo, Mix)
 
     /**
      * Modules collapsed into one box. Its ports are its own rather than its type's -- they
@@ -753,6 +793,29 @@ class PatchModule(
 
     fun setStep(index: Int, step: Step) {
         if (index in steps.indices) steps[index] = step
+    }
+
+    /**
+     * A dot sequencer's notes, in the order they were placed; empty on everything else.
+     * Positional like steps as far as the engine is concerned -- it keeps a slot per index --
+     * so removing one resends those after it, which for a grid's worth of dots is nothing.
+     */
+    val dots: SnapshotStateList<Dot> = mutableStateListOf()
+
+    /** Adds [dot] unless the sequencer is full. */
+    fun addDot(dot: Dot): Boolean {
+        if (dots.size >= MAX_DOTS) return false
+        dots.add(dot)
+        return true
+    }
+
+    fun removeDot(index: Int) {
+        if (index in dots.indices) dots.removeAt(index)
+    }
+
+    fun setDotLength(index: Int, length: Int) {
+        val dot = dots.getOrNull(index) ?: return
+        if (dot.length != length) dots[index] = dot.copy(length = length.coerceIn(1, DOT_STEPS))
     }
 
     /**
@@ -1120,7 +1183,7 @@ internal fun choiceBox(row: Rect, d: Float, param: Param, i: Int): Rect {
  * option still reads as a range, not as two marks drawn over each other.
  */
 internal fun panelBracketX(row: Rect, d: Float, param: Param, value: Float, closing: Boolean): Float =
-    if (param.curve == ParamCurve.STEPPED) {
+    if (param.buttons) {
         val box = choiceBox(row, d, param, param.indexOf(value))
         if (closing) box.right else box.left
     } else {
@@ -1177,7 +1240,7 @@ internal fun panelValueAt(
 ): Pair<ParamRow, ValueTarget>? {
     rows.forEachIndexed { slot, entry ->
         val param = entry.param
-        if (param.curve == ParamCurve.STEPPED) return@forEachIndexed
+        if (param.buttons) return@forEachIndexed
         val row = panelRowAt(panel, d, module.type, rows.size, slot)
         val range = entry.owner.modRanges[entry.index]
         val text = if (range != null) rangeReading(param, range)
@@ -1587,9 +1650,41 @@ internal fun panelCellAt(
         return degree to degree
     }
 
+    if (module.type.grid == GridKind.DOTS) {
+        return dotColumnAt(area, dotColumns(module), at.x) to window.degreeAt(row)
+    }
+
     val cellWidth = area.width / module.type.stepCount
     val column = ((at.x - area.left) / cellWidth).toInt().coerceIn(0, module.type.stepCount - 1)
     return column to window.degreeAt(row)
+}
+
+/**
+ * A dot sequencer's columns: as many as the sequence is long. Unlike Steps, which draws all
+ * sixteen and dims those past the loop, because thirty-two at once is a 20dp cell -- a short
+ * loop gets cells a finger can hit, and a long one is the choice to pay for detail.
+ */
+internal fun dotColumns(module: PatchModule): Int =
+    module.params.getOrElse(0) { 16f }.roundToInt().coerceIn(1, DOT_STEPS)
+
+/** The column under [x], clamped to the grid, so a drag past either end holds at it. */
+internal fun dotColumnAt(area: Rect, columns: Int, x: Float): Int =
+    ((x - area.left) / (area.width / columns)).toInt().coerceIn(0, columns - 1)
+
+/** The dot covering [column] at [degree], or -1. A dot covers every step it lasts. */
+internal fun PatchModule.dotAt(column: Int, degree: Int): Int =
+    dots.indexOfFirst { it.degree == degree && column >= it.step && column < it.step + it.length }
+
+/**
+ * How long dot [index] may grow: to the end of the grid, or to the next dot at its degree,
+ * whichever is first -- two notes at one pitch cannot overlap, since the second's start
+ * would be heard as nothing.
+ */
+internal fun PatchModule.dotRoom(index: Int): Int {
+    val dot = dots[index]
+    val next = dots.filter { it !== dot && it.degree == dot.degree && it.step > dot.step }
+        .minOfOrNull { it.step } ?: dotColumns(this)
+    return (minOf(next, dotColumns(this)) - dot.step).coerceAtLeast(1)
 }
 
 /**
@@ -1635,7 +1730,8 @@ private const val SEQUENCE_OCTAVES_ABOVE = 4f
 internal fun gridWindow(module: PatchModule, area: Rect, d: Float, scale: Scale): GridWindow {
     if (module.type.grid == GridKind.DRONE) return droneWindow(module, area, d, scale)
     val rows = gridRows(area, d)
-    val written = module.steps.map { it.degree }
+    val written = if (module.type.grid == GridKind.DOTS) module.dots.map { it.degree }
+        else module.steps.map { it.degree }
     val lowest = minOf(
         floor(-SEQUENCE_OCTAVES_BELOW / scale.period).toInt() * scale.size,
         written.minOrNull() ?: 0,
@@ -1949,6 +2045,7 @@ class Patch {
             it.parent = module.parent
             it.name = module.name
             it.font = module.font
+            it.dots.addAll(module.dots)
         }
     }
 
@@ -1995,6 +2092,7 @@ class Patch {
             val copy = PatchModule(newId.getValue(from.id), from.type, where, ports)
             copy.name = if (from.id == group.id) name else from.name
             copy.font = from.font
+            copy.dots.addAll(from.dots)
             from.params.forEachIndexed { i, v -> copy.setParam(i, v) }
             from.steps.forEachIndexed { i, step -> copy.setStep(i, step) }
             copy.modRanges = from.modRanges
@@ -3212,9 +3310,9 @@ fun PatchCanvas(
     // Unit. A plain read would pin every drone tap to whichever scale the patch opened in.
     val gridScale by rememberUpdatedState(playing)
     LaunchedEffect(openModule?.id, openModule?.type?.grid) {
-        // A sequencer's only. A drone has no position to report, and polling one every
+        // A sequencer's only, of either kind. A drone has no position to report, and polling one every
         // frame for a -1 is a frame's work for nothing.
-        val id = openModule?.takeIf { it.type.grid == GridKind.SEQUENCE }?.id
+        val id = openModule?.takeIf { it.type.grid == GridKind.SEQUENCE || it.type.grid == GridKind.DOTS }?.id
         if (id == null) {
             playingStep = -1
             return@LaunchedEffect
@@ -3475,6 +3573,34 @@ fun PatchCanvas(
                             val window = gridWindow(open, gridArea, frame.density, gridScale)
                             val rowHeight = gridArea.height / window.rows
                             var moved = false
+
+                            // A dot sequencer's grid: a drag that starts on a dot stretches
+                            // it, one that starts on an empty cell scrolls, and a tap adds a
+                            // dot or takes one away. Its own loop, since none of it is a
+                            // Steps cell's toggle.
+                            if (cell != null && open.type.grid == GridKind.DOTS) {
+                                val (column, degree) = cell
+                                val hit = open.dotAt(column, degree)
+                                val columns = dotColumns(open)
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    val change = event.changes.firstOrNull { it.pressed } ?: break
+                                    if ((change.position - down.position).getDistance() > slop) moved = true
+                                    if (moved && hit >= 0) {
+                                        val under = dotColumnAt(gridArea, columns, change.position.x)
+                                        val dot = open.dots[hit]
+                                        open.setDotLength(hit, (under - dot.step + 1).coerceIn(1, open.dotRoom(hit)))
+                                    } else if (moved) {
+                                        val rows = (change.position.y - down.position.y) / rowHeight
+                                        open.gridBottom = window.scrolledBy(rows.roundToInt())
+                                    }
+                                    change.consume()
+                                }
+                                if (!moved) {
+                                    if (hit >= 0) open.removeDot(hit) else open.addDot(Dot(column, degree))
+                                }
+                                return@awaitEachGesture
+                            }
 
                             while (true) {
                                 val event = awaitPointerEvent()
@@ -4178,7 +4304,9 @@ internal fun keypadEntry(entry: String, key: String): String = when (key) {
 internal fun keypadValue(entry: String, param: Param): Float? {
     val value = entry.toFloatOrNull() ?: return null
     if (!value.isFinite()) return null
-    return value.coerceIn(minOf(param.min, param.max), maxOf(param.min, param.max))
+    val clamped = value.coerceIn(minOf(param.min, param.max), maxOf(param.min, param.max))
+    // A stepped parameter typed on its bar takes a whole option: "7.5" steps is not one.
+    return if (param.curve == ParamCurve.STEPPED) clamped.roundToInt().toFloat() else clamped
 }
 
 internal const val KEY_BACK = "\u232b"
@@ -4543,6 +4671,85 @@ private fun DrawScope.drawDroneGrid(
                 topLeft = cell.topLeft,
                 size = cell.size,
                 cornerRadius = radius,
+            )
+        }
+    }
+}
+
+/**
+ * A dot sequencer's grid: the same rows of degrees as a sequence, with each dot drawn as one
+ * bar across the steps it lasts, so a long note looks long.
+ */
+private fun DrawScope.drawDotGrid(
+    area: Rect,
+    d: Float,
+    module: PatchModule,
+    scale: Scale,
+    accent: Color,
+    measurer: TextMeasurer,
+    playingStep: Int,
+) {
+    val columns = dotColumns(module)
+    val window = gridWindow(module, area, d, scale)
+    val rows = window.rows
+    val cellW = area.width / columns
+    val cellH = area.height / rows
+    val inset = 1f * d
+    val radius = CornerRadius(3f * d, 3f * d)
+
+    if (playingStep in 0 until columns) {
+        drawRect(
+            color = GridPlayhead,
+            topLeft = Offset(area.left + playingStep * cellW, area.top),
+            size = Size(cellW, area.height),
+        )
+    }
+
+    repeat(rows) { row ->
+        val degree = window.degreeAt(row)
+        val tonic = degree.mod(scale.size) == 0
+        val top = area.top + row * cellH
+        repeat(columns) { column ->
+            drawRoundRect(
+                color = if (tonic) GridTonic else GridCell,
+                topLeft = Offset(area.left + column * cellW + inset, top + inset),
+                size = Size(cellW - inset * 2f, cellH - inset * 2f),
+                cornerRadius = radius,
+            )
+        }
+        if (tonic) {
+            drawLine(GridLine, Offset(area.left, top), Offset(area.right, top), 1f * d)
+        }
+        val label = measurer.measure(degree.toString(), if (tonic) GridTonicLabelStyle else GridLabelStyle)
+        drawText(label, topLeft = Offset(area.left - label.size.width - 8f * d, top + (cellH - label.size.height) / 2f))
+    }
+
+    module.dots.forEach { dot ->
+        if (dot.step >= columns) return@forEach
+        val end = minOf(dot.step + dot.length, columns)
+        val sounding = playingStep in dot.step until dot.step + dot.length
+        if (dot.degree in window.bottom..window.top) {
+            val row = window.top - dot.degree
+            val rect = Rect(
+                Offset(area.left + dot.step * cellW + inset, area.top + row * cellH + inset),
+                Size((end - dot.step) * cellW - inset * 2f, cellH - inset * 2f),
+            )
+            drawRoundRect(accent, rect.topLeft, rect.size, CornerRadius(cellH / 3f, cellH / 3f))
+            if (sounding) {
+                drawRoundRect(
+                    GridPlaying, rect.topLeft, rect.size, CornerRadius(cellH / 3f, cellH / 3f),
+                    style = Stroke(width = 2f * d),
+                )
+            }
+        } else {
+            // Out of sight above or below: a mark on that edge across the steps it lasts, so
+            // a stretch of grid is never silently empty -- as a sequence's scrolled notes.
+            val above = dot.degree > window.top
+            val y = if (above) area.top else area.bottom - 3f * d
+            drawRect(
+                accent.copy(alpha = if (sounding) 1f else 0.6f),
+                Offset(area.left + dot.step * cellW + inset, y),
+                Size((end - dot.step) * cellW - inset * 2f, 3f * d),
             )
         }
     }
@@ -5506,6 +5713,18 @@ internal const val STEP_COUNT = 16
 /** Cells in a drone's grid; mirrors DroneNode::kCells, which is capped by a scale's degrees. */
 internal const val DRONE_CELLS = 64
 
+/** Steps on a dot sequencer's grid. Mirrors DotSeqNode::kSteps. */
+internal const val DOT_STEPS = 32
+
+/** The most options a stepped row draws as buttons; past it, a bar. See [Param.buttons]. */
+internal const val MAX_BUTTONS = 16
+
+/** DotSeq's accent, a green that clears the others; see ModuleColorTest. */
+internal const val DOTSEQ_ACCENT = 0xFFD8F0AC
+
+/** Dots one sequencer holds. Mirrors DotSeqNode::kMaxDots. */
+internal const val MAX_DOTS = 128
+
 /** The most octave columns a drone offers, before its cells run out. */
 internal const val DRONE_OCTAVES = 4
 
@@ -6076,6 +6295,7 @@ private fun DrawScope.drawPanel(
             gridArea, d, module, scale, module.type.accent, measurer, playingStep,
         )
         GridKind.DRONE -> drawDroneGrid(gridArea, d, module, scale, module.type.accent)
+        GridKind.DOTS -> drawDotGrid(gridArea, d, module, scale, module.type.accent, measurer, playingStep)
         GridKind.NONE -> {}
     }
     if (module.type.grid != GridKind.NONE) {
@@ -6119,7 +6339,7 @@ private fun DrawScope.drawPanel(
 
         // A stepped parameter shows no numeric readout: the lit button is the reading,
         // and "0" next to a picture of a sawtooth is noise.
-        if (param.curve != ParamCurve.STEPPED) {
+        if (!param.buttons) {
             // An exposed parameter reads its range, not a value it is not going to hold.
             val text = if (range != null) rangeReading(param, range) else param.format(value)
             val reading = measurer.measure(text, PanelValueStyle)
@@ -6129,7 +6349,7 @@ private fun DrawScope.drawPanel(
             )
         }
 
-        if (param.curve == ParamCurve.STEPPED) {
+        if (param.buttons) {
             drawChoices(row, d, param, value, accent, measurer)
             if (range != null) {
                 val box = choiceBox(row, d, param, 0)

@@ -181,6 +181,7 @@ class MainActivity : ComponentActivity() {
                     // A plain map replaced whole, so it compares by content as it stands.
                     patch.modules.map { it.modRanges },
                     patch.modules.map { it.steps.toList() },
+                    patch.modules.map { it.dots.toList() },
                     patch.scales,
                     patch.beatsPerBar,
                     patch.tempo,

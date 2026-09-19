@@ -1399,6 +1399,94 @@ void anSfWithoutItsFontIsSilent() {
     check(peak(voiceIdle(sf, 200)) > 0.05f, "and sounds once it has one");
 }
 
+/** Ticks [dots] once at [count] and returns what it said. */
+NoteBuffer tickDots(DotSeqNode &dots, int64_t count, int32_t offset = 0) {
+    dots.setTiming(0.0, true, nullptr);
+    dots.tick(offset, count);
+    dots.process(kBlockSize);
+    return *dots.noteOutput(0);
+}
+
+int countKind(const NoteBuffer &notes, NoteKind kind) {
+    int n = 0;
+    for (int32_t i = 0; i < notes.count; ++i) n += notes.events[i].kind == kind ? 1 : 0;
+    return n;
+}
+
+void aDotLastsItsLength() {
+    std::printf("a dot lasts its length, in steps\n");
+    DotSeqNode dots;
+    dots.setDot(0, 0, 7, 3);
+    const NoteBuffer first = tickDots(dots, 0);
+    check(countKind(first, NoteKind::On) == 1 && first.events[0].degree == 7, "starts on its step");
+    const uint32_t id = first.events[0].id;
+    check(countKind(tickDots(dots, 1), NoteKind::Off) == 0, "held through the second step");
+    check(countKind(tickDots(dots, 2), NoteKind::Off) == 0, "and the third");
+    const NoteBuffer end = tickDots(dots, 3);
+    check(countKind(end, NoteKind::Off) == 1 && end.events[0].id == id, "and ends as the fourth begins");
+}
+
+void aColumnOfDotsIsAChord() {
+    std::printf("a column of dots is a chord, each note its own length\n");
+    DotSeqNode dots;
+    dots.setDot(0, 0, 0, 1);
+    dots.setDot(1, 0, 4, 2);
+    dots.setDot(2, 0, 7, 4);
+    check(countKind(tickDots(dots, 0), NoteKind::On) == 3, "three notes start together");
+    check(countKind(tickDots(dots, 1), NoteKind::Off) == 1, "the shortest ends first");
+    check(countKind(tickDots(dots, 2), NoteKind::Off) == 1, "then the next");
+    check(dots.notesHeld() == 1, "leaving the longest");
+    NoteBuffer held;
+    dots.heldNotes(0, held);
+    check(held.count == 1 && held.events[0].degree == 7, "which is what a new cable is told is held");
+}
+
+void aDotEndsBeforeTheNextStarts() {
+    std::printf("a dot ends before the next one at its degree starts\n");
+    DotSeqNode dots;
+    dots.setDot(0, 0, 5, 2);
+    dots.setDot(1, 2, 5, 1);
+    tickDots(dots, 0);
+    tickDots(dots, 1);
+    const NoteBuffer turn = tickDots(dots, 2);
+    check(turn.count == 2, "an off and an on");
+    check(turn.events[0].kind == NoteKind::Off && turn.events[1].kind == NoteKind::On,
+          "the off first, so the two are two notes");
+}
+
+void dotsLoopAtTheLength() {
+    std::printf("dots loop at the sequence's length\n");
+    DotSeqNode dots;
+    dots.setParam(0, 4.0f);
+    dots.setDot(0, 1, 2, 1);
+    int ons = 0;
+    for (int64_t count = 0; count < 12; ++count) {
+        const NoteBuffer said = tickDots(dots, count);
+        if (countKind(said, NoteKind::On) > 0) {
+            check(count % 4 == 1, "only on step 1 of each turn, not " + std::to_string(count));
+            ++ons;
+        }
+    }
+    check(ons == 3, "three turns, three notes");
+    dots.setDot(0, 0, 0, 0);
+    int after = 0;
+    for (int64_t count = 12; count < 20; ++count) after += countKind(tickDots(dots, count), NoteKind::On);
+    check(after == 0, "and a cleared slot plays nothing");
+}
+
+void aJumpInTimeEndsWhatWasHeld() {
+    std::printf("a jump in time ends what was held\n");
+    DotSeqNode dots;
+    dots.setDot(0, 0, 0, 8);
+    tickDots(dots, 0);
+    check(dots.notesHeld() == 1, "held");
+    // The transport reset: the tick eight steps on, which would have ended it, may never
+    // come -- so the note ends where the count jumped.
+    const NoteBuffer reset = tickDots(dots, 0);
+    check(countKind(reset, NoteKind::Off) == 1, "ended at the jump");
+    check(countKind(reset, NoteKind::On) == 1, "and struck again, since step 0 has a dot");
+}
+
 void anLfoStaysInsideItsRangeAtItsRate() {
     std::printf("an lfo stays inside its range, at its rate\n");
     for (int wave = 0; wave < 4; ++wave) {
@@ -1634,6 +1722,11 @@ int main() {
     anSfPlaysItsNoteInTune();
     anSfGlidesAndLetsGo();
     anSfWithoutItsFontIsSilent();
+    aDotLastsItsLength();
+    aColumnOfDotsIsAChord();
+    aDotEndsBeforeTheNextStarts();
+    dotsLoopAtTheLength();
+    aJumpInTimeEndsWhatWasHeld();
     anLfoStaysInsideItsRangeAtItsRate();
     aDroneHoldsItsNoteWithTheTransportStopped();
     aDroneSoundsSeveralCellsAtOnce();

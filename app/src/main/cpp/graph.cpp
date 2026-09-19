@@ -81,6 +81,17 @@ bool Graph::postSetStep(int64_t id, int32_t index, int32_t degree, bool gate) {
     return commands_.push(cmd);
 }
 
+bool Graph::postSetDot(int64_t id, int32_t slot, int32_t step, int32_t degree, int32_t length) {
+    Command cmd;
+    cmd.type = CommandType::SetDot;
+    cmd.id = id;
+    cmd.paramIndex = slot;
+    cmd.step = step;
+    cmd.degree = degree;
+    cmd.length = length;
+    return commands_.push(cmd);
+}
+
 bool Graph::postSetScales(ScaleList *list) {
     Command cmd;
     cmd.type = CommandType::SetScales;
@@ -524,6 +535,13 @@ void Graph::applyCommands() {
                 // The node bounds-checks the index itself, because how many steps a
                 // sequence has is the node's business and not the graph's.
                 nodes_[slot].node->setStep(cmd.paramIndex, cmd.degree, cmd.gate);
+                break;
+            }
+            case CommandType::SetDot: {
+                const int32_t slot = indexOf(cmd.id);
+                if (slot < 0) break;
+                // Bounds-checked by the node, as a step is.
+                nodes_[slot].node->setDot(cmd.paramIndex, cmd.step, cmd.degree, cmd.length);
                 break;
             }
             case CommandType::SetScales:

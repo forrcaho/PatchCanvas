@@ -27,7 +27,7 @@ import java.io.File
  * 5: CV and gate retired, taking the monophonic Osc and the VCA with them.
  * 6: groups. Additive -- a format 5 file is a patch with no groups -- so 5 still reads.
  */
-private const val FORMAT_VERSION = 7
+private const val FORMAT_VERSION = 8
 private const val TAG = "PatchStore"
 
 fun Patch.toJson(): String {
@@ -41,6 +41,7 @@ fun Patch.toJson(): String {
             .put("params", paramsOf(m))
             .put("steps", stepsOf(m))
             .put("mod", modOf(m))
+        if (m.type.grid == GridKind.DOTS) entry.put("dots", dotsOf(m))
         // Absent at the top level, so a patch with no groups writes exactly what format 5 did.
         m.name?.let { entry.put("name", it) }
         m.font?.let { entry.put("font", it) }
@@ -168,6 +169,29 @@ private fun stepsOf(module: PatchModule): JSONArray {
     return out
 }
 
+/** A dot sequencer's dots, each as [step, degree, length]: three numbers, positional. */
+private fun dotsOf(module: PatchModule): JSONArray {
+    val out = JSONArray()
+    module.dots.forEach { out.put(JSONArray().put(it.step).put(it.degree).put(it.length)) }
+    return out
+}
+
+/** Clamped, because the file is untrusted: a dot off the grid is placed on its last step. */
+private fun restoreDots(module: PatchModule, stored: JSONArray?) {
+    if (stored == null || module.type.grid != GridKind.DOTS) return
+    for (i in 0 until minOf(stored.length(), MAX_DOTS)) {
+        val d = stored.optJSONArray(i) ?: continue
+        if (d.length() < 3) continue
+        module.addDot(
+            Dot(
+                d.optInt(0).coerceIn(0, DOT_STEPS - 1),
+                d.optInt(1),
+                d.optInt(2, 1).coerceIn(1, DOT_STEPS),
+            ),
+        )
+    }
+}
+
 /** Exposed parameters, keyed by name like the knobs, each as its low and high. */
 private fun modOf(module: PatchModule): JSONObject {
     val out = JSONObject()
@@ -284,6 +308,7 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
             // Absent in files written before sequences were editable, which leaves the
             // module on the same default figure it used to have compiled in.
             restoreSteps(module, m.optJSONArray("steps"))
+            restoreDots(module, m.optJSONArray("dots"))
             // Before the cables, which can only land on a parameter already exposed.
             restoreMod(module, m.optJSONObject("mod"))
             patch.adopt(module)
@@ -368,10 +393,16 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
  */
 private fun upgrade(root: JSONObject): JSONObject? {
     val version = root.optInt("version", -1)
-    // 6 and 5 read as they stand: groups, and then the knobs promoted to a group's edge,
-    // were added to the format and nothing was taken away. The rule is against converting
-    // a file silently, not against a change that needs no conversion.
-    if (version != FORMAT_VERSION && version != 6 && version != 5) {
+    // 7, 6 and 5 read as they stand: groups, then the knobs promoted to a group's edge,
+    // then new modules and the dots and font they carry, were each added to the format and
+    // nothing was taken away. The rule is against converting a file silently, not against
+    // a change that needs no conversion.
+    //
+    // 8 exists for the other direction. A build before it reads a DotSeq, an SF, an FM or
+    // a Pluck as a type that no longer exists and skips it -- and then autosaves the patch
+    // without it. Bumping the version makes that build refuse the file and move it aside
+    // instead, which is the whole point of refusing.
+    if (version != FORMAT_VERSION && version != 7 && version != 6 && version != 5) {
         Log.w(TAG, "unsupported patch version $version")
         return null
     }

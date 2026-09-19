@@ -2333,6 +2333,41 @@ null on an SF so a patch keeps the bank it was made with if the shipped one chan
 **Still to do:** after switching fonts the page opens at the top rather than at the
 current instrument, since the new bank's list is not loaded when the choice is made.
 
+### DotSeq
+
+**Built overnight 2026-09-18.** A grid of steps by degrees, as `Steps`' is, holding dots: a
+note with a start, a degree and a length in steps, any number to a column. Tap an empty cell
+for a one-step dot; drag a dot sideways to stretch or shrink it, never past the next dot at
+its degree (two notes at one pitch cannot overlap) or the end of the loop; tap a dot to
+remove it. A drag from an empty cell scrolls, as on `Steps`. The grid shows as many columns
+as the loop is long, up to 32 -- unlike `Steps`, which draws all sixteen and dims those past
+the loop, because 32 at once is a 20dp cell: a short loop gets cells a finger can hit. Dots
+scrolled out of sight leave a bar on the edge they went past, across the steps they last.
+
+- **A dot lasts its length in ticks, not frames.** It starts on its step's tick and ends on
+  the tick `length` steps later, so a two-step dot is two whole steps, as Bespoke's are, and a
+  stopped transport holds it exactly as it holds a `Steps` note. Offs go before Ons on a tick,
+  so a dot followed at once by another at its degree is two notes. A jump in the count -- a
+  reset, a changed interval -- ends everything held, since the ticks it waited for may never
+  come. A `Steps` note is still half a step; a gap between dots is made by shortening one.
+- **Dots cross by slot** (`SetDot`), like steps by index: only what changed, a cleared slot
+  for each that went, and all of them for a node just made. 128 dots, and 16 sounding at
+  once; both mirrored and asserted against `nodes.h`.
+- **Format 8**, for dots and for the other direction: a build before it would read a DotSeq,
+  an SF, an FM or a Pluck as a type that no longer exists, skip it, and autosave the patch
+  without it. Now that build refuses the file and moves it aside. 8 reads 7, 6 and 5 as they
+  stand.
+- **A stepped knob with more than sixteen options is a bar**, with a whole-number reading
+  that can be typed (and is rounded). DotSeq's `len` has 32, and as buttons they ran into each
+  other and over the row's label -- found on the emulator the first time one was drawn.
+- Tested: a dot's length, a chord of three lengths, an Off before the next On, the loop, a
+  cleared slot, the jump, and what a new cable is told is held (node tests); the hit test at
+  4, 16 and 32 columns, how far a dot may grow, the cap, the file round trip and its clamping,
+  format 7 still reading, a duplicate and an undo byte for byte, sync by slot (JVM). Each
+  area mutation-checked. On the emulator: a loaded pattern drawn, a dot stretched to four
+  steps and one added by a tap, both in the file; DotSeq into FM captured with its energy
+  per step repeating every eight steps.
+
 **Found on the way:** CLAUDE.md said `NodeType` mirroring the C++ enum was asserted. It was
 not -- only that Kotlin's ids were distinct. A test now reads the enum out of `nodes.h` and
 compares, and fails on a wrong id; worth having before six more modules each edit two

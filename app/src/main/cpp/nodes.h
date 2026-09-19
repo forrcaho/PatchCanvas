@@ -37,6 +37,7 @@ enum class NodeType : int32_t {
     Pluck = 13,
     Fm = 14,
     Sf = 15,
+    DotSeq = 16,
 };
 
 /**
@@ -194,6 +195,77 @@ private:
     /** Degrees of the patch's scale; which scale is decided when each note starts. */
     int32_t degree_[kSteps] = {};
     bool gate_[kSteps] = {};
+};
+
+/**
+ * A dot sequencer: notes laid on a grid of steps by degrees, each with its own length, and
+ * as many to a column as make a chord. Bespoke's DotSequencer, and the reason notes became
+ * events at all (ROADMAP, Phase 6).
+ *
+ * Ticked by the transport at its interval, like Steps. A dot starts on the tick of its step
+ * and ends on the tick [length] steps later -- counted in ticks, not frames, so a stopped
+ * transport holds it exactly as it holds a Steps note, and a two-step dot is two whole steps
+ * long. Bespoke's dots last their full length too; a gap between two is left by making the
+ * first shorter.
+ *
+ * A jump in the count -- a reset, an interval changed -- ends everything held, since the
+ * ticks it was waiting for may now never come.
+ *
+ * Knobs, mirroring PatchCanvas.kt: length, transpose, interval.
+ */
+class DotSeqNode : public Node {
+public:
+    /** Mirrored by DOT_STEPS in PatchCanvas.kt. */
+    static constexpr int32_t kSteps = 32;
+    /** Mirrored by MAX_DOTS in PatchCanvas.kt. */
+    static constexpr int32_t kMaxDots = 128;
+    /** Notes sounding at once. Two chords of eight overlapping, which no voice here can play anyway. */
+    static constexpr int32_t kMaxHeld = 16;
+
+    int32_t inputCount() const override { return 0; }
+    int32_t outputCount() const override { return 1; } // notes
+    uint32_t noteOutputs() const override { return 1u << 0; }
+    void process(int32_t frames) override;
+    void setParam(int32_t index, float value) override;
+    void setDot(int32_t slot, int32_t step, int32_t degree, int32_t length) override;
+    int32_t position() const override { return step_; }
+    Interval interval() const override { return kIntervals[intervalIndex_]; }
+    void tick(int32_t offset, int64_t count) override;
+    void heldNotes(int32_t port, NoteBuffer &into) const override;
+
+    /** Notes sounding now, for tests. */
+    int32_t notesHeld() const { return heldCount_; }
+
+private:
+    static constexpr int32_t kMaxPending = 4;
+
+    struct Held {
+        uint32_t id;
+        int32_t degree;
+        int64_t beat;
+        /** The tick on which it ends. */
+        int64_t endCount;
+    };
+
+    void endAll(NoteBuffer &notes, uint16_t offset);
+
+    Tick pending_[kMaxPending] = {};
+    int32_t pendingCount_ = 0;
+
+    int32_t step_ = -1;
+    int64_t lastCount_ = -1;
+    int32_t length_ = 16;
+    int32_t intervalIndex_ = kDefaultInterval;
+    float transposeCents_ = 0.0f;
+
+    int32_t dotStep_[kMaxDots] = {};
+    int32_t dotDegree_[kMaxDots] = {};
+    /** 0 for an empty slot. */
+    int32_t dotLength_[kMaxDots] = {};
+
+    Held held_[kMaxHeld] = {};
+    int32_t heldCount_ = 0;
+    uint32_t nextNoteId_ = 1;
 };
 
 /**

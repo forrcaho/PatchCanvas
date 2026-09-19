@@ -25,7 +25,8 @@ enum class NodeType(val id: Int) {
     Drone(12),
     Pluck(13),
     Fm(14),
-    Sf(15);
+    Sf(15),
+    DotSeq(16);
 
     companion object {
         fun of(type: ModuleType): NodeType = when (type.name) {
@@ -41,6 +42,7 @@ enum class NodeType(val id: Int) {
             "Pluck" -> Pluck
             "FM" -> Fm
             "SF" -> Sf
+            "DotSeq" -> DotSeq
             else -> Unknown
         }
     }
@@ -79,6 +81,8 @@ interface GraphCommands {
     fun setTempo(bpm: Float)
     /** Gives SF node [id] a synth over the loaded font [font], a native handle. */
     fun setFont(id: Long, font: Long)
+    /** Dot [slot] of dot sequencer [id]; a length of 0 clears the slot. */
+    fun setDot(id: Long, slot: Int, step: Int, degree: Int, length: Int)
     fun collectGarbage()
 }
 
@@ -155,6 +159,11 @@ object EngineCommands : GraphCommands {
         AudioEngine.setTempo(bpm)
     }
 
+    override fun setDot(id: Long, slot: Int, step: Int, degree: Int, length: Int) {
+        trace { "dot $id[$slot] = step $step degree $degree for $length" }
+        AudioEngine.setDot(id, slot, step, degree, length)
+    }
+
     override fun setFont(id: Long, font: Long) {
         trace { "font $id = $font" }
         AudioEngine.setNodeFont(id, font)
@@ -185,6 +194,7 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
     private var syncedBeatsPerBar: Int? = null
     private var syncedTempo: Float? = null
     private var syncedFonts = emptyMap<Long, Long>()
+    private var syncedDots = emptyMap<Long, List<Dot>>()
 
     /** Forget what the engine has, so the next sync re-sends everything. */
     fun invalidate() {
@@ -197,6 +207,7 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
         syncedBeatsPerBar = null
         syncedTempo = null
         syncedFonts = emptyMap()
+        syncedDots = emptyMap()
     }
 
     /**
@@ -312,6 +323,17 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
             }
         }
 
+        // Dots, by slot: what changed, a cleared slot for each one that went, and all of them
+        // for a node that was just made.
+        val dots = sounding.filter { it.type.grid == GridKind.DOTS }.associate { it.id to it.dots.toList() }
+        dots.forEach { (id, list) ->
+            val previous = if (id in fresh) null else syncedDots[id]
+            list.forEachIndexed { slot, dot ->
+                if (previous?.getOrNull(slot) != dot) commands.setDot(id, slot, dot.step, dot.degree, dot.length)
+            }
+            for (slot in list.size until (previous?.size ?: 0)) commands.setDot(id, slot, 0, 0, 0)
+        }
+
         // The scale list, whole, when it or the bar length changes: entries last bars and
         // beats, and the engine counts only beats.
         if (syncedScales != patch.scales || syncedBeatsPerBar != patch.beatsPerBar) {
@@ -332,6 +354,7 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
         syncedBeatsPerBar = patch.beatsPerBar
         syncedTempo = patch.tempo
         syncedFonts = wanted
+        syncedDots = dots
 
         // Whatever the audio thread retired during the last block is ours to free.
         commands.collectGarbage()

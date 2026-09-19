@@ -95,6 +95,8 @@ public:
     bool postDisconnectMod(int64_t srcId, int32_t srcPort, int64_t dstId, int32_t paramIndex);
     /** One step of a sequence, as a degree of the patch's scales. */
     bool postSetStep(int64_t id, int32_t index, int32_t degree, bool gate);
+    /** One dot of a dot sequencer, by slot; a length of 0 clears the slot. */
+    bool postSetDot(int64_t id, int32_t slot, int32_t step, int32_t degree, int32_t length);
     /**
      * Replaces the patch's scales with [list], which the graph takes ownership of. Built
      * by the caller off the audio thread and swapped in whole; the list it replaces comes
@@ -161,7 +163,7 @@ public:
 private:
     enum class CommandType : int32_t {
         Add, Remove, Connect, Disconnect, SetParam, SetStep, SetTempo, ResetTransport,
-        SetScales, SetModRange, ConnectMod, DisconnectMod, SetResource,
+        SetScales, SetModRange, ConnectMod, DisconnectMod, SetResource, SetDot,
     };
 
     struct Command {
@@ -185,6 +187,9 @@ private:
         ScaleList *scales = nullptr;
         /** SetResource only: what the node takes. */
         Resource *resource = nullptr;
+        /** SetDot only, beside paramIndex (the slot) and degree: where it starts and how long. */
+        int32_t step = 0;
+        int32_t length = 0;
     };
 
     /**

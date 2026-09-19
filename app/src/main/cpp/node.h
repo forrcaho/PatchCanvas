@@ -89,6 +89,20 @@ public:
     }
 
     /**
+     * Dot [slot] of a dot sequencer: a note at [step], [degree], lasting [length] steps, or
+     * no dot when [length] is 0. Slots are the interface's list positions; the node keeps
+     * them in place so a change to one dot is one command.
+     *
+     * Audio thread, same rules as setParam.
+     */
+    virtual void setDot(int32_t slot, int32_t step, int32_t degree, int32_t length) {
+        (void) slot;
+        (void) step;
+        (void) degree;
+        (void) length;
+    }
+
+    /**
      * Where a sequencer has got to, or -1 for everything that is not one.
      *
      * Read on the audio thread only, by the graph, which republishes it through an

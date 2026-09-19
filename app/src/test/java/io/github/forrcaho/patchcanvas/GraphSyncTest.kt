@@ -23,6 +23,7 @@ private sealed interface Cmd {
     data class ConnectMod(val src: Long, val srcPort: Int, val dst: Long, val index: Int) : Cmd
     data class DisconnectMod(val src: Long, val srcPort: Int, val dst: Long, val index: Int) : Cmd
     data class SetFont(val id: Long, val font: Long) : Cmd
+    data class SetDot(val id: Long, val slot: Int, val step: Int, val degree: Int, val length: Int) : Cmd
 }
 
 private class Recorder : GraphCommands {
@@ -51,6 +52,9 @@ private class Recorder : GraphCommands {
     }
     override fun setTempo(bpm: Float) { log += Cmd.SetTempo(bpm) }
     override fun setFont(id: Long, font: Long) { log += Cmd.SetFont(id, font) }
+    override fun setDot(id: Long, slot: Int, step: Int, degree: Int, length: Int) {
+        log += Cmd.SetDot(id, slot, step, degree, length)
+    }
     override fun setModRange(id: Long, index: Int, low: Float, high: Float, exponential: Boolean) {
         log += Cmd.SetModRange(id, index, low, high, exponential)
     }
@@ -472,6 +476,15 @@ class ModuleContractTest {
             Regex("""constexpr int32_t $name = (\d+);""").find(header)!!.groupValues[1].toInt()
         assertEquals(constant("kMaxParams"), MAX_PARAMS)
         assertEquals(constant("kMaxPorts"), MAX_PORTS)
+    }
+
+    @Test
+    fun `the dot sequencer's limits are the engine's`() {
+        val header = java.io.File("src/main/cpp/nodes.h").readText().substringAfter("class DotSeqNode")
+        fun constant(name: String) =
+            Regex("""constexpr int32_t $name = (\d+);""").find(header)!!.groupValues[1].toInt()
+        assertEquals(constant("kSteps"), DOT_STEPS)
+        assertEquals(constant("kMaxDots"), MAX_DOTS)
     }
 
     @Test
@@ -1177,5 +1190,42 @@ class SoundFontSyncTest {
         val rec = Recorder()
         GraphSync(rec).sync(patch, mapOf(DEFAULT_SOUNDFONT to bank))
         assertTrue(rec.log.none { it is Cmd.SetFont })
+    }
+}
+
+/** Dots cross by slot: only what changed, a cleared slot for one that went, all of them for a new node. */
+class DotSyncTest {
+
+    @Test
+    fun `dots cross by slot, and only when they change`() {
+        val patch = Patch()
+        val seq = patch.add(Types.DotSeq, Offset.Zero)!!
+        seq.addDot(Dot(0, 0, 2))
+        seq.addDot(Dot(4, 7, 1))
+        val rec = Recorder()
+        val sync = GraphSync(rec)
+        sync.sync(patch)
+        assertEquals(
+            listOf(Cmd.SetDot(seq.id, 0, 0, 0, 2), Cmd.SetDot(seq.id, 1, 4, 7, 1)),
+            rec.log.filterIsInstance<Cmd.SetDot>(),
+        )
+
+        rec.log.clear()
+        seq.setDotLength(1, 3)
+        sync.sync(patch)
+        assertEquals(listOf(Cmd.SetDot(seq.id, 1, 4, 7, 3)), rec.log.filterIsInstance<Cmd.SetDot>())
+
+        // The first goes: the second moves to slot 0, and slot 1 is cleared.
+        rec.log.clear()
+        seq.removeDot(0)
+        sync.sync(patch)
+        assertEquals(
+            listOf(Cmd.SetDot(seq.id, 0, 4, 7, 3), Cmd.SetDot(seq.id, 1, 0, 0, 0)),
+            rec.log.filterIsInstance<Cmd.SetDot>(),
+        )
+
+        rec.log.clear()
+        sync.sync(patch)
+        assertTrue("nothing new, nothing sent", rec.log.isEmpty())
     }
 }
