@@ -1609,7 +1609,7 @@ void euclidSpreadsItsPulses() {
     check(std::count(five.begin(), five.end(), 'x') == 5, "5 over 8 has five, " + five);
     std::string turned;
     for (int i = 0; i < 8; ++i) turned += EuclidNode::hit(i, 8, 3, 1) ? 'x' : '.';
-    check(turned != tresillo && std::count(turned.begin(), turned.end(), 'x') == 3, "rotate turns it, " + turned);
+    check(turned == "..x..x.x", "rotate turns it, " + turned);
 
     EuclidNode euclid;
     euclid.setParam(3, 5.0f);

@@ -354,6 +354,13 @@ enum class GridKind {
      */
     DOTS,
 
+    /**
+     * Nothing to edit, only to see: a Euclid's pattern, one mark per step, filled where a
+     * note falls, with the playhead on it. Its knobs are what change it, and watching the
+     * pulses move as they turn is most of what makes the knobs make sense.
+     */
+    PATTERN,
+
     /** Columns are steps in time and each holds one degree: a melody. */
     SEQUENCE,
 
@@ -563,6 +570,7 @@ object Types {
     val Euclid = ModuleType(
         "Euclid", emptyList(), listOf(Port("notes", N)),
         Color(0xFF009040),
+        grid = GridKind.PATTERN,
         params = listOf(
             Param("steps", 1f, EUCLID_STEPS.toFloat(), 8f, "", STEP),
             Param("pulses", 0f, EUCLID_STEPS.toFloat(), 3f, "", STEP, short = "pul"),
@@ -1122,14 +1130,24 @@ internal fun panelPort(panel: Rect, d: Float, dir: PortDirection, index: Int, co
 internal fun panelGrid(panel: Rect, d: Float, type: ModuleType? = null): Rect {
     val body = panelBody(panel, d)
     val side = PatchModule.PANEL_SIDE * d
-    val share = if (type != null && type.rowParams.isEmpty()) 1f else 0.66f
-    return Rect(panel.left + side, body.top, panel.right - side, body.top + body.height * share)
+    return Rect(panel.left + side, body.top, panel.right - side, body.top + body.height * gridShare(type))
+}
+
+/**
+ * How much of the body the grid takes. A pattern is one row of marks and is only looked at,
+ * so it takes a fifth and leaves the knobs that change it most of the room.
+ */
+private fun gridShare(type: ModuleType?): Float = when {
+    type == null -> 0.66f
+    type.grid == GridKind.PATTERN -> 0.2f
+    type.rowParams.isEmpty() -> 1f
+    else -> 0.66f
 }
 
 private fun panelControls(panel: Rect, d: Float, type: ModuleType): Rect {
     val body = panelBody(panel, d)
     return if (type.grid != GridKind.NONE) {
-        Rect(body.left, body.top + body.height * 0.66f, body.right, body.bottom)
+        Rect(body.left, body.top + body.height * gridShare(type), body.right, body.bottom)
     } else {
         body
     }
@@ -1486,7 +1504,8 @@ private fun DrawScope.drawPresetPage(panel: Rect, d: Float, sf: SfView, code: In
         drawText(note, topLeft = page.area.center - Offset(note.size.width / 2f, note.size.height / 2f))
         return
     }
-    page.tiles(presets.size, sf.scroll).forEach { (i, rect) ->
+    val scroll = page.resolve(sf.scroll, presets, code)
+    page.tiles(presets.size, scroll).forEach { (i, rect) ->
         drawTile(rect, d, presets[i].name, presetDetail(presets[i]), presets[i].code == code, measurer)
     }
     // How far down the list the page is, in the margin to its right: 274 instruments and no
@@ -1496,7 +1515,7 @@ private fun DrawScope.drawPresetPage(panel: Rect, d: Float, sf: SfView, code: In
         val track = Rect(page.area.right + 2f * d, page.area.top, page.area.right + 6f * d, page.area.bottom)
         val shown = page.rows.toFloat() / (page.rows + max)
         val thumbH = maxOf(track.height * shown, 24f * d)
-        val top = track.top + (track.height - thumbH) * sf.scroll / max
+        val top = track.top + (track.height - thumbH) * scroll.coerceIn(0, max) / max
         drawRoundRect(ChipEdge, track.topLeft, track.size, CornerRadius(2f * d, 2f * d))
         drawRoundRect(scaleAccent, Offset(track.left, top), Size(track.width, thumbH), CornerRadius(2f * d, 2f * d))
     }
@@ -1565,6 +1584,8 @@ internal fun panelPresetChip(panel: Rect, d: Float): Rect {
 }
 
 internal const val PRESET_CHIP_W = 240f
+/** A preset page's scroll that means "wherever the chosen preset is"; see [PresetPage.resolve]. */
+internal const val SCROLL_TO_CHOSEN = -1
 internal const val PRESET_TILE_W = 188f
 internal const val PRESET_TILE_H = 44f
 /** The strip of fonts above the presets: one line of text, so shorter than a tile. */
@@ -1604,6 +1625,15 @@ internal class PresetPage(
             )
         }
     }
+
+    /**
+     * The scroll to draw at: [scroll] itself, or -- when it is [SCROLL_TO_CHOSEN] -- the
+     * one that shows the chosen preset. That can only be worked out once a font's list has
+     * loaded, which after switching banks is a moment after the switch.
+     */
+    fun resolve(scroll: Int, presets: List<SoundFontPreset>, code: Int): Int =
+        if (scroll != SCROLL_TO_CHOSEN) scroll
+        else presets.indexOfFirst { it.code == code }.let { if (it >= 0) scrollTo(it, presets.size) else 0 }
 
     /** The scroll that puts preset [index] on the page, as near the top as it can be. */
     fun scrollTo(index: Int, count: Int): Int = (index / columns).coerceIn(0, maxScroll(count))
@@ -1692,7 +1722,7 @@ internal const val SCALE_TILE_H = 56f
 internal fun panelCellAt(
     panel: Rect, d: Float, module: PatchModule, at: Offset, scale: Scale = Scale.Chromatic,
 ): Pair<Int, Int>? {
-    if (module.type.grid == GridKind.NONE) return null
+    if (module.type.grid == GridKind.NONE || module.type.grid == GridKind.PATTERN) return null
     val area = panelGrid(panel, d, module.type)
     if (!area.contains(at)) return null
 
@@ -3370,7 +3400,9 @@ fun PatchCanvas(
     LaunchedEffect(openModule?.id, openModule?.type?.grid) {
         // A sequencer's only, of either kind. A drone has no position to report, and polling one every
         // frame for a -1 is a frame's work for nothing.
-        val id = openModule?.takeIf { it.type.grid == GridKind.SEQUENCE || it.type.grid == GridKind.DOTS }?.id
+        val id = openModule?.takeIf {
+            it.type.grid == GridKind.SEQUENCE || it.type.grid == GridKind.DOTS || it.type.grid == GridKind.PATTERN
+        }?.id
         if (id == null) {
             playingStep = -1
             return@LaunchedEffect
@@ -3494,7 +3526,8 @@ fun PatchCanvas(
                                 val presets = loadedFont?.presets.orEmpty()
                                 val page = presetPage(panel, d, fontNames.size, frame.fontScale)
                                 if (presetMenu) {
-                                    val scrollFrom = presetScroll
+                                    val code = open.params[SF_PRESET].roundToInt()
+                                    val scrollFrom = page.resolve(presetScroll, presets, code)
                                     var moved = false
                                     while (true) {
                                         val event = awaitPointerEvent()
@@ -3513,9 +3546,11 @@ fun PatchCanvas(
                                             // Another bank, and the page stays open on it: the
                                             // instrument is chosen next, from its list.
                                             open.font = fontNames[font]
-                                            presetScroll = 0
+                                            // Where the chosen instrument is in this bank,
+                                            // once its list has loaded.
+                                            presetScroll = SCROLL_TO_CHOSEN
                                         } else {
-                                            page.tiles(presets.size, presetScroll)
+                                            page.tiles(presets.size, scrollFrom)
                                                 .firstOrNull { it.second.contains(down.position) }
                                                 ?.let { (i, _) -> open.setParam(SF_PRESET, presets[i].code.toFloat()) }
                                             presetMenu = false
@@ -3525,8 +3560,7 @@ fun PatchCanvas(
                                 }
                                 if (panelPresetChip(panel, d).contains(down.position)) {
                                     waitForUpRelease()
-                                    val current = presets.indexOfFirst { it.code == open.params[SF_PRESET].roundToInt() }
-                                    presetScroll = if (current >= 0) page.scrollTo(current, presets.size) else 0
+                                    presetScroll = SCROLL_TO_CHOSEN
                                     presetMenu = true
                                     return@awaitEachGesture
                                 }
@@ -4731,6 +4765,36 @@ private fun DrawScope.drawDroneGrid(
                 cornerRadius = radius,
             )
         }
+    }
+}
+
+/**
+ * Whether step [index] of a Euclid's pattern sounds. The engine's rule, EuclidNode::hit,
+ * written again here for the drawing; a test holds the two to the same patterns.
+ */
+internal fun euclidHit(index: Int, steps: Int, pulses: Int, rotate: Int): Boolean {
+    if (steps <= 0 || pulses <= 0) return false
+    if (pulses >= steps) return true
+    val at = (index + rotate).mod(steps)
+    return (at * pulses) % steps < pulses
+}
+
+/** A Euclid's pattern: a mark per step, filled where a note falls, ringed where it is. */
+private fun DrawScope.drawEuclidPattern(area: Rect, d: Float, module: PatchModule, accent: Color, playingStep: Int) {
+    val steps = module.params.getOrElse(0) { 8f }.roundToInt().coerceIn(1, EUCLID_STEPS)
+    val pulses = module.params.getOrElse(1) { 3f }.roundToInt()
+    val rotate = module.params.getOrElse(2) { 0f }.roundToInt()
+    val pitch = area.width / steps
+    val radius = minOf(pitch * 0.36f, area.height * 0.3f, 14f * d)
+    repeat(steps) { i ->
+        val center = Offset(area.left + (i + 0.5f) * pitch, area.center.y)
+        if (euclidHit(i, steps, pulses, rotate)) {
+            drawCircle(accent, radius, center)
+        } else {
+            drawCircle(GridCell, radius, center)
+            drawCircle(ChipEdge, radius, center, style = Stroke(width = 1.5f * d))
+        }
+        if (i == playingStep) drawCircle(GridPlaying, radius + 4f * d, center, style = Stroke(width = 2f * d))
     }
 }
 
@@ -6371,9 +6435,10 @@ private fun DrawScope.drawPanel(
         )
         GridKind.DRONE -> drawDroneGrid(gridArea, d, module, scale, module.type.accent)
         GridKind.DOTS -> drawDotGrid(gridArea, d, module, scale, module.type.accent, measurer, playingStep)
+        GridKind.PATTERN -> drawEuclidPattern(gridArea, d, module, module.type.accent, playingStep)
         GridKind.NONE -> {}
     }
-    if (module.type.grid != GridKind.NONE) {
+    if (module.type.grid != GridKind.NONE && module.type.grid != GridKind.PATTERN) {
         drawGridScrollBar(gridArea, d, gridWindow(module, gridArea, d, scale), module.type.accent)
     }
 

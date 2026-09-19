@@ -67,6 +67,17 @@ class SoundFontTest {
     }
 
     @Test
+    fun `a page asked for the chosen preset finds it once the list is there`() {
+        val page = presetPage(panel, d, fontCount = 1)
+        val presets = (0 until count).map { SoundFontPreset(it / 128, it % 128, "p$it") }
+        val chosen = presets[200]
+        val scroll = page.resolve(SCROLL_TO_CHOSEN, presets, chosen.code)
+        assertTrue(200 in page.tiles(count, scroll).map { it.first })
+        assertEquals("with no list yet, the top", 0, page.resolve(SCROLL_TO_CHOSEN, emptyList(), chosen.code))
+        assertEquals("a scroll that is a number is that number", 3, page.resolve(3, presets, chosen.code))
+    }
+
+    @Test
     fun `a second font puts a strip of banks above the presets`() {
         val one = presetPage(panel, d, fontCount = 1)
         val two = presetPage(panel, d, fontCount = 2)

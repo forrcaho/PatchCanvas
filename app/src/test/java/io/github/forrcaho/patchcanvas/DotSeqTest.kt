@@ -96,4 +96,16 @@ class DotSeqTest {
         assertEquals(listOf(Dot(1, 2, 3)), patch.module(seq.id)!!.dots.toList())
         assertEquals("the undo is byte for byte", before, patch.toJson())
     }
+
+    /** The patterns node_test checks EuclidNode::hit against, so the drawing and the sound agree. */
+    @Test
+    fun `a Euclid draws the pattern it plays`() {
+        fun pattern(steps: Int, pulses: Int, rotate: Int) =
+            (0 until steps).joinToString("") { if (euclidHit(it, steps, pulses, rotate)) "x" else "." }
+        assertEquals("x..x..x.", pattern(8, 3, 0))
+        assertEquals(5, pattern(8, 5, 0).count { it == 'x' })
+        assertEquals("the same turned by one, as node_test has it", "..x..x.x", pattern(8, 3, 1))
+        assertEquals("the rhythm, not a pitch grid: nothing to tap", null,
+            Patch().add(Types.Euclid, Offset.Zero)!!.let { panelCellAt(panel, d, it, panelGrid(panel, d, it.type).center) })
+    }
 }

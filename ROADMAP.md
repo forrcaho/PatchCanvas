@@ -2231,6 +2231,10 @@ brighter and rings longer, as in Plaits.
   gives its voice back. Otherwise eight long notes and every voice is spoken for,
   silently. `voicesInUse()` exists so a test can see it -- stealing would otherwise hide
   it, since a ninth note sounds either way.
+- **It costs about seven Osc voices a voice.** DaisySP's string works out its damping
+  filter with `powf` and `atanf` every sample; eight ringing voices measured 13.6ms per
+  second of audio on the desk, against 2.0 for eight Osc voices and 4.9 for eight FM. Perhaps
+  5% of a phone core -- fine, and the first place to look if a dense patch stutters.
 - **A release is a finger muting the string**: after an Off the voice fades with time
   constant `R`, 1s by default, so a half-step note from `Steps` still rings rather than
   choking.
@@ -2330,8 +2334,9 @@ null on an SF so a patch keeps the bank it was made with if the shipped one chan
   load. Defined behavior in C++20 and on every compiler here; the host build compiles
   vendored code with `-fno-sanitize=shift` rather than editing upstream.
 
-**Still to do:** after switching fonts the page opens at the top rather than at the
-current instrument, since the new bank's list is not loaded when the choice is made.
+After switching fonts the page shows the chosen instrument in the new bank: the scroll is
+asked for as "wherever the chosen one is" and resolved once that bank's list has loaded,
+which is a moment after the switch. The first version opened at the top.
 
 ### DotSeq
 
@@ -2391,7 +2396,9 @@ answers to its sources' ids and speaks with its own; `NoteLinks` is the table be
   the sounding scale's size in degrees. Steps' half-step notes and header interval chip.
 - **Euclid** is a generator: pulses spread over steps by Bresenham's line (the same patterns
   as Bjorklund's up to rotation; 3 over 8 is the tresillo), turned by rotate, at one degree.
-  No grid yet -- the pattern is not drawn, which is the obvious next thing for it.
+  Its panel draws the pattern across the top -- a mark per step, filled where a note falls,
+  the playing one ringed -- from a Kotlin copy of the engine's rule that a test holds to the
+  same strings node_test checks the engine against.
 - Tested per processor on the host, each mutation-checked: Chance at 0, 1 and about half of a
   thousand, a dropped Off silent, a cut source ended; Chord's three notes and their degrees,
   a Change and an Off taking the whole chord; Arp in each mode from notes held out of order,
