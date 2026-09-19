@@ -511,6 +511,28 @@ object Types {
             Param("R", 0.001f, 10f, 0.25f, "s", EXP),
         ),
     )
+    /**
+     * A plucked string for every note: Karplus-Strong, one delay line per voice.
+     *
+     * A module rather than something patched from parts, because a string's pitch is the
+     * length of its delay line -- every voice needs its own, following its own note, and a
+     * patched delay is one line under the whole chord. Order mirrors PluckNode::setParam.
+     */
+    val Pluck = ModuleType(
+        "Pluck", listOf(Port("notes", N)), listOf(Port("out", A)),
+        Color(0xFF5CCCE0),
+        params = listOf(
+            // How long it rings: from a thud to, past 0.95, a string that never stops.
+            Param("decay", 0f, 1f, 0.8f, "", LIN),
+            // The burst that strikes it and the damping as it rings, together.
+            Param("bright", 0f, 1f, 0.5f, "", LIN),
+            // Below a quarter the bridge buzzes like a sitar's, above it the string
+            // stiffens towards a bell, and in between it is a plain string.
+            Param("stiff", 0f, 1f, 0.3f, "", LIN),
+            // After the note ends: short is a finger muting it, long lets it ring on.
+            Param("R", 0.01f, 10f, 1f, "s", EXP),
+        ),
+    )
     val Mix = ModuleType(
         "Mix",
         listOf(Port("a", A), Port("b", A), Port("c", A), Port("d", A)),
@@ -547,7 +569,7 @@ object Types {
      * inputs as you like, since each input stores its own source. Only summing ever
      * needed a module, and that is Mix.
      */
-    val palette = listOf(Osc, Drone, Steps, Filter, Env, Lfo, Mix)
+    val palette = listOf(Osc, Pluck, Drone, Steps, Filter, Env, Lfo, Mix)
 
     /**
      * Modules collapsed into one box. Its ports are its own rather than its type's -- they

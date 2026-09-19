@@ -3,9 +3,11 @@
 #include <cstdint>
 
 #include "node.h"
+#include "poly.h"
 
 #include "adsr.h"
 #include "dcblock.h"
+#include "KarplusString.h"
 #include "limiter.h"
 #include "oscillator.h"
 #include "svf.h"
@@ -32,6 +34,7 @@ enum class NodeType : int32_t {
     Osc = 10,
     Lfo = 11,
     Drone = 12,
+    Pluck = 13,
 };
 
 /**
@@ -52,13 +55,6 @@ constexpr Interval kIntervals[] = {
 };
 constexpr int32_t kIntervalCount = static_cast<int32_t>(sizeof(kIntervals) / sizeof(kIntervals[0]));
 constexpr int32_t kDefaultInterval = 3; // 1/8
-
-/**
- * Pitch is 1V/oct in the Eurorack sense, expressed in octaves: 0 is middle C, 1.0 is an
- * octave up. Using octaves rather than volts keeps the arithmetic to exp2 and avoids
- * pretending there is a voltage anywhere in here.
- */
-constexpr float kMiddleC = 261.6256f;
 
 /** Anything not yet implemented: right shape, silent. */
 class NullNode : public Node {
@@ -277,6 +273,17 @@ private:
     const ScaleList *retunedFor_ = nullptr;
 };
 
+/** One note of an Osc: a band-limited waveform through its own envelope. */
+struct OscVoice {
+    daisysp::Oscillator osc;
+    daisysp::Adsr env;
+
+    void init(float sampleRate);
+    void strike(float hz, float velocity, bool stolen);
+    void setFreq(float hz) { osc.SetFreq(hz); }
+    float render(bool gate, bool &finished);
+};
+
 /**
  * Notes in, sound out: a small polyphonic synth with its voices built in.
  *
@@ -289,66 +296,88 @@ private:
  * Patched voices, stamped out N times, are the other way to do this and are Phase 7's;
  * the two can coexist, and notes are the first step either way.
  */
-class OscNode : public Node {
+class OscNode : public PolySynth<OscVoice, 8> {
 public:
-    /**
-     * Eight. A sixteen-note column would be a chord nobody plays, and every voice costs
-     * an oscillator and an envelope whether it is sounding or not.
-     */
-    static constexpr int32_t kVoices = 8;
+    // Eight voices. A sixteen-note column would be a chord nobody plays, and every voice
+    // costs an oscillator and an envelope whether it is sounding or not.
 
-    int32_t inputCount() const override { return 1; }  // notes
-    int32_t outputCount() const override { return 1; }
-    uint32_t noteInputs() const override { return 1u << 0; }
     void prepare(int32_t sampleRate) override;
-    void process(int32_t frames) override;
     void setParam(int32_t index, float value) override;
-    void notesCut(int32_t port, int32_t source) override;
 
 private:
-    struct Voice {
-        daisysp::Oscillator osc;
-        daisysp::Adsr env;
-        /** Who it belongs to: the id its On carried, and the input slot that sent it. */
-        uint32_t id = 0;
-        int32_t source = -1;
-        bool gate = false;
-        /**
-         * Taken, whether or not it is making a sound yet.
-         *
-         * Separate from the envelope's own idea of running, because that only becomes true
-         * once a sample has been processed -- and every note of a chord starts on the same
-         * sample, before any of them has. Asking the envelope instead handed the whole
-         * chord to voice zero, one note overwriting the next, which sounded exactly like a
-         * monophonic sequencer and was found by a test asserting three notes sound.
-         */
-        bool active = false;
-        /** When it started, for choosing which to steal. */
-        int64_t age = 0;
-        /** Where its pitch is now, in octaves from middle C, cents included. */
-        float octaves = 0.0f;
-        /** A glide in progress: from, to, and frames still to go. */
-        float glideFrom = 0.0f;
-        float glideTo = 0.0f;
-        int32_t glideLeft = 0;
-    };
-
-    void start(const NoteEvent &event);
-    void release(uint32_t id, int32_t source);
-    /** A held note told to move: it glides there rather than stepping. */
-    void change(const NoteEvent &event);
-    /** A note's pitch in octaves from middle C, against the scale of the beat it carries. */
-    float pitchOf(const NoteEvent &event) const;
-
-    /** How long a glide takes: 30ms, like every crossfade in the engine. */
-    int32_t glideFrames_ = 1440;
-
-    Voice voices_[kVoices];
-    int64_t age_ = 0;
     float attack_ = 0.005f;
     float decay_ = 0.12f;
     float sustain_ = 0.6f;
     float release_ = 0.25f;
+};
+
+/**
+ * One note of a Pluck: a burst of noise into a Karplus-Strong string.
+ *
+ * The string is DaisySP's, which is Emilie Gillet's from Rings. The excitation is written
+ * here, after DaisySP's StringVoice (Plaits' string voice, also hers): a burst one period
+ * long, low-passed at a cutoff that rises with the note, with brightness, and with how hard
+ * the note was struck. StringVoice itself is not vendored because its sustain mode draws
+ * on Dust, which calls rand() -- a mutex, on Android -- for a mode nothing here uses.
+ */
+struct PluckVoice {
+    daisysp::String string;
+    daisysp::Svf excitation;
+
+    void init(float sampleRate);
+    void strike(float hz, float velocity, bool stolen);
+    void setFreq(float hz);
+    float render(bool gate, bool &finished);
+
+    /** The node's knobs, kept so each strike can add its own accent to them. */
+    void apply(float decay, float bright, float stiff);
+    /** The knobs with this note's accent added, into the string. */
+    void update();
+
+    float sampleRate = 48000.0f;
+    /** The note's frequency as a fraction of the sample rate, which is what sizes the burst. */
+    float f0 = 0.0f;
+    float accent = 1.0f;
+    float decayKnob = 0.8f;
+    float brightKnob = 0.5f;
+    float stiffKnob = 0.3f;
+    /** The brightness actually used: the knob, and more of it the harder the strike. */
+    float bright = 0.5f;
+    /** Samples of noise still to go into the string. */
+    int32_t noiseLeft = 0;
+    uint32_t rng = 1;
+    /** The release's fade, multiplied down each sample once the note is let go. */
+    float fade = 1.0f;
+    float releaseStep = 1.0f;
+    /** A peak follower, for knowing a string has rung out while still held. */
+    float level = 0.0f;
+    float levelFall = 0.9995f;
+};
+
+/**
+ * A plucked string: notes in, sound out.
+ *
+ * Built as a module rather than left to be patched from parts, which is the roadmap's test
+ * for a fixed module: a string is a delay line whose length is its pitch, so every voice
+ * needs its own, following its own note -- and a patched delay would be one line for the
+ * whole chord. It is also exactly the kind of thing that is fiddly to get right from parts.
+ *
+ * A note off lets the string ring for R before it is silent, like a finger coming down on
+ * it; a string that rings out while still held frees its voice anyway. Order of knobs
+ * mirrors PatchCanvas.kt: decay, bright, stiff, R.
+ */
+class PluckNode : public PolySynth<PluckVoice, 8> {
+public:
+    void prepare(int32_t sampleRate) override;
+    void setParam(int32_t index, float value) override;
+
+private:
+    void applyAll();
+
+    float decay_ = 0.8f;
+    float bright_ = 0.5f;
+    float stiff_ = 0.3f;
+    float release_ = 1.0f;
 };
 
 /**

@@ -22,7 +22,8 @@ enum class NodeType(val id: Int) {
     /** The polyphonic synth, called Voice while a monophonic Osc still existed. */
     Osc(10),
     Lfo(11),
-    Drone(12);
+    Drone(12),
+    Pluck(13);
 
     companion object {
         fun of(type: ModuleType): NodeType = when (type.name) {
@@ -35,6 +36,7 @@ enum class NodeType(val id: Int) {
             "Mix" -> Mix
             "LFO" -> Lfo
             "Drone" -> Drone
+            "Pluck" -> Pluck
             else -> Unknown
         }
     }

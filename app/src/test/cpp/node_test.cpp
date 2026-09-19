@@ -930,7 +930,7 @@ NoteEvent noteOff(uint32_t id, int32_t source = 0) {
 }
 
 /** Runs the voice for some blocks with nothing new arriving. */
-std::vector<float> voiceIdle(OscNode &voice, int blocks, const ScaleList *scales = nullptr) {
+std::vector<float> voiceIdle(Node &voice, int blocks, const ScaleList *scales = nullptr) {
     static const NoteBuffer empty{};
     voice.setNoteInput(0, &empty);
     voice.setTiming(0.0, false, scales);
@@ -948,7 +948,7 @@ std::vector<float> voiceIdle(OscNode &voice, int blocks, const ScaleList *scales
  * measures the peak of whatever part of the waveform it happened to land on -- the same
  * held note read 0.65 and 0.14 four blocks apart.
  */
-std::vector<float> voiceAfter(OscNode &voice, int blocks, const ScaleList *scales = nullptr) {
+std::vector<float> voiceAfter(Node &voice, int blocks, const ScaleList *scales = nullptr) {
     voiceIdle(voice, blocks, scales);
     return voiceIdle(voice, 16, scales);
 }
@@ -1086,6 +1086,116 @@ void aNinthNoteStealsAVoice() {
     run(voice, 1);
     check(peak(voiceAfter(voice, 600)) > 0.1f,
           "and the note that stole it is not ended by the old one's off");
+}
+
+/**
+ * The pitch of a steady tone, in hertz, by autocorrelation.
+ *
+ * Not by counting zero crossings, as the oscillator tests do: a plucked string is rich in
+ * harmonics and crosses zero several times a cycle, and read 2753 cycles for a 523Hz note.
+ * The lag at which the signal best matches itself is the period whatever its shape;
+ * refined between samples by a parabola through the peak.
+ */
+float pitchOf(const std::vector<float> &samples) {
+    const int32_t window = 4096;
+    const int32_t shortest = kRate / 2000;
+    const int32_t longest = kRate / 40;
+    auto correlation = [&](int32_t lag) {
+        double sum = 0.0;
+        for (int32_t i = 0; i < window; ++i) sum += samples[i] * samples[i + lag];
+        return sum;
+    };
+    // The first lag that comes near the best one, not the best outright: a lag of two
+    // periods matches almost as well as one, and a shade better on a decaying tone would
+    // report the note an octave down.
+    std::vector<double> values(longest + 2);
+    double best = 0.0;
+    for (int32_t lag = shortest; lag <= longest + 1; ++lag) {
+        values[lag] = correlation(lag);
+        best = std::max(best, values[lag]);
+    }
+    int32_t chosen = shortest;
+    for (int32_t lag = shortest + 1; lag <= longest; ++lag) {
+        if (values[lag] > 0.9 * best && values[lag] >= values[lag - 1] && values[lag] >= values[lag + 1]) {
+            chosen = lag;
+            break;
+        }
+    }
+    const double a = values[chosen - 1], b = values[chosen], c = values[chosen + 1];
+    const double shift = (a - c) / (2.0 * (a - 2.0 * b + c));
+    return static_cast<float>(kRate / (chosen + shift));
+}
+
+/** One note into [synth], delivered in the block this renders. */
+void play(Node &synth, const NoteEvent &event) {
+    NoteBuffer notes;
+    notes.push(event);
+    synth.setNoteInput(0, &notes);
+    synth.setTiming(0.0, false, nullptr);
+    run(synth, 1);
+}
+
+void aPluckSoundsItsNoteAtItsPitch() {
+    std::printf("a pluck sounds its note, at its pitch\n");
+    PluckNode pluck;
+    pluck.prepare(kRate);
+    pluck.setParam(0, 0.97f); // decay: past 0.95 the string rings on
+    pluck.setParam(2, 0.25f); // stiff: the plain string, neither buzzing nor stiffened
+
+    play(pluck, noteOn(1, 12)); // an octave above middle C
+    const auto second = voiceIdle(pluck, kRate / kBlockSize);
+    const float level = peak(second);
+    check(level > 0.1f, "a plucked note is heard, peak " + std::to_string(level));
+    check(level < 2.0f, "and not far louder than an Osc's, peak " + std::to_string(level));
+
+    const float wanted = 2.0f * kMiddleC;
+    const float heard = pitchOf(second);
+    // Within 5 cents. A string's pitch is its delay's length, and DaisySP compensates for
+    // the phase the damping filter adds; this is the check that the voice hands it hertz.
+    check(std::fabs(1200.0f * std::log2(heard / wanted)) < 5.0f,
+          "at " + std::to_string(wanted) + "Hz, heard " + std::to_string(heard));
+}
+
+void aPluckRingsOutWhileHeld() {
+    std::printf("a pluck rings out while held, and its voice comes back\n");
+    PluckNode pluck;
+    pluck.prepare(kRate);
+    pluck.setParam(0, 0.1f); // a short decay
+
+    play(pluck, noteOn(1, 0));
+    check(peak(voiceIdle(pluck, 10)) > 0.05f, "struck");
+    // Four seconds on, still held: a string is not an envelope with a sustain, and nothing
+    // is holding it up. The note was never released, so its voice freeing itself is what
+    // this is about -- without that, eight long notes and every voice is spoken for.
+    check(peak(voiceAfter(pluck, 4 * kRate / kBlockSize)) < 0.001f, "and falls silent held");
+    check(pluck.voicesInUse() == 0, "and gives its voice back, though never released");
+
+    // Eight held notes rung out leave all eight voices free, not eight silent notes each
+    // holding one until a ninth has to steal.
+    for (uint32_t i = 0; i < PluckNode::kVoices; ++i) play(pluck, noteOn(10 + i, static_cast<int32_t>(i)));
+    check(pluck.voicesInUse() == PluckNode::kVoices, "eight notes take eight voices");
+    voiceIdle(pluck, 4 * kRate / kBlockSize);
+    check(pluck.voicesInUse() == 0,
+          "and give all eight back, " + std::to_string(pluck.voicesInUse()) + " still taken");
+}
+
+void aPluckIsLetGoOverItsRelease() {
+    std::printf("a pluck is let go over its release\n");
+    const float releases[2] = {0.02f, 2.0f};
+    float left[2] = {};
+    for (int i = 0; i < 2; ++i) {
+        PluckNode pluck;
+        pluck.prepare(kRate);
+        pluck.setParam(0, 0.97f); // would ring forever
+        pluck.setParam(3, releases[i]);
+        play(pluck, noteOn(1, 0));
+        voiceIdle(pluck, 50);
+        play(pluck, noteOff(1));
+        // A third of a second after the off.
+        left[i] = peak(voiceAfter(pluck, kRate / 3 / kBlockSize));
+    }
+    check(left[0] < 0.001f, "a short release is a muted string, " + std::to_string(left[0]));
+    check(left[1] > 0.05f, "a long one lets it ring, " + std::to_string(left[1]));
 }
 
 void anLfoStaysInsideItsRangeAtItsRate() {
@@ -1313,6 +1423,9 @@ int main() {
     unpatchingASourceEndsItsNotes();
     aVoiceResolvesANoteAgainstItsOwnBeat();
     aNinthNoteStealsAVoice();
+    aPluckSoundsItsNoteAtItsPitch();
+    aPluckRingsOutWhileHeld();
+    aPluckIsLetGoOverItsRelease();
     anLfoStaysInsideItsRangeAtItsRate();
     aDroneHoldsItsNoteWithTheTransportStopped();
     aDroneSoundsSeveralCellsAtOnce();

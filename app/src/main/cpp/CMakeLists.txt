@@ -17,7 +17,9 @@ add_library(daisysp STATIC
         vendor/daisysp/svf.cpp
         vendor/daisysp/adsr.cpp
         vendor/daisysp/limiter.cpp
-        vendor/daisysp/dcblock.cpp)
+        vendor/daisysp/dcblock.cpp
+        vendor/daisysp/KarplusString.cpp
+        vendor/daisysp/crossfade.cpp)
 target_include_directories(daisysp PUBLIC vendor/daisysp)
 target_compile_options(daisysp PRIVATE -w)
 

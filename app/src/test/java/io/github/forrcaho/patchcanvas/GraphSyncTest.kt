@@ -444,6 +444,24 @@ class ModuleContractTest {
         assertEquals(ids.size, ids.distinct().size)
     }
 
+    /**
+     * Read out of nodes.h rather than trusted. Every other cross-boundary contract here is
+     * asserted, and this one was only claimed to be: a new module whose Kotlin id disagreed
+     * with the engine's would build, install and be silently a different module -- or none.
+     * Written when the catalog started growing again, since each new module is two enums
+     * edited in two languages.
+     */
+    @Test
+    fun `node type ids are the engine's`() {
+        val header = java.io.File("src/main/cpp/nodes.h").readText()
+        val body = header.substringAfter("enum class NodeType : int32_t {").substringBefore("};")
+        val engine = Regex("""^\s*(\w+)\s*=\s*(\d+),""", RegexOption.MULTILINE)
+            .findAll(body)
+            .associate { it.groupValues[1] to it.groupValues[2].toInt() }
+        assertTrue("found the enum", engine.size >= 10)
+        assertEquals(engine, NodeType.entries.associate { it.name to it.id })
+    }
+
     @Test
     fun `no module exceeds the engine's port limit`() {
         Types.byName.values.forEach { type ->

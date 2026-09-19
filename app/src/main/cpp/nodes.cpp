@@ -395,147 +395,41 @@ void StepsNode::setParam(int32_t index, float value) {
 
 // ---------------------------------------------------------------- Voice
 
+void OscVoice::init(float sampleRate) {
+    osc.Init(sampleRate);
+    osc.SetWaveform(daisysp::Oscillator::WAVE_POLYBLEP_SAW);
+    osc.SetAmp(1.0f);
+    env.Init(sampleRate);
+}
+
+void OscVoice::strike(float hz, float velocity, bool stolen) {
+    osc.SetFreq(hz);
+    osc.SetAmp(velocity);
+    // Taking a voice that is still held restarts its envelope from where it is, because
+    // the gate never fell and the envelope has no edge to see. Softly: from the level it
+    // reached rather than from zero, which would be a step in the middle of a note.
+    if (stolen) env.Retrigger(false);
+}
+
+float OscVoice::render(bool gate, bool &finished) {
+    const float amplitude = env.Process(gate);
+    // Finished its release, so it is free rather than merely quiet. Said here rather than
+    // by looking at the amplitude, which passes through zero on its way up as well.
+    if (!gate && !env.IsRunning()) {
+        finished = true;
+        return 0.0f;
+    }
+    return osc.Process() * amplitude;
+}
+
 void OscNode::prepare(int32_t sampleRate) {
-    Node::prepare(sampleRate);
-    glideFrames_ = std::max(1, static_cast<int32_t>(0.03f * static_cast<float>(sampleRate)));
-    for (auto &voice : voices_) {
-        voice.osc.Init(static_cast<float>(sampleRate));
-        voice.osc.SetWaveform(daisysp::Oscillator::WAVE_POLYBLEP_SAW);
-        voice.osc.SetAmp(1.0f);
-        voice.env.Init(static_cast<float>(sampleRate));
+    PolySynth::prepare(sampleRate);
+    forEachVoice([this](OscVoice &voice) {
         voice.env.SetAttackTime(attack_);
         voice.env.SetDecayTime(decay_);
         voice.env.SetSustainLevel(sustain_);
         voice.env.SetReleaseTime(release_);
-    }
-}
-
-void OscNode::start(const NoteEvent &event) {
-    // A note takes an idle voice, then the oldest one already released, and only then
-    // steals one that is still held. Stealing a held voice restarts an oscillator
-    // mid-cycle, which is a click -- so it is the last resort rather than the rule, and
-    // by the time eight notes are held a ninth was going to cost something regardless.
-    Voice *chosen = nullptr;
-    for (auto &voice : voices_) {
-        if (!voice.active) { chosen = &voice; break; }
-    }
-    if (chosen == nullptr) {
-        for (auto &voice : voices_) {
-            if (voice.gate) continue;
-            if (chosen == nullptr || voice.age < chosen->age) chosen = &voice;
-        }
-    }
-    if (chosen == nullptr) {
-        for (auto &voice : voices_) {
-            if (chosen == nullptr || voice.age < chosen->age) chosen = &voice;
-        }
-    }
-    // Taking a voice that is still held restarts its envelope from where it is, because
-    // the gate never fell and the envelope has no edge to see. Softly: from the level it
-    // reached rather than from zero, which would be a step in the middle of a note.
-    const bool stolen = chosen->active && chosen->gate;
-
-    // Resolved here, against the scale of the beat the note started on, which traveled
-    // with it. It is not resolved again unless the source sends a Change: a sequencer's
-    // note keeps the pitch it started on, and only a drone's follows the scale.
-    chosen->octaves = pitchOf(event);
-    chosen->glideLeft = 0;
-    chosen->osc.SetFreq(kMiddleC * std::exp2(chosen->octaves));
-    chosen->osc.SetAmp(clampf(event.velocity, 0.0f, 1.0f));
-    chosen->id = event.id;
-    chosen->source = event.source;
-    chosen->gate = true;
-    chosen->active = true;
-    chosen->age = age_++;
-    if (stolen) chosen->env.Retrigger(false);
-}
-
-float OscNode::pitchOf(const NoteEvent &event) const {
-    // The engine still never learns what a semitone is: a table lookup and an exp2.
-    const float octaves = scales_ != nullptr
-            ? scales_->tableAt(event.beat).octavesOf(event.degree)
-            : ScaleTable{}.octavesOf(event.degree);
-    return octaves + event.cents / 1200.0f;
-}
-
-void OscNode::change(const NoteEvent &event) {
-    const float target = pitchOf(event);
-    for (auto &voice : voices_) {
-        if (!voice.active || voice.id != event.id || voice.source != event.source) continue;
-        if (voice.glideLeft == 0 && voice.octaves == target) return;
-        // A glide, not a step. Retuning a sounding voice was rejected once because a
-        // major third dropping to a minor third mid-note is a step with no ramp -- the
-        // transient every crossfade here exists to prevent. The ramp is the answer to
-        // that, over the same 30ms and the same smoothstep the crossfades use. A glide
-        // already under way starts again from wherever it has got to.
-        voice.glideFrom = voice.octaves;
-        voice.glideTo = target;
-        voice.glideLeft = glideFrames_;
-        return;
-    }
-}
-
-void OscNode::release(uint32_t id, int32_t source) {
-    for (auto &voice : voices_) {
-        // Both, because ids belong to the source that chose them: two sequencers patched
-        // to the same input are each counting from one.
-        if (voice.gate && voice.id == id && voice.source == source) voice.gate = false;
-    }
-}
-
-void OscNode::notesCut(int32_t port, int32_t source) {
-    (void) port; // one note input, so there is nothing to tell apart
-    for (auto &voice : voices_) {
-        if (voice.source == source) voice.gate = false;
-    }
-}
-
-void OscNode::process(int32_t frames) {
-    float *o = out(0);
-    const NoteBuffer &notes = notesIn(0);
-    int32_t next = 0;
-
-    for (int32_t i = 0; i < frames; ++i) {
-        // Events land on their own sample, the way a tick does. Already in offset order,
-        // merged that way by the graph.
-        while (next < notes.count && notes.events[next].offset <= i) {
-            const NoteEvent &event = notes.events[next];
-            if (event.kind == NoteKind::On) start(event);
-            if (event.kind == NoteKind::Off) release(event.id, event.source);
-            if (event.kind == NoteKind::Change) change(event);
-            ++next;
-        }
-
-        // Summed, not averaged, like Mix: a chord is louder than one note, which is true
-        // of every instrument, and Out's limiter catches what that costs at the top.
-        float sum = 0.0f;
-        for (auto &voice : voices_) {
-            // A free voice is stepped by nothing: an oscillator that is not accumulating
-            // phase is one that starts its next note from zero.
-            if (!voice.active) continue;
-
-            const float amplitude = voice.env.Process(voice.gate);
-            if (!voice.gate && !voice.env.IsRunning()) {
-                // Finished its release, so it is free rather than merely quiet. Said here
-                // rather than by looking at the amplitude, which passes through zero on
-                // its way up as well.
-                voice.active = false;
-                voice.source = -1;
-                voice.id = 0;
-                continue;
-            }
-            if (voice.glideLeft > 0) {
-                const float t = 1.0f - static_cast<float>(voice.glideLeft - 1) /
-                                               static_cast<float>(glideFrames_);
-                const float eased = t * t * (3.0f - 2.0f * t);
-                voice.octaves = voice.glideFrom + (voice.glideTo - voice.glideFrom) * eased;
-                voice.osc.SetFreq(kMiddleC * std::exp2(voice.octaves));
-                --voice.glideLeft;
-            }
-            sum += voice.osc.Process() * amplitude;
-        }
-        o[i] = sum;
-    }
+    });
 }
 
 void OscNode::setParam(int32_t index, float value) {
@@ -551,27 +445,126 @@ void OscNode::setParam(int32_t index, float value) {
             };
             // Every voice, including any sounding: one module is one instrument, and half
             // a chord changing shape underneath you is not what the control says.
-            for (auto &voice : voices_) voice.osc.SetWaveform(kWaves[wave]);
+            forEachVoice([&](OscVoice &voice) { voice.osc.SetWaveform(kWaves[wave]); });
             break;
         }
         case 1:
             attack_ = clampf(value, 0.001f, 5.0f);
-            for (auto &voice : voices_) voice.env.SetAttackTime(attack_);
+            forEachVoice([this](OscVoice &voice) { voice.env.SetAttackTime(attack_); });
             break;
         case 2:
             decay_ = clampf(value, 0.001f, 5.0f);
-            for (auto &voice : voices_) voice.env.SetDecayTime(decay_);
+            forEachVoice([this](OscVoice &voice) { voice.env.SetDecayTime(decay_); });
             break;
         case 3:
             sustain_ = clampf(value, 0.0f, 1.0f);
-            for (auto &voice : voices_) voice.env.SetSustainLevel(sustain_);
+            forEachVoice([this](OscVoice &voice) { voice.env.SetSustainLevel(sustain_); });
             break;
         case 4:
             release_ = clampf(value, 0.001f, 10.0f);
-            for (auto &voice : voices_) voice.env.SetReleaseTime(release_);
+            forEachVoice([this](OscVoice &voice) { voice.env.SetReleaseTime(release_); });
             break;
         default: break;
     }
+}
+
+// ---------------------------------------------------------------- Pluck
+
+void PluckVoice::init(float rate) {
+    sampleRate = rate;
+    string.Init(rate);
+    excitation.Init(rate);
+    // A follower that falls by half in about 70ms: slower than a cycle of anything
+    // audible, so a waveform passing through zero never looks like silence.
+    levelFall = std::exp(-1.0f / (0.1f * rate));
+}
+
+void PluckVoice::setFreq(float hz) {
+    string.SetFreq(hz);
+    f0 = clampf(hz / sampleRate, 0.0f, 0.25f);
+}
+
+void PluckVoice::apply(float decay, float brightness, float stiff) {
+    decayKnob = decay;
+    brightKnob = brightness;
+    stiffKnob = stiff;
+    update();
+}
+
+void PluckVoice::update() {
+    // Striking harder is brighter and rings longer, as StringVoice has it: a quarter of
+    // the way from the knob to the top at full velocity.
+    bright = brightKnob + 0.25f * accent * (1.0f - brightKnob);
+    string.SetBrightness(bright);
+    string.SetDamping(decayKnob + 0.25f * accent * (1.0f - decayKnob));
+    // Below a quarter the bridge curves and the string buzzes like a sitar's; above it,
+    // it stiffens towards a bell. Between, a plain string. StringVoice's mapping.
+    const float nonLinearity = stiffKnob < 0.24f ? (stiffKnob - 0.24f) * 4.166f
+            : (stiffKnob > 0.26f ? (stiffKnob - 0.26f) * 1.35135f : 0.0f);
+    string.SetNonLinearity(nonLinearity);
+}
+
+void PluckVoice::strike(float hz, float velocity, bool stolen) {
+    (void) stolen; // a string struck again while ringing is what a string does
+    setFreq(hz);
+    accent = velocity;
+    update();
+    const float cutoff = std::fmin(
+            4.0f * f0 * std::exp2((bright * (2.0f - bright) - 0.5f) * 6.0f), 0.499f);
+    excitation.SetFreq(cutoff * sampleRate);
+    excitation.SetRes(0.5f);
+    noiseLeft = f0 > 0.0f ? static_cast<int32_t>(1.0f / f0) : 0;
+    fade = 1.0f;
+    level = 1.0f;
+}
+
+float PluckVoice::render(bool gate, bool &finished) {
+    float noise = 0.0f;
+    if (noiseLeft > 0) {
+        rng = rng * 1664525u + 1013904223u;
+        noise = static_cast<float>(rng >> 8) * (2.0f / 16777216.0f) - 1.0f;
+        // Scaled by how hard it was struck, which StringVoice leaves to the brightness.
+        noise *= accent;
+        --noiseLeft;
+    }
+    excitation.Process(noise);
+    float sample = string.Process(excitation.Low());
+
+    if (!gate) fade *= releaseStep;
+    sample *= fade;
+
+    level = std::fmax(std::fabs(sample), level * levelFall);
+    // Rung out, or released and faded: either way there is nothing left to hear.
+    if (noiseLeft == 0 && (level < 1.0e-4f || fade < 1.0e-4f)) {
+        finished = true;
+        return 0.0f;
+    }
+    return sample;
+}
+
+void PluckNode::prepare(int32_t sampleRate) {
+    PolySynth::prepare(sampleRate);
+    applyAll();
+}
+
+void PluckNode::applyAll() {
+    // R as a time constant, like the envelopes': the fade reaches a third in R seconds.
+    const float step = std::exp(-1.0f / (release_ * static_cast<float>(sampleRate_)));
+    forEachVoice([&](PluckVoice &voice) {
+        voice.apply(decay_, bright_, stiff_);
+        voice.releaseStep = step;
+    });
+}
+
+void PluckNode::setParam(int32_t index, float value) {
+    switch (index) {
+        case 0: decay_ = clampf(value, 0.0f, 1.0f); break;
+        case 1: bright_ = clampf(value, 0.0f, 1.0f); break;
+        case 2: stiff_ = clampf(value, 0.0f, 1.0f); break;
+        case 3: release_ = clampf(value, 0.01f, 10.0f); break;
+        default: return;
+    }
+    applyAll();
 }
 
 // ---------------------------------------------------------------- LFO
@@ -694,6 +687,7 @@ Node *makeNode(NodeType type) {
         case NodeType::Steps: return new StepsNode();
         case NodeType::Mix: return new MixNode();
         case NodeType::Osc: return new OscNode();
+        case NodeType::Pluck: return new PluckNode();
         case NodeType::Lfo: return new LfoNode();
         case NodeType::Drone: return new DroneNode();
         case NodeType::Out: return new OutNode();

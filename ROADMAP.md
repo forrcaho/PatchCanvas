@@ -409,7 +409,9 @@ plus the `RECORD_AUDIO` grant. That is worth more than any amount of DSP.
 
 ### Growing the library
 
-The vendored DaisySP tree already holds far more than the eight modules above, all MIT:
+Upstream DaisySP holds far more than the eight modules above, all MIT -- the *vendored*
+copy is only what is used, so adding one of these means copying it in (see
+`vendor/daisysp/README.md`); this sentence said "the vendored tree" until 2026-09-18:
 `KarplusString` (Emilie Gillet's, not the LGPL `pluck`), `stringvoice`, `modalvoice`,
 `resonator`; `wavefolder`, `overdrive`, `decimator`, `chorus`, `flanger`, `phaser`,
 `pitchshifter`; `fm2`, `formantosc`, `harmonic_osc`, `oscillatorbank`, `vosim`; the
@@ -2157,6 +2159,83 @@ buys back a good deal of the same screen space for far less work.
 - Turn `isMinifyEnabled` on for release and confirm nothing reflective breaks.
 - MIDI in over USB/BLE via `android.media.midi`, translated at the edge into Phase 6's
   note events, if it still seems worth it by then.
+
+## Phase 9 -- Instruments and sequencers
+
+**Decided 2026-09-18, and built ahead of Phase 8** at Forrest's call: more modules, after
+Bespoke's but not copies of them. Three instruments -- **Pluck** (Karplus-Strong), **FM**
+and **SF** (a SoundFont player, which Bespoke does not have) -- and then sequencers:
+**DotSeq**, the one asked about most because a note's length is set per note, and four
+note processors, **Arp**, **Chance**, **Chord** and **Euclid**. In that order: voices
+first, then DotSeq.
+
+**Neither FM nor a plucked string can be built from groups**, which was asked. Modulation
+is applied once per 32-sample block, about 1.5kHz, and FM needs every sample; since
+typing was enforced no `Osc` takes audio in anyway. And the harder reason: an `Osc` sends
+the sum of its eight voices, so one feeding another would bend every note of a chord by
+the same mixture rather than each note by its own partner. A string is the same problem --
+its pitch is the length of its delay line, one per note. Both are what the module *is*,
+which is the roadmap's test for a fixed module ("Growing the library", above), and the
+decision already taken for FM on 2026-09-15.
+
+**A panel past five rows goes to two columns**, chosen over pages and over trimming FM to
+fit. The landscape panel is about 980dp wide, so a half-width bar is still long enough to
+set finely, and nothing is hidden behind a chip. `kMaxParams` rises from 5 to 8 with it.
+
+**The app ships a small soundfont**, so SF sounds out of the box -- its license and size to
+be put to Forrest before it is added.
+
+### The voices share one engine
+
+Everything `Osc` did that was not its sound -- choosing a voice, stealing the oldest
+released one before a held one, matching an Off by source *and* id, gliding on a Change,
+releasing what an unpatched source held -- moved into `PolySynth<Voice, N>` in `poly.h`.
+Each of those rules was paid for by a bug; a second synth copying them would have been a
+second place to fix the next. A synth is now a `Voice` with `init`, `strike`, `setFreq`
+and `render(gate, finished)`, and `render` says when the voice is free, because only the
+voice knows what its silence looks like. A template, not a virtual call: `render` runs per
+voice per sample. The refactor changed no test, and all of `Osc`'s passed unchanged.
+
+### Pluck
+
+**Built 2026-09-18.** DaisySP's `String` -- Emilie Gillet's, from Rings -- with the
+excitation written in the voice after DaisySP's `StringVoice` (Plaits' string voice): a
+burst of noise one period long, low-passed at a cutoff that rises with pitch, brightness
+and velocity. Knobs `decay`, `bright`, `stiff`, `R`. Velocity is the accent -- harder is
+brighter and rings longer, as in Plaits.
+
+- **`rand()` is a mutex on Android.** Bionic's `random()` locks, and DaisySP calls `rand()`
+  on the audio thread in the string's dispersion and in `Dust`. The vendored `String` has
+  its own generator instead -- the only edit to upstream code beyond flattened includes --
+  and `StringVoice` is not vendored at all, since its only use of `Dust` is a sustain mode
+  nothing here needs.
+- **A string frees its voice while still held.** An `Osc` note holds at its sustain until
+  released; a string has no sustain and simply stops, so a held note that has rung out
+  gives its voice back. Otherwise eight long notes and every voice is spoken for,
+  silently. `voicesInUse()` exists so a test can see it -- stealing would otherwise hide
+  it, since a ninth note sounds either way.
+- **A release is a finger muting the string**: after an Off the voice fades with time
+  constant `R`, 1s by default, so a half-step note from `Steps` still rings rather than
+  choking.
+- Measured: 523.27Hz for a 523.25Hz note, by autocorrelation -- zero crossings, which the
+  `Osc` tests count, read a harmonically rich string as 2753Hz. Peak 1.14 at full
+  velocity, level with an `Osc`. Mutation-checked: ignoring the release, never freeing a
+  rung-out voice, and a 1% pitch error each fail.
+- **Heard through the app on the emulator**: a `Drone` holding degree 12 into a `Pluck` at
+  decay 0.97, loaded from a file, output switched on. The engine's capture has harmonics at
+  524, 1047, 1570, 2094 and 2617Hz, peak 0.37 -- the whole path, from the file through
+  `GraphSync` and the node factory to the stream. Not yet played on the phone.
+
+**Found on the way:** CLAUDE.md said `NodeType` mirroring the C++ enum was asserted. It was
+not -- only that Kotlin's ids were distinct. A test now reads the enum out of `nodes.h` and
+compares, and fails on a wrong id; worth having before six more modules each edit two
+enums in two languages.
+
+**Color is running out in the audio family.** The blue-grays near the audio cable are
+nearly taken by `Osc`, `Filter`, `Mix` and `In`, and Pluck took an icy cyan (`5CCCE0`) as
+the last clearly blue shade that `ModuleColorTest` passes. Five note processors will not
+all fit in the greens at a 15-point border distance; that wants deciding when they land,
+not by picking whatever passes.
 
 ---
 

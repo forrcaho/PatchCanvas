@@ -84,6 +84,7 @@ being edited out from under it.
 | `transport.h` | musical time: one position every clocked node divides, header-only |
 | `scales.h` | scale tables and the looping scale list; where a degree becomes a pitch |
 | `nodes.{h,cpp}` | the module set, DaisySP-backed |
+| `poly.h` | `PolySynth`: voice allocation, stealing, glides -- every synth but its sound |
 | `audio_engine.{h,cpp}` | Oboe streams, ADPF, debug capture |
 
 ## Invariants
@@ -174,7 +175,13 @@ voltages and do not interchange, so `patchesTo` is like-to-like and a mismatch i
 Audio-rate modulation does not need the loophole — a module that wants it declares an
 audio input, and `MODULATION` is applied once per block and could not carry it anyway.
 
-**The catalog is seven modules, and every synth is polyphonic.** `Osc` is the
+**Every synth is polyphonic, and shares one voice engine.** A synth is a `Voice` inside
+`PolySynth` (`poly.h`), which owns allocation, stealing, Off-by-source-and-id, glides and
+`notesCut`; a new synth supplies only its sound. A voice says when it is finished, and a
+plucked string finishes while still held. Any DaisySP code that calls `rand()` is edited
+before it is vendored -- Bionic's takes a mutex.
+
+**Retired modules stay retired.** `Osc` is the
 polyphonic one -- what was called `Voice` -- and the monophonic oscillator is gone, which
 settled the worst naming collision in the project: "voice" now means only one of the eight
 slots inside an `Osc`. `Vca` retired with CV, since a `Mix` channel is `in * level` and was
