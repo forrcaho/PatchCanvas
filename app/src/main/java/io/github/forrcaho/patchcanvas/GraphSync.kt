@@ -26,7 +26,7 @@ enum class NodeType(val id: Int) {
     Pluck(13),
     Fm(14),
     Sf(15),
-    DotSeq(16),
+    Seq(16),
     Chance(17),
     Chord(18),
     Arp(19),
@@ -46,7 +46,7 @@ enum class NodeType(val id: Int) {
             "Pluck" -> Pluck
             "FM" -> Fm
             "SF" -> Sf
-            "DotSeq" -> DotSeq
+            "Seq" -> Seq
             "Chance" -> Chance
             "Chord" -> Chord
             "Arp" -> Arp

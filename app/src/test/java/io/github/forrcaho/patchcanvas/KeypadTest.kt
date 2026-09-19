@@ -150,13 +150,13 @@ class KeypadTest {
 
     @Test
     fun `a stepped knob with more options than fit is a bar, and takes a typed whole number`() {
-        val length = Types.DotSeq.params[0]
+        val length = Types.Seq.params[0]
         assertTrue("32 steps do not fit as buttons", !length.buttons)
         assertTrue("an Osc's four waves do", Types.Osc.params[0].buttons)
         assertEquals(8f, keypadValue("7.6", length)!!, 0f)
 
         val patch = Patch()
-        val seq = patch.add(Types.DotSeq, Offset.Zero)!!
+        val seq = patch.add(Types.Seq, Offset.Zero)!!
         val row = panelRow(panel, d, seq.type, 0)
         val text = length.format(seq.params[0])
         val at = Offset(row.right - widthOf(text) / 2f, row.top + 8f * d)

@@ -232,6 +232,12 @@ data class Param(
      * first three letters, unless those would say something else.
      */
     val short: String = if (name.length <= 4) name else name.take(3),
+    /**
+     * A degree of the sounding scale, read with the note it is: "-12  C3". For a knob that
+     * picks a note, where a bare number said nothing about which -- asked for on the phone
+     * about Euclid, 2026-09-19.
+     */
+    val degree: Boolean = false,
 ) {
     /**
      * How many options a stepped parameter offers.
@@ -426,7 +432,7 @@ data class ModuleType(
      * Whether opening this module shows anything at all.
      *
      * Knobs were once the only thing a panel held, so "has parameters" stood in for this.
-     * A drone has a grid and no parameters, and the old test made its panel unopenable --
+     * A drone had a grid and no parameters, and the old test made its panel unopenable --
      * the module took the tap and did nothing, with the grid it exists for unreachable.
      * Found by tapping it on a screen; nothing else would have.
      */
@@ -505,14 +511,16 @@ object Types {
         grid = GridKind.SEQUENCE,
     )
     /**
-     * A dot sequencer: notes on a grid of steps by degrees, each dot its own length and a
-     * column as many as a chord. Tap an empty cell for a one-step dot, drag a dot sideways
-     * to lengthen or shorten it, tap one to remove it. The grid shows as many steps as the
-     * sequence is long. Order mirrors DotSeqNode::setParam -- length, transpose, interval.
+     * The sequencer: notes on a grid of steps by degrees, each its own length and a column
+     * as many as a chord. Tap an empty cell for a one-step note, drag a note sideways to
+     * lengthen or shorten it, tap one to remove it. The grid shows as many steps as the
+     * sequence is long. Called DotSeq for a night, after Bespoke's DotSequencer, and renamed
+     * when it took over from Steps -- which gave it the gate it lacked. Order mirrors
+     * SeqNode::setParam -- length, transpose, interval, gate.
      */
-    val DotSeq = ModuleType(
-        "DotSeq", emptyList(), listOf(Port("notes", N)),
-        Color(DOTSEQ_ACCENT),
+    val Seq = ModuleType(
+        "Seq", emptyList(), listOf(Port("notes", N)),
+        Color(SEQ_ACCENT),
         params = listOf(
             Param("len", 1f, DOT_STEPS.toFloat(), 16f, "", STEP),
             Param("transp", -TUNE_RANGE, TUNE_RANGE, 0f, "\u00A2", LIN, marks = true, short = "trn"),
@@ -520,6 +528,8 @@ object Types {
                 "interval", 0f, (INTERVALS.size - 1).toFloat(), DEFAULT_INTERVAL.toFloat(),
                 curve = STEP, choice = Choice.DIVISION, header = true,
             ),
+            // How much of its last step a note sounds: 0.5 is Steps' half step, 1 is legato.
+            Param("gate", 0.05f, 1f, 0.5f, "", LIN),
         ),
         grid = GridKind.DOTS,
     )
@@ -575,7 +585,7 @@ object Types {
             Param("steps", 1f, EUCLID_STEPS.toFloat(), 8f, "", STEP),
             Param("pulses", 0f, EUCLID_STEPS.toFloat(), 3f, "", STEP, short = "pul"),
             Param("rotate", 0f, (EUCLID_STEPS - 1).toFloat(), 0f, "", STEP, short = "rot"),
-            Param("degree", -24f, 24f, 0f, "", STEP, short = "deg"),
+            Param("degree", -24f, 24f, 0f, "", STEP, short = "deg", degree = true),
             Param(
                 "interval", 0f, (INTERVALS.size - 1).toFloat(), DEFAULT_INTERVAL.toFloat(),
                 curve = STEP, choice = Choice.DIVISION, header = true,
@@ -585,13 +595,16 @@ object Types {
     /**
      * Notes that stay on until they are turned off, laid out as degrees by octaves.
      *
-     * No transport and no parameters: it is the plainest thing a note cable can carry, and
+     * No transport, and one knob, a transpose: it is the plainest thing a note cable can carry, and
      * the only note source here that sounds with the transport stopped. Order mirrors
      * DroneNode, which knows only degrees.
      */
     val Drone = ModuleType(
         "Drone", emptyList(), listOf(Port("notes", N)),
         Color(0xFF91DA58),
+        // Its one knob: the whole grid up or down, as Steps' and Seq's transpose -- asked for
+        // on the phone, to move a drone's notes down an octave without redoing them.
+        params = listOf(Param("transp", -TUNE_RANGE, TUNE_RANGE, 0f, "\u00A2", LIN, marks = true, short = "trn")),
         stepCount = DRONE_CELLS,
         grid = GridKind.DRONE,
     )
@@ -717,7 +730,7 @@ object Types {
      * inputs as you like, since each input stores its own source. Only summing ever
      * needed a module, and that is Mix.
      */
-    val palette = listOf(Osc, Pluck, Fm, Sf, Drone, Steps, DotSeq, Euclid, Arp, Chord, Chance, Filter, Env, Lfo, Mix)
+    val palette = listOf(Osc, Pluck, Fm, Sf, Drone, Seq, Euclid, Arp, Chord, Chance, Filter, Env, Lfo, Mix)
 
     /**
      * Modules collapsed into one box. Its ports are its own rather than its type's -- they
@@ -742,8 +755,15 @@ object Types {
         "Group out", emptyList(), emptyList(), Color(0xFFB9C2CE), pinned = Edge.RIGHT, structural = true,
     )
 
+    /**
+     * Every type a file can name. Steps is here and not in the palette: Seq took its place in
+     * the Add menu on 2026-09-19, and a patch that has one still loads and plays it -- retiring
+     * it outright would have meant refusing every patch and saved group made with it.
+     */
     val byName: Map<String, ModuleType> =
-        (palette + listOf(Out, In)).associateBy { it.name }
+        (palette + listOf(Steps, Out, In)).associateBy { it.name } +
+            // The name Seq had for its first night. Not a conversion: the same module, renamed.
+            mapOf("DotSeq" to Seq)
 }
 
 /**
@@ -1124,7 +1144,7 @@ internal fun panelPort(panel: Rect, d: Float, dir: PortDirection, index: Int, co
  * gives its whole body to the knobs, which is what every panel did before.
  *
  * A grid with no knobs under it takes the whole body instead of leaving a third of the
- * panel empty. A drone has no parameters at all, so without this a third of the screen
+ * panel empty. A drone had no parameters at all until 2026-09-19, and without this a third of the screen
  * said nothing while the thing being edited was squeezed above it.
  */
 internal fun panelGrid(panel: Rect, d: Float, type: ModuleType? = null): Rect {
@@ -3182,6 +3202,20 @@ private val NOTE_NAMES = listOf("C", "C♯", "D", "E♭", "E", "F", "F♯", "G",
  * The nearest twelve-tone note name, as a reading and never as the unit -- marked "≈" when
  * the root is not on that grid, so a 19-TET degree does not pretend to be a letter.
  */
+/**
+ * The nearest twelve-tone note and its octave, from cents above middle C: "C4" at 0, "C3"
+ * an octave down. The same "≈" rule as [nearestNoteName] for a pitch off that grid.
+ */
+internal fun noteWithOctave(cents: Float): String {
+    val semitones = (cents / 100f).roundToInt()
+    val name = NOTE_NAMES[semitones.mod(12)] + (4 + Math.floorDiv(semitones, 12))
+    return if (kotlin.math.abs(cents - semitones * 100f) < 0.5f) name else "≈$name"
+}
+
+/** What degree [degree] sounds as, in the scale and key given: a note name to read beside a number. */
+internal fun degreeName(degree: Int, scale: Scale, rootCents: Float): String =
+    noteWithOctave(scale.octavesOf(degree) * 1200f + rootCents)
+
 internal fun nearestNoteName(cents: Float): String {
     val semitones = (cents / 100f).roundToInt()
     val name = NOTE_NAMES[semitones.mod(12)]
@@ -4078,6 +4112,7 @@ fun PatchCanvas(
                 drawPanel(
                     open, patch, panelRect(frame), d, screenMeasurer, playing, playingStep,
                     intervalMenu, liveParams, sfView,
+                    patch.scales.getOrElse(playingEntry) { patch.scales.first() }.rootCents,
                 )
             }
 
@@ -5395,8 +5430,12 @@ private fun DrawScope.drawScales(
 ) {
     val entries = patch.scales
     val playing = entries.getOrElse(playingEntry) { entries.first() }.scale
-    val suffix = if (entries.size == 1) "  ·  ${playing.size}"
-        else "  ·  ${playingEntry + 1} of ${entries.size}"
+    // The key before anything else: it moves every note in the patch, and until the chip
+    // named it there was no telling what it was without opening the card. It used to say
+    // how many degrees the scale has, which its name mostly says already.
+    val root = entries.getOrElse(playingEntry) { entries.first() }.rootCents
+    val suffix = if (entries.size == 1) "  ·  ${noteWithOctave(root)}"
+        else "  ·  ${noteWithOctave(root)}  ·  ${playingEntry + 1} of ${entries.size}"
     drawChip(frame.scaleChip(), d, playing.name, open, scaleAccent, measurer, suffix)
     if (!open) return
 
@@ -5849,7 +5888,7 @@ internal const val STEP_COUNT = 16
 /** Cells in a drone's grid; mirrors DroneNode::kCells, which is capped by a scale's degrees. */
 internal const val DRONE_CELLS = 64
 
-/** Steps on a dot sequencer's grid. Mirrors DotSeqNode::kSteps. */
+/** Steps on a dot sequencer's grid. Mirrors SeqNode::kSteps. */
 internal const val DOT_STEPS = 32
 
 /** An Arp's modes, as its buttons say them. Mirrors ArpNode::step. */
@@ -5861,10 +5900,10 @@ internal const val EUCLID_STEPS = 32
 /** The most options a stepped row draws as buttons; past it, a bar. See [Param.buttons]. */
 internal const val MAX_BUTTONS = 16
 
-/** DotSeq's accent, a green that clears the others; see ModuleColorTest. */
-internal const val DOTSEQ_ACCENT = 0xFFD8F0AC
+/** Seq's accent, a green that clears the others; see ModuleColorTest. */
+internal const val SEQ_ACCENT = 0xFFD8F0AC
 
-/** Dots one sequencer holds. Mirrors DotSeqNode::kMaxDots. */
+/** Dots one sequencer holds. Mirrors SeqNode::kMaxDots. */
 internal const val MAX_DOTS = 128
 
 /** The most octave columns a drone offers, before its cells run out. */
@@ -6322,6 +6361,8 @@ private fun DrawScope.drawPanel(
     live: Map<Int, Float> = emptyMap(),
     /** An SF panel's font and its page of instruments; null for every other module. */
     sf: SfView? = null,
+    /** The key sounding now, in cents from middle C, for a degree read as a note. */
+    rootCents: Float = 0f,
 ) {
     val corner = CornerRadius(14f * d, 14f * d)
 
@@ -6484,7 +6525,11 @@ private fun DrawScope.drawPanel(
         // and "0" next to a picture of a sawtooth is noise.
         if (!param.buttons) {
             // An exposed parameter reads its range, not a value it is not going to hold.
-            val text = if (range != null) rangeReading(param, range) else param.format(value)
+            val text = when {
+                range != null -> rangeReading(param, range)
+                param.degree -> "${param.format(value)}  ${degreeName(value.roundToInt(), scale, rootCents)}"
+                else -> param.format(value)
+            }
             val reading = measurer.measure(text, PanelValueStyle)
             drawText(
                 reading,

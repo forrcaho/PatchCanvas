@@ -37,7 +37,7 @@ enum class NodeType : int32_t {
     Pluck = 13,
     Fm = 14,
     Sf = 15,
-    DotSeq = 16,
+    Seq = 16,
     Chance = 17,
     Chord = 18,
     Arp = 19,
@@ -202,22 +202,23 @@ private:
 };
 
 /**
- * A dot sequencer: notes laid on a grid of steps by degrees, each with its own length, and
- * as many to a column as make a chord. Bespoke's DotSequencer, and the reason notes became
- * events at all (ROADMAP, Phase 6).
+ * A sequencer of notes with lengths: a grid of steps by degrees, each note ("dot") its own
+ * length, and as many to a column as make a chord. Bespoke's DotSequencer is the shape, and
+ * the reason notes became events at all (ROADMAP, Phase 6). Called DotSeq for a night, then
+ * Seq, when it took over from Steps.
  *
- * Ticked by the transport at its interval, like Steps. A dot starts on the tick of its step
- * and ends on the tick [length] steps later -- counted in ticks, not frames, so a stopped
- * transport holds it exactly as it holds a Steps note, and a two-step dot is two whole steps
- * long. Bespoke's dots last their full length too; a gap between two is left by making the
- * first shorter.
+ * Ticked by the transport at its interval. A note starts on the tick of its step and sounds
+ * through its steps -- all of them but the last in full, and [gate] of the last: at 0.5 a
+ * one-step note is Steps' half step, and at 1 notes are legato, ending on the tick after.
+ * The last step's share is counted in frames from its tick, and like Steps' gate it holds
+ * still while the transport is stopped.
  *
  * A jump in the count -- a reset, an interval changed -- ends everything held, since the
  * ticks it was waiting for may now never come.
  *
- * Knobs, mirroring PatchCanvas.kt: length, transpose, interval.
+ * Knobs, mirroring PatchCanvas.kt: length, transpose, interval, gate.
  */
-class DotSeqNode : public Node {
+class SeqNode : public Node {
 public:
     /** Mirrored by DOT_STEPS in PatchCanvas.kt. */
     static constexpr int32_t kSteps = 32;
@@ -247,11 +248,17 @@ private:
         uint32_t id;
         int32_t degree;
         int64_t beat;
-        /** The tick on which it ends. */
+        /** The tick of its last step, which starts its gate running. */
+        int64_t lastCount;
+        /** The tick after its last step, on which it ends whatever the gate. */
         int64_t endCount;
+        /** Frames of its last step still to sound, or -1 while that step has not come. */
+        int64_t gateLeft;
     };
 
+    void onTick(NoteBuffer &notes, uint16_t offset, int64_t count);
     void endAll(NoteBuffer &notes, uint16_t offset);
+    void release(NoteBuffer &notes, int32_t h, uint16_t offset);
 
     Tick pending_[kMaxPending] = {};
     int32_t pendingCount_ = 0;
@@ -261,6 +268,7 @@ private:
     int32_t length_ = 16;
     int32_t intervalIndex_ = kDefaultInterval;
     float transposeCents_ = 0.0f;
+    float gate_ = 0.5f;
 
     int32_t dotStep_[kMaxDots] = {};
     int32_t dotDegree_[kMaxDots] = {};
@@ -310,11 +318,14 @@ public:
     uint32_t noteOutputs() const override { return 1u << 0; }
     void process(int32_t frames) override;
     void setStep(int32_t index, int32_t degree, bool gate) override;
+    /** Its one knob: a transpose in cents, as Steps has. Held notes glide to it. */
+    void setParam(int32_t index, float value) override;
     Interval interval() const override { return {1, 1}; }
     void tick(int32_t offset, int64_t count) override;
     void heldNotes(int32_t port, NoteBuffer &into) const override;
 
 private:
+    float transposeCents_ = 0.0f;
     int32_t degree_[kCells] = {};
     bool on_[kCells] = {};
     /**

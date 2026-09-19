@@ -180,15 +180,27 @@ void DroneNode::heldNotes(int32_t port, NoteBuffer &into) const {
         // The beat every retune so far has been worked out against, so a newcomer starts
         // at the pitch the others are already at rather than the one the note began on.
         on.beat = beat_;
-        on.cents = 0.0f;
+        on.cents = transposeCents_;
         on.velocity = 1.0f;
         if (!into.push(on)) return;
     }
 }
 
 float DroneNode::octavesAt(int64_t beat, int32_t degree) const {
-    return scales_ != nullptr ? scales_->tableAt(beat).octavesOf(degree)
-                              : ScaleTable{}.octavesOf(degree);
+    // The transpose is part of where a note is, so a moved knob is a retune like a changed
+    // scale: every held note whose pitch it moves is sent a Change and glides there.
+    return (scales_ != nullptr ? scales_->tableAt(beat).octavesOf(degree)
+                               : ScaleTable{}.octavesOf(degree)) + transposeCents_ / 1200.0f;
+}
+
+void DroneNode::setParam(int32_t index, float value) {
+    if (index != 0) return;
+    transposeCents_ = clampf(value, -kTuneRange, kTuneRange);
+    if (!retuneDue_) {
+        retuneDue_ = true;
+        retuneBeat_ = beat_;
+        retuneOffset_ = 0;
+    }
 }
 
 void DroneNode::process(int32_t frames) {
@@ -208,7 +220,7 @@ void DroneNode::process(int32_t frames) {
             on.offset = 0;
             on.degree = degree_[i];
             on.beat = beat_;
-            on.cents = 0.0f;
+            on.cents = transposeCents_;
             on.velocity = 1.0f;
             if (notes.push(on)) {
                 sounding_[i] = on.id;
@@ -249,7 +261,7 @@ void DroneNode::process(int32_t frames) {
         change.offset = retuneOffset_;
         change.degree = degree_[i];
         change.beat = retuneBeat_;
-        change.cents = 0.0f;
+        change.cents = transposeCents_;
         change.velocity = 1.0f;
         if (notes.push(change)) {
             octaves_[i] = target;
@@ -396,16 +408,16 @@ void StepsNode::setParam(int32_t index, float value) {
     }
 }
 
-// ---------------------------------------------------------------- DotSeq
+// ---------------------------------------------------------------- Seq
 
-void DotSeqNode::setDot(int32_t slot, int32_t step, int32_t degree, int32_t length) {
+void SeqNode::setDot(int32_t slot, int32_t step, int32_t degree, int32_t length) {
     if (slot < 0 || slot >= kMaxDots) return;
     dotStep_[slot] = std::max(0, std::min(step, kSteps - 1));
     dotDegree_[slot] = degree;
     dotLength_[slot] = std::max(0, std::min(length, kSteps));
 }
 
-void DotSeqNode::tick(int32_t offset, int64_t count) {
+void SeqNode::tick(int32_t offset, int64_t count) {
     if (pendingCount_ < kMaxPending) {
         pending_[pendingCount_].offset = offset;
         pending_[pendingCount_].count = count;
@@ -413,70 +425,87 @@ void DotSeqNode::tick(int32_t offset, int64_t count) {
     }
 }
 
-void DotSeqNode::endAll(NoteBuffer &notes, uint16_t offset) {
-    for (int32_t h = 0; h < heldCount_; ++h) {
-        NoteEvent off;
-        off.id = held_[h].id;
-        off.kind = NoteKind::Off;
-        off.offset = offset;
-        notes.push(off);
-    }
-    heldCount_ = 0;
+void SeqNode::release(NoteBuffer &notes, int32_t h, uint16_t offset) {
+    NoteEvent off;
+    off.id = held_[h].id;
+    off.kind = NoteKind::Off;
+    off.offset = offset;
+    notes.push(off);
+    held_[h] = held_[--heldCount_];
 }
 
-void DotSeqNode::process(int32_t frames) {
+void SeqNode::endAll(NoteBuffer &notes, uint16_t offset) {
+    while (heldCount_ > 0) release(notes, heldCount_ - 1, offset);
+}
+
+void SeqNode::onTick(NoteBuffer &notes, uint16_t offset, int64_t count) {
+    const Interval interval = kIntervals[intervalIndex_];
+
+    // The ticks a held note is waiting for are consecutive; anything else and it may
+    // wait forever, so it ends here instead.
+    if (lastCount_ >= 0 && count != lastCount_ + 1) endAll(notes, offset);
+    lastCount_ = count;
+
+    // Ends before starts, so a note followed at once by another at the same degree is two
+    // notes rather than one whose Off lands after the second's On.
+    for (int32_t h = 0; h < heldCount_;) {
+        if (held_[h].endCount <= count) release(notes, h, offset); else ++h;
+    }
+
+    const int64_t length = length_ > 0 ? length_ : 1;
+    step_ = static_cast<int32_t>(((count % length) + length) % length);
+    // The beat the boundary falls on, in integers, which decides the scale -- as Steps.
+    const int64_t beat = floorDiv(count * interval.num, interval.den);
+    for (int32_t d = 0; d < kMaxDots; ++d) {
+        if (dotLength_[d] <= 0 || dotStep_[d] != step_) continue;
+        if (heldCount_ >= kMaxHeld) break;
+        NoteEvent on;
+        on.id = nextNoteId_++;
+        on.kind = NoteKind::On;
+        on.offset = offset;
+        on.degree = dotDegree_[d];
+        on.beat = beat;
+        on.cents = transposeCents_;
+        on.velocity = 1.0f;
+        if (!notes.push(on)) break;
+        held_[heldCount_++] = Held{on.id, on.degree, beat, count + dotLength_[d] - 1, count + dotLength_[d], -1};
+    }
+
+    // A note on its last step starts its gate, in frames worked out at this tick's tempo.
+    // At a gate of 1, or with the transport stopped, there is nothing to count: it ends on
+    // the tick after, like every note did before there was a gate.
+    const int64_t frames = beatsPerFrame_ > 0.0 && gate_ < 1.0f
+            ? static_cast<int64_t>(gate_ * interval.num / (interval.den * beatsPerFrame_))
+            : 0;
+    for (int32_t h = 0; h < heldCount_; ++h) {
+        if (held_[h].lastCount == count && frames > 0) held_[h].gateLeft = frames;
+    }
+}
+
+void SeqNode::process(int32_t frames) {
     NoteBuffer &notes = notesOut(0);
     notes.clear();
-    (void) frames;
-
-    for (int32_t p = 0; p < pendingCount_; ++p) {
-        const int64_t count = pending_[p].count;
-        const auto offset = static_cast<uint16_t>(pending_[p].offset);
-        const Interval interval = kIntervals[intervalIndex_];
-
-        // The ticks a held note is waiting for are consecutive; anything else and it may
-        // wait forever, so it ends here instead.
-        if (lastCount_ >= 0 && count != lastCount_ + 1) endAll(notes, offset);
-        lastCount_ = count;
-
-        // Ends before starts, so a dot followed at once by another at the same degree is
-        // two notes rather than one whose Off lands after the second's On.
+    int32_t next = 0;
+    for (int32_t i = 0; i < frames; ++i) {
+        while (next < pendingCount_ && pending_[next].offset <= i) {
+            onTick(notes, static_cast<uint16_t>(i), pending_[next].count);
+            ++next;
+        }
+        if (!running_) continue;
         for (int32_t h = 0; h < heldCount_;) {
-            if (held_[h].endCount <= count) {
-                NoteEvent off;
-                off.id = held_[h].id;
-                off.kind = NoteKind::Off;
-                off.offset = offset;
-                notes.push(off);
-                held_[h] = held_[--heldCount_];
+            // A sample early rather than late, as Steps' gate: late would need an offset
+            // past the end of the block on the frame the gate runs out on.
+            if (held_[h].gateLeft > 0 && --held_[h].gateLeft == 0) {
+                release(notes, h, static_cast<uint16_t>(i));
             } else {
                 ++h;
             }
-        }
-
-        const int64_t length = length_ > 0 ? length_ : 1;
-        step_ = static_cast<int32_t>(((count % length) + length) % length);
-        // The beat the boundary falls on, in integers, which decides the scale -- as Steps.
-        const int64_t beat = floorDiv(count * interval.num, interval.den);
-        for (int32_t d = 0; d < kMaxDots; ++d) {
-            if (dotLength_[d] <= 0 || dotStep_[d] != step_) continue;
-            if (heldCount_ >= kMaxHeld) break;
-            NoteEvent on;
-            on.id = nextNoteId_++;
-            on.kind = NoteKind::On;
-            on.offset = offset;
-            on.degree = dotDegree_[d];
-            on.beat = beat;
-            on.cents = transposeCents_;
-            on.velocity = 1.0f;
-            if (!notes.push(on)) break;
-            held_[heldCount_++] = Held{on.id, on.degree, beat, count + dotLength_[d]};
         }
     }
     pendingCount_ = 0;
 }
 
-void DotSeqNode::heldNotes(int32_t port, NoteBuffer &into) const {
+void SeqNode::heldNotes(int32_t port, NoteBuffer &into) const {
     (void) port;
     for (int32_t h = 0; h < heldCount_; ++h) {
         NoteEvent on;
@@ -490,7 +519,7 @@ void DotSeqNode::heldNotes(int32_t port, NoteBuffer &into) const {
     }
 }
 
-void DotSeqNode::setParam(int32_t index, float value) {
+void SeqNode::setParam(int32_t index, float value) {
     switch (index) {
         case 0: length_ = static_cast<int32_t>(clampf(value, 1.0f, static_cast<float>(kSteps)) + 0.5f); break;
         case 1: transposeCents_ = clampf(value, -kTuneRange, kTuneRange); break;
@@ -498,6 +527,7 @@ void DotSeqNode::setParam(int32_t index, float value) {
             intervalIndex_ = static_cast<int32_t>(
                     clampf(value, 0.0f, static_cast<float>(kIntervalCount - 1)) + 0.5f);
             break;
+        case 3: gate_ = clampf(value, 0.05f, 1.0f); break;
         default: break;
     }
 }
@@ -880,7 +910,7 @@ Node *makeNode(NodeType type) {
         case NodeType::Pluck: return new PluckNode();
         case NodeType::Fm: return new FmNode();
         case NodeType::Sf: return new SfNode();
-        case NodeType::DotSeq: return new DotSeqNode();
+        case NodeType::Seq: return new SeqNode();
         case NodeType::Chance: return new ChanceNode();
         case NodeType::Chord: return new ChordNode();
         case NodeType::Arp: return new ArpNode();

@@ -2418,6 +2418,34 @@ Five note modules pushed the greens past what `ModuleColorTest` passes in a stri
 expected; the family widened to olives, forest and teal-greens and mint, and the 15-point rule
 held. The add menu has fifteen modules and fits, at the reference font scale, on one page.
 
+### The morning after: Seq, the Drone's transpose, and naming notes
+
+**2026-09-19, from Forrest's first session with the night's modules**, with his choices:
+
+- **DotSeq is Seq, and takes Steps' place in the Add menu.** Its notes are not dots, and it
+  does everything Steps did but one thing: a note lasted its whole length, so nothing was
+  shorter than a step and neighbors were always legato. It has a **gate** now -- how much of
+  its last step a note sounds, 0.5 by default, which is Steps' half step; 1 is legato. The
+  gate is counted in frames from the last step's tick and holds still with the transport,
+  as Steps' does. Steps is out of the menu and **not retired**: every patch and saved group
+  that has one (the demo patch among them) still loads and plays it. Retiring it would have
+  meant refusing those files or converting them, and the conversion is exact but still a
+  conversion. What Steps still has that Seq does not: rests that remember their pitch, and a
+  pattern already in it when added. A file from the one night the name was DotSeq opens as
+  Seq -- the same module renamed, read by an alias in `Types.byName`, not converted.
+- **A Drone has a transpose**, like Steps' and Seq's, in cents with the scale's marks. Asked
+  for to move a drone's notes down an octave. It is folded into where a held note *is*, so
+  turning it is a retune like a changed scale: every held note is sent a Change and glides.
+  The Drone had no knobs until now, which two tests had written down as a fact about it; the
+  rule they protect -- a grid with no knobs still opens, and takes the whole body -- is now
+  tested against a made-up module that has only a grid.
+- **Euclid stays one row**, and its degree is read as a note: "-12  C3", in the scale and key
+  sounding. Four rows like Bespoke's were the alternative; a group of four Euclids does that,
+  and now each says which note it is.
+- **The scale chip says the key.** It showed how many degrees the scale has ("12-TET · 12"),
+  which the name mostly says; it shows the root's note and octave now ("12-TET · C4"). The
+  root moves the whole patch and could not be seen without opening the card.
+
 **Found on the way:** CLAUDE.md said `NodeType` mirroring the C++ enum was asserted. It was
 not -- only that Kotlin's ids were distinct. A test now reads the enum out of `nodes.h` and
 compares, and fails on a wrong id; worth having before six more modules each edit two

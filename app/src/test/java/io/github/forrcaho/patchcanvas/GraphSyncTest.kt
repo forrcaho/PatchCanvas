@@ -480,7 +480,7 @@ class ModuleContractTest {
 
     @Test
     fun `the dot sequencer's limits are the engine's`() {
-        val header = java.io.File("src/main/cpp/nodes.h").readText().substringAfter("class DotSeqNode")
+        val header = java.io.File("src/main/cpp/nodes.h").readText().substringAfter("class SeqNode")
         fun constant(name: String) =
             Regex("""constexpr int32_t $name = (\d+);""").find(header)!!.groupValues[1].toInt()
         assertEquals(constant("kSteps"), DOT_STEPS)
@@ -1210,7 +1210,7 @@ class DotSyncTest {
     @Test
     fun `dots cross by slot, and only when they change`() {
         val patch = Patch()
-        val seq = patch.add(Types.DotSeq, Offset.Zero)!!
+        val seq = patch.add(Types.Seq, Offset.Zero)!!
         seq.addDot(Dot(0, 0, 2))
         seq.addDot(Dot(4, 7, 1))
         val rec = Recorder()

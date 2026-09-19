@@ -3,6 +3,7 @@ package io.github.forrcaho.patchcanvas
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -137,10 +138,19 @@ class PatchModelTest {
      * exists for could not be reached -- the module took the tap and did nothing. Found by
      * tapping it on a screen, which is the only thing that could have.
      */
+    /**
+     * A grid and nothing else, which the Drone was until it took a transpose knob on
+     * 2026-09-19. No module is that now; the rule stays for the next one that is.
+     */
+    private val gridOnly = ModuleType(
+        "GridOnly", emptyList(), listOf(Port("notes", SignalKind.NOTE)), Color(0xFF91DA58),
+        stepCount = DRONE_CELLS, grid = GridKind.DRONE,
+    )
+
     @Test
     fun `a module with a grid and no knobs still opens`() {
-        assertTrue("a drone has nothing but its grid", Types.Drone.params.isEmpty())
-        assertTrue("and it must still open", Types.Drone.hasPanel)
+        assertTrue("a module with nothing but its grid", gridOnly.params.isEmpty())
+        assertTrue("must still open", gridOnly.hasPanel)
         Types.palette.forEach { type ->
             assertEquals(
                 "${type.name} opens if and only if it has something to show",
@@ -156,8 +166,8 @@ class PatchModelTest {
         // A third of the screen saying nothing, with the thing being edited squeezed
         // above it, is what this avoids.
         assertTrue(
-            "a drone's grid reaches further down than a sequencer's",
-            panelGrid(panel, 1f, Types.Drone).bottom > panelGrid(panel, 1f, Types.Steps).bottom,
+            "a knobless grid reaches further down than a sequencer's",
+            panelGrid(panel, 1f, gridOnly).bottom > panelGrid(panel, 1f, Types.Steps).bottom,
         )
         assertEquals(
             "and a sequencer's is unchanged",

@@ -1402,7 +1402,7 @@ void anSfWithoutItsFontIsSilent() {
 }
 
 /** Ticks [dots] once at [count] and returns what it said. */
-NoteBuffer tickDots(DotSeqNode &dots, int64_t count, int32_t offset = 0) {
+NoteBuffer tickDots(SeqNode &dots, int64_t count, int32_t offset = 0) {
     dots.setTiming(0.0, true, nullptr);
     dots.tick(offset, count);
     dots.process(kBlockSize);
@@ -1417,7 +1417,7 @@ int countKind(const NoteBuffer &notes, NoteKind kind) {
 
 void aDotLastsItsLength() {
     std::printf("a dot lasts its length, in steps\n");
-    DotSeqNode dots;
+    SeqNode dots;
     dots.setDot(0, 0, 7, 3);
     const NoteBuffer first = tickDots(dots, 0);
     check(countKind(first, NoteKind::On) == 1 && first.events[0].degree == 7, "starts on its step");
@@ -1430,7 +1430,7 @@ void aDotLastsItsLength() {
 
 void aColumnOfDotsIsAChord() {
     std::printf("a column of dots is a chord, each note its own length\n");
-    DotSeqNode dots;
+    SeqNode dots;
     dots.setDot(0, 0, 0, 1);
     dots.setDot(1, 0, 4, 2);
     dots.setDot(2, 0, 7, 4);
@@ -1445,7 +1445,7 @@ void aColumnOfDotsIsAChord() {
 
 void aDotEndsBeforeTheNextStarts() {
     std::printf("a dot ends before the next one at its degree starts\n");
-    DotSeqNode dots;
+    SeqNode dots;
     dots.setDot(0, 0, 5, 2);
     dots.setDot(1, 2, 5, 1);
     tickDots(dots, 0);
@@ -1458,7 +1458,7 @@ void aDotEndsBeforeTheNextStarts() {
 
 void dotsLoopAtTheLength() {
     std::printf("dots loop at the sequence's length\n");
-    DotSeqNode dots;
+    SeqNode dots;
     dots.setParam(0, 4.0f);
     dots.setDot(0, 1, 2, 1);
     int ons = 0;
@@ -1478,7 +1478,7 @@ void dotsLoopAtTheLength() {
 
 void aJumpInTimeEndsWhatWasHeld() {
     std::printf("a jump in time ends what was held\n");
-    DotSeqNode dots;
+    SeqNode dots;
     dots.setDot(0, 0, 0, 8);
     tickDots(dots, 0);
     check(dots.notesHeld() == 1, "held");
@@ -1518,6 +1518,69 @@ int firstOnDegree(const NoteBuffer &notes) {
         if (notes.events[i].kind == NoteKind::On) return notes.events[i].degree;
     }
     return -999;
+}
+
+void aSeqNoteSoundsItsGateOfItsLastStep() {
+    std::printf("a seq note sounds its gate of its last step\n");
+    // 120bpm is two beats a second; an eighth-note step is half a beat, 12000 frames.
+    const double beatsPerFrame = 2.0 / kRate;
+    const int32_t stepFrames = 12000;
+    auto offsIn = [&](SeqNode &seq, int32_t frames) {
+        int offs = 0;
+        for (int32_t done = 0; done < frames; done += kBlockSize) {
+            seq.setTiming(beatsPerFrame, true, nullptr);
+            seq.process(kBlockSize);
+            offs += countKind(*seq.noteOutput(0), NoteKind::Off);
+        }
+        return offs;
+    };
+    auto tickAt = [&](SeqNode &seq, int64_t count) {
+        seq.setTiming(beatsPerFrame, true, nullptr);
+        seq.tick(0, count);
+        seq.process(kBlockSize);
+        return *seq.noteOutput(0);
+    };
+
+    SeqNode seq; // gate 0.5 by default: Steps' half step
+    seq.setDot(0, 0, 0, 2);
+    check(countKind(tickAt(seq, 0), NoteKind::On) == 1, "starts");
+    check(offsIn(seq, stepFrames - kBlockSize) == 0, "sounds all through its first step");
+    tickAt(seq, 1);
+    check(offsIn(seq, stepFrames / 2 - 2 * kBlockSize) == 0, "and the first half of its last");
+    check(offsIn(seq, 4 * kBlockSize) == 1, "and ends halfway through it");
+    check(countKind(tickAt(seq, 2), NoteKind::Off) == 0, "not again on the next tick");
+
+    SeqNode legato;
+    legato.setParam(3, 1.0f);
+    legato.setDot(0, 0, 0, 1);
+    tickAt(legato, 0);
+    check(offsIn(legato, stepFrames - kBlockSize) == 0, "at a gate of 1 it sounds its whole step");
+    check(countKind(tickAt(legato, 1), NoteKind::Off) == 1, "and ends on the tick after");
+}
+
+void aDroneTransposeMovesWhatItHolds() {
+    std::printf("a drone's transpose moves what it holds\n");
+    DroneNode drone;
+    drone.setStep(0, 0, true);
+    drone.setTiming(0.0, false, nullptr);
+    drone.process(kBlockSize);
+    check(drone.noteOutput(0)->count == 1, "holding one note");
+
+    drone.setParam(0, -1200.0f);
+    drone.setTiming(0.0, false, nullptr);
+    drone.process(kBlockSize);
+    const NoteBuffer &moved = *drone.noteOutput(0);
+    check(moved.count == 1 && moved.events[0].kind == NoteKind::Change && moved.events[0].cents == -1200.0f,
+          "a turned knob sends the held note down an octave, as a glide");
+
+    drone.setStep(1, 7, true);
+    drone.setTiming(0.0, false, nullptr);
+    drone.process(kBlockSize);
+    check(firstOnDegree(*drone.noteOutput(0)) == 7 && drone.noteOutput(0)->events[0].cents == -1200.0f,
+          "and a new note starts there too");
+    NoteBuffer held;
+    drone.heldNotes(0, held);
+    check(held.count == 2 && held.events[0].cents == -1200.0f, "which a late cable is told");
 }
 
 void chanceDecidesEachNoteOnce() {
@@ -1862,6 +1925,8 @@ int main() {
     aDotEndsBeforeTheNextStarts();
     dotsLoopAtTheLength();
     aJumpInTimeEndsWhatWasHeld();
+    aSeqNoteSoundsItsGateOfItsLastStep();
+    aDroneTransposeMovesWhatItHolds();
     chanceDecidesEachNoteOnce();
     chordMakesEveryNoteAChord();
     anArpPlaysWhatIsHeld();

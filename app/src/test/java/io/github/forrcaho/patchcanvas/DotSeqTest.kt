@@ -27,7 +27,7 @@ class DotSeqTest {
 
     private fun seq(): Pair<Patch, PatchModule> {
         val patch = Patch()
-        return patch to patch.add(Types.DotSeq, Offset.Zero)!!
+        return patch to patch.add(Types.Seq, Offset.Zero)!!
     }
 
     @Test
@@ -75,10 +75,10 @@ class DotSeqTest {
         seq.addDot(Dot(31, -3, 1))
         val json = patch.toJson()
         assertTrue(json.contains("\"version\":8"))
-        assertEquals(seq.dots.toList(), patchFromJson(json)!!.modules.first { it.type == Types.DotSeq }.dots.toList())
+        assertEquals(seq.dots.toList(), patchFromJson(json)!!.modules.first { it.type == Types.Seq }.dots.toList())
 
         val wild = json.replace("[31,-3,1]", "[99,-3,500]")
-        assertEquals(Dot(DOT_STEPS - 1, -3, DOT_STEPS), patchFromJson(wild)!!.modules.first { it.type == Types.DotSeq }.dots[1])
+        assertEquals(Dot(DOT_STEPS - 1, -3, DOT_STEPS), patchFromJson(wild)!!.modules.first { it.type == Types.Seq }.dots[1])
     }
 
     @Test
@@ -86,7 +86,7 @@ class DotSeqTest {
         val (patch, seq) = seq()
         seq.addDot(Dot(1, 2, 3))
         val seven = patch.toJson().replace("\"version\":8", "\"version\":7")
-        assertEquals(listOf(Dot(1, 2, 3)), patchFromJson(seven)!!.modules.first { it.type == Types.DotSeq }.dots.toList())
+        assertEquals(listOf(Dot(1, 2, 3)), patchFromJson(seven)!!.modules.first { it.type == Types.Seq }.dots.toList())
 
         assertEquals(listOf(Dot(1, 2, 3)), patch.duplicate(seq)!!.dots.toList())
 
@@ -107,5 +107,39 @@ class DotSeqTest {
         assertEquals("the same turned by one, as node_test has it", "..x..x.x", pattern(8, 3, 1))
         assertEquals("the rhythm, not a pitch grid: nothing to tap", null,
             Patch().add(Types.Euclid, Offset.Zero)!!.let { panelCellAt(panel, d, it, panelGrid(panel, d, it.type).center) })
+    }
+
+    @Test
+    fun `a note is named with its octave, in the key it sounds in`() {
+        assertEquals("C4", noteWithOctave(0f))
+        assertEquals("C3", noteWithOctave(-1200f))
+        assertEquals("B3", noteWithOctave(-100f))
+        assertEquals("off the twelve-tone grid it says so", "\u2248C4", noteWithOctave(20f))
+        assertEquals("C3", degreeName(-12, Scale.Chromatic, 0f))
+        assertEquals("G4", degreeName(7, Scale.Chromatic, 0f))
+        assertEquals("a key of D moves every name", "E4", degreeName(2, Scale.Chromatic, 200f))
+        assertTrue("Euclid's degree is read as a note", Types.Euclid.params.first { it.name == "degree" }.degree)
+    }
+
+    @Test
+    fun `Seq took Steps' place in the menu, and Steps still loads`() {
+        assertTrue(Types.Seq in Types.palette)
+        assertTrue("not offered", Types.Steps !in Types.palette)
+        val patch = demoPatch()
+        assertTrue("the demo patch has one", patch.modules.any { it.type == Types.Steps })
+        val back = patchFromJson(patch.toJson())!!
+        assertEquals("and it comes back", patch.modules.count { it.type == Types.Steps }, back.modules.count { it.type == Types.Steps })
+        assertEquals("with its sequence", patch.modules.first { it.type == Types.Steps }.steps.toList(), back.modules.first { it.type == Types.Steps }.steps.toList())
+    }
+
+    @Test
+    fun `a file from the night Seq was called DotSeq opens as Seq`() {
+        val (patch, seq) = seq()
+        seq.addDot(Dot(0, 3, 2))
+        val old = patch.toJson().replace("\"type\":\"Seq\"", "\"type\":\"DotSeq\"")
+        assertTrue("the edit found it", old.contains("DotSeq"))
+        val back = patchFromJson(old)!!.modules.first { it.type == Types.Seq }
+        assertEquals(listOf(Dot(0, 3, 2)), back.dots.toList())
+        assertTrue("and saves under its new name", patchFromJson(old)!!.toJson().contains("\"type\":\"Seq\""))
     }
 }
