@@ -233,12 +233,6 @@ data class Param(
      */
     val short: String = if (name.length <= 4) name else name.take(3),
     /**
-     * Starts the panel's second column, where it would otherwise fall wherever half the rows
-     * do. FM's A: without it the columns split ratio/index/fall/A and D/S/R, which cuts ADSR
-     * in two -- said on the phone, and true of any module whose knobs come in subpatches.
-     */
-    val newColumn: Boolean = false,
-    /**
      * A degree of the sounding scale, read with the note it is: "-12  C3". For a knob that
      * picks a note, where a bare number said nothing about which -- asked for on the phone
      * about Euclid, 2026-09-19.
@@ -444,11 +438,6 @@ data class ModuleType(
      */
     val hasPanel: Boolean get() = params.isNotEmpty() || grid != GridKind.NONE
 
-    /**
-     * Which row starts the panel's second column, or -1 to split at half. See [Param.newColumn].
-     */
-    val columnBreak: Int get() = rowParams.indexOfFirst { params[it].newColumn }
-
     /** The parameter choosing a clocked module's interval, or -1 for one the transport does not drive. */
     val intervalParam: Int get() = params.indexOfFirst { it.choice == Choice.DIVISION }
 }
@@ -626,20 +615,20 @@ object Types {
      * naming collision in the project: "voice" was both this module and one of the eight
      * inside it. Every synth is polyphonic now, so there is no other oscillator for the
      * name to be ambiguous against, and "voice" is left meaning only the slot.
+     *
+     * On its own it is an organ: eight voices of plain tone, on while held. A shape comes
+     * from putting it in a poly subpatch with an Env and an Amp, where the envelope is per
+     * note because the whole subpatch is.
      */
     val Osc = ModuleType(
         "Osc", listOf(Port("notes", N)), listOf(Port("out", A)),
         Color(0xFF6090C3),
-        // Order mirrors OscNode::setParam. Five, where every other module has at most
-        // four: an envelope needs all of A, D, S and R for a note to have a shape, and
-        // the waveform is the fifth. The panel divides its body by the rows it has.
-        params = listOf(
-            Param("wave", 0f, 3f, 0f, "", STEP, Choice.WAVE),
-            Param("A", 0.001f, 5f, 0.005f, "s", EXP),
-            Param("D", 0.001f, 5f, 0.12f, "s", EXP),
-            Param("S", 0f, 1f, 0.6f, "", LIN),
-            Param("R", 0.001f, 10f, 0.25f, "s", EXP),
-        ),
+        // One knob, where there were five. The envelope went to Env, which inside a poly
+        // subpatch is one per note and can be patched anywhere -- an envelope built into a
+        // synth is the same envelope for all eight voices and reaches nothing else, which
+        // is the whole thing this redesign is about. What is left in OscNode is a 5ms gate
+        // ramp, enough that a note does not click on and off and nothing more.
+        params = listOf(Param("wave", 0f, 3f, 0f, "", STEP, Choice.WAVE)),
     )
     /**
      * A plucked string for every note: Karplus-Strong, one delay line per voice.
@@ -666,10 +655,15 @@ object Types {
     /**
      * Two-operator FM for every note: a sine whose phase another sine pushes around.
      *
-     * The modulator runs at [ratio] times the note and pushes by [index] radians; the index
-     * follows the envelope and falls on its own over [fall], which is what makes a bell or
-     * an electric piano -- brightness dying before loudness. Seven knobs, the reason the
-     * limit is eight and the panel goes to two columns. Order mirrors FmNode::setParam.
+     * The modulator runs at [ratio] times the note and pushes by [index] radians, and the
+     * index falls on its own over [fall] -- brightness dying before loudness, which is the
+     * bell and the electric piano.
+     *
+     * It had seven knobs, four of them an envelope, and those are gone with Osc's. What
+     * started this redesign was wanting an Env on the index: FM's brightness is the thing
+     * most worth shaping and the built-in envelope shaped only the loudness. Expose index,
+     * patch an Env to it, and the two envelopes no longer have to be the same one. Order
+     * mirrors FmNode::setParam.
      */
     val Fm = ModuleType(
         "FM", listOf(Port("notes", N)), listOf(Port("out", A)),
@@ -680,10 +674,6 @@ object Types {
             Param("index", 0f, 10f, 2f, "", LIN, short = "idx"),
             // How fast the brightness dies away on its own, under the envelope's loudness.
             Param("fall", 0.01f, 20f, 1f, "s", EXP),
-            Param("A", 0.001f, 5f, 0.005f, "s", EXP, newColumn = true),
-            Param("D", 0.001f, 5f, 0.3f, "s", EXP),
-            Param("S", 0f, 1f, 0.5f, "", LIN),
-            Param("R", 0.001f, 10f, 0.4f, "s", EXP),
         ),
     )
     /**
@@ -704,6 +694,26 @@ object Types {
             ),
             Param("level", 0f, 2f, 1f, "", LIN, short = "lvl"),
         ),
+    )
+    /**
+     * A gain something else turns: audio in, modulation in, audio out.
+     *
+     * The VCA, back. It retired with CV on the argument that a Mix channel is `in * level`
+     * and a level with a modulation jack is the same module -- true, and no longer the
+     * point. With the envelopes out of the synths, the pair you reach for inside a poly
+     * subpatch is Env and the thing Env opens, and that should be one cable rather than
+     * opening a Mix, exposing a knob, setting its brackets and then patching.
+     *
+     * Its modulation input is a *port*, not a jack on a knob, which is the other half of
+     * why it exists: a port is read per sample where a parameter is applied once a block,
+     * and a 5ms attack through a 1500Hz control rate is a staircase. With nothing patched
+     * there the port reads as fully open and this is a gain knob -- see Node::unityInputs
+     * in node.h, which exists for exactly this port.
+     */
+    val Amp = ModuleType(
+        "Amp", listOf(Port("in", A), Port("mod", M)), listOf(Port("out", A)),
+        Color(0xFFA890A8),
+        params = listOf(Param("gain", 0f, 2f, 1f, "", LIN)),
     )
     val Mix = ModuleType(
         "Mix",
@@ -741,7 +751,8 @@ object Types {
      * inputs as you like, since each input stores its own source. Only summing ever
      * needed a module, and that is Mix.
      */
-    val palette = listOf(Osc, Pluck, Fm, Sf, Drone, Seq, Euclid, Arp, Chord, Chance, Filter, Env, Lfo, Mix)
+    val palette =
+        listOf(Osc, Pluck, Fm, Sf, Drone, Seq, Euclid, Arp, Chord, Chance, Filter, Env, Lfo, Amp, Mix)
 
     /**
      * Modules collapsed into one box. Its ports are its own rather than its type's -- they
@@ -1207,12 +1218,11 @@ internal fun panelRowAt(panel: Rect, d: Float, type: ModuleType, count: Int, slo
     // Past five rows, two columns: the first half down the left, the rest down the right,
     // so reading order is still top to bottom and the parameters' order is kept.
     val columns = if (count > PANEL_ONE_COLUMN) 2 else 1
-    // Where the second column starts: the module's own break when it has one and all its rows
-    // are here -- a subpatch's panel shows other modules' knobs and has none -- or half of them.
-    val declared = type.columnBreak
-    val first = if (columns == 1) count
-        else if (declared in 1 until count && count == type.rowParams.size) declared
-        else (count + 1) / 2
+    // Split at half. A parameter could once ask to start the second column, for FM, whose
+    // seven knobs split ratio/index/fall/A and D/S/R and cut ADSR in two. FM has three knobs
+    // now and no module has more than four, so the only panel that reaches two columns is a
+    // subpatch's -- and its rows are other modules' knobs, which have no break to declare.
+    val first = if (columns == 1) count else (count + 1) / 2
     val column = if (slot < first) 0 else 1
     val within = if (slot < first) slot else slot - first
     val deepest = maxOf(first, count - first)
@@ -6755,10 +6765,9 @@ fun rememberDemoPatch(): Patch = remember { demoPatch() }
  * hear is music rather than a test tone. The transport steps Steps, Steps sends notes to
  * Osc, and Osc feeds the filter and both output channels.
  *
- * Shorter than it was by two modules and three cables. The old demo needed a VCA that an
- * envelope opened, because a Eurorack oscillator drones until something shapes it; Osc is
- * polyphonic and carries an envelope per voice, so a note already has a shape by the time
- * it reaches the filter.
+ * An organ, as it stands: Osc has no envelope any more, so a note is on while it is held
+ * and off when it is not. Giving it a shape is a poly subpatch with an Env and an Amp in
+ * it, which is what the demo should become.
  */
 fun demoPatch(): Patch =
     Patch().apply {

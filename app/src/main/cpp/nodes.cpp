@@ -538,37 +538,21 @@ void OscVoice::init(float sampleRate) {
     osc.Init(sampleRate);
     osc.SetWaveform(daisysp::Oscillator::WAVE_POLYBLEP_SAW);
     osc.SetAmp(1.0f);
-    env.Init(sampleRate);
+    gate.init(sampleRate);
 }
 
 void OscVoice::strike(float hz, float velocity, bool stolen) {
     osc.SetFreq(hz);
     osc.SetAmp(velocity);
-    // Taking a voice that is still held restarts its envelope from where it is, because
-    // the gate never fell and the envelope has no edge to see. Softly: from the level it
-    // reached rather than from zero, which would be a step in the middle of a note.
-    if (stolen) env.Retrigger(false);
+    // Nothing to do for a stolen voice: the ramp is already open and stays open, which
+    // is what "taken while still sounding" should sound like. See GateRamp.
+    (void) stolen;
 }
 
-float OscVoice::render(bool gate, bool &finished) {
-    const float amplitude = env.Process(gate);
-    // Finished its release, so it is free rather than merely quiet. Said here rather than
-    // by looking at the amplitude, which passes through zero on its way up as well.
-    if (!gate && !env.IsRunning()) {
-        finished = true;
-        return 0.0f;
-    }
+float OscVoice::render(bool open, bool &finished) {
+    const float amplitude = gate.process(open, finished);
+    if (finished) return 0.0f;
     return osc.Process() * amplitude;
-}
-
-void OscNode::prepare(int32_t sampleRate) {
-    PolySynth::prepare(sampleRate);
-    forEachVoice([this](OscVoice &voice) {
-        voice.env.SetAttackTime(attack_);
-        voice.env.SetDecayTime(decay_);
-        voice.env.SetSustainLevel(sustain_);
-        voice.env.SetReleaseTime(release_);
-    });
 }
 
 void OscNode::setParam(int32_t index, float value) {
@@ -587,22 +571,6 @@ void OscNode::setParam(int32_t index, float value) {
             forEachVoice([&](OscVoice &voice) { voice.osc.SetWaveform(kWaves[wave]); });
             break;
         }
-        case 1:
-            attack_ = clampf(value, 0.001f, 5.0f);
-            forEachVoice([this](OscVoice &voice) { voice.env.SetAttackTime(attack_); });
-            break;
-        case 2:
-            decay_ = clampf(value, 0.001f, 5.0f);
-            forEachVoice([this](OscVoice &voice) { voice.env.SetDecayTime(decay_); });
-            break;
-        case 3:
-            sustain_ = clampf(value, 0.0f, 1.0f);
-            forEachVoice([this](OscVoice &voice) { voice.env.SetSustainLevel(sustain_); });
-            break;
-        case 4:
-            release_ = clampf(value, 0.001f, 10.0f);
-            forEachVoice([this](OscVoice &voice) { voice.env.SetReleaseTime(release_); });
-            break;
         default: break;
     }
 }
@@ -710,7 +678,7 @@ void PluckNode::setParam(int32_t index, float value) {
 
 void FmVoice::init(float rate) {
     sampleRate = rate;
-    env.Init(rate);
+    gate.init(rate);
 }
 
 void FmVoice::setFreq(float frequency) {
@@ -723,26 +691,24 @@ void FmVoice::strike(float frequency, float strength, bool stolen) {
     velocity = strength;
     brightness = 1.0f;
     setFreq(frequency);
-    if (stolen) {
-        // As an Osc's: from where the envelope is, since the gate never fell. The phases
-        // run on, because restarting them mid-cycle is a step.
-        env.Retrigger(false);
-    } else {
+    if (!stolen) {
         // A fresh voice starts both sines at zero, so every note's attack is the same
-        // shape rather than depending on where a free voice's phases were left.
+        // shape rather than depending on where a free voice's phases were left. A stolen
+        // one leaves them running, because restarting a phase mid-cycle is a step.
         carrier = 0.0f;
         modulator = 0.0f;
     }
 }
 
-float FmVoice::render(bool gate, bool &finished) {
-    const float amplitude = env.Process(gate);
-    if (!gate && !env.IsRunning()) {
-        finished = true;
-        return 0.0f;
-    }
+float FmVoice::render(bool open, bool &finished) {
+    const float amplitude = gate.process(open, finished);
+    if (finished) return 0.0f;
     constexpr float kTwoPi = 6.28318530718f;
-    const float depth = index * velocity * amplitude * brightness;
+    // The amplitude is no longer in here. It was Chowning's brass -- brighter as louder --
+    // but with the envelope gone the amplitude is a 5ms ramp and nothing else, so leaving
+    // it in would only have taken the first five milliseconds off every note's brightness.
+    // Patch an Env to the index for the coupling, and choose its shape.
+    const float depth = index * velocity * brightness;
     const float sample = std::sin(kTwoPi * carrier + depth * std::sin(kTwoPi * modulator));
     brightness *= fallStep;
 
@@ -766,10 +732,6 @@ void FmNode::applyAll() {
         voice.fallStep = fallStep;
         // A new ratio moves a sounding note's modulator at once; its carrier is untouched.
         voice.setFreq(voice.hz);
-        voice.env.SetAttackTime(attack_);
-        voice.env.SetDecayTime(decay_);
-        voice.env.SetSustainLevel(sustain_);
-        voice.env.SetReleaseTime(release_);
     });
 }
 
@@ -778,10 +740,6 @@ void FmNode::setParam(int32_t index, float value) {
         case 0: ratio_ = clampf(value, 0.25f, 16.0f); break;
         case 1: index_ = clampf(value, 0.0f, 10.0f); break;
         case 2: fall_ = clampf(value, 0.01f, 20.0f); break;
-        case 3: attack_ = clampf(value, 0.001f, 5.0f); break;
-        case 4: decay_ = clampf(value, 0.001f, 5.0f); break;
-        case 5: sustain_ = clampf(value, 0.0f, 1.0f); break;
-        case 6: release_ = clampf(value, 0.001f, 10.0f); break;
         default: return;
     }
     applyAll();
@@ -818,6 +776,19 @@ void LfoNode::setParam(int32_t index, float value) {
 }
 
 // ---------------------------------------------------------------- Mix
+
+// ---------------------------------------------------------------- Amp
+
+void AmpNode::process(int32_t frames) {
+    const float *in = input(0);
+    const float *mod = input(1);
+    float *o = out(0);
+    for (int32_t i = 0; i < frames; ++i) o[i] = in[i] * mod[i] * gain_;
+}
+
+void AmpNode::setParam(int32_t index, float value) {
+    if (index == 0) gain_ = clampf(value, 0.0f, 2.0f);
+}
 
 void MixNode::process(int32_t frames) {
     float *o = out(0);
@@ -906,6 +877,7 @@ Node *makeNode(NodeType type) {
         case NodeType::Env: return new EnvNode();
         case NodeType::Steps: return new StepsNode();
         case NodeType::Mix: return new MixNode();
+        case NodeType::Amp: return new AmpNode();
         case NodeType::Osc: return new OscNode();
         case NodeType::Pluck: return new PluckNode();
         case NodeType::Fm: return new FmNode();

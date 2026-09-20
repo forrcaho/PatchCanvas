@@ -77,16 +77,15 @@ NoteBuffer noteAt(NoteKind kind, uint32_t id, int32_t source = 0, int32_t degree
 const NoteBuffer kNoNotes{};
 
 /**
- * An oscillator sounding one degree, with a flat envelope so the tone is steady.
+ * An oscillator sounding one degree.
  *
  * Nothing here drones any more: the monophonic oscillator that did was retired when every
- * synth became polyphonic, so a tone is a note that is being held.
+ * synth became polyphonic, so a tone is a note that is being held. It needed three knobs
+ * flattening to hold steady when Osc had an envelope; a held note now simply holds, which
+ * is what taking the envelope out was for.
  */
 void holdDegree(OscNode &osc, int32_t degree, const NoteBuffer &note) {
     osc.prepare(kRate);
-    osc.setParam(1, 0.0005f); // attack
-    osc.setParam(2, 0.0005f); // decay
-    osc.setParam(3, 1.0f);    // sustain, so the note holds at full level
     osc.setNoteInput(0, &note);
     osc.process(kBlockSize);
     osc.setNoteInput(0, &kNoNotes);
@@ -352,6 +351,42 @@ void aMixChannelIsAGainThatCanBeShut() {
 
     mix.setParam(0, 1.0f);
     check(std::fabs(peak(run(mix, 4)) - 1.0f) < 0.001f, "and open at full");
+}
+
+/**
+ * The Amp is a multiplier with a knob, and an open one when nothing is patched to it.
+ *
+ * The second half is the part worth pinning: silence is the right idle for an input that is
+ * summed and the wrong one for an input that multiplies, so this port declares itself a
+ * unity input and the graph hands it ones. An Amp dropped into a patch with nothing on its
+ * mod jack has to pass its audio, or it reads as a module that does not work.
+ */
+void anAmpMultipliesAndIsOpenWithNothingPatched() {
+    std::printf("an amp multiplies, and is open with nothing patched\n");
+    const auto signal = constantBuffer(1.0f);
+    const auto half = constantBuffer(0.5f);
+    const auto shut = constantBuffer(0.0f);
+
+    AmpNode amp;
+    amp.prepare(kRate);
+    amp.setInput(0, signal.data());
+
+    amp.setInput(1, half.data());
+    check(std::fabs(peak(run(amp, 4)) - 0.5f) < 0.001f, "the modulator is a gain");
+
+    amp.setInput(1, shut.data());
+    check(peak(run(amp, 4)) == 0.0f, "and shuts it");
+
+    amp.setInput(1, half.data());
+    amp.setParam(0, 2.0f);
+    check(std::fabs(peak(run(amp, 4)) - 1.0f) < 0.001f, "the knob multiplies on top of it");
+
+    // What Graph hands an unpatched unity input; see Node::unityInputs.
+    check(amp.unityInputs() == (1u << 1), "the mod port asks for ones rather than silence");
+    const auto ones = constantBuffer(1.0f);
+    amp.setParam(0, 1.0f);
+    amp.setInput(1, ones.data());
+    check(std::fabs(peak(run(amp, 4)) - 1.0f) < 0.001f, "so nothing patched is wide open");
 }
 
 /** 120bpm at 48k: 24000 frames a beat, so the default 1/8 step is 12000. */
@@ -984,10 +1019,73 @@ void aVoiceSoundsAChordAndLetsItGo() {
     voice.setNoteInput(0, &release);
     voice.setTiming(0.0, false, nullptr);
     run(voice, 1);
-    // 2000 blocks is 1.3 seconds. A 0.25s release is a time constant rather than a
-    // duration -- DaisySP's decays towards -0.01 and stops when it crosses zero, which
-    // takes about four of them -- so "past the release" is a second, not a quarter of one.
+    // 2000 blocks is 1.3 seconds, which was sized for an envelope's release and is now
+    // wildly past the 5ms gate ramp. Left long: what it asserts is that the chord ends,
+    // and a margin that generous cannot fail for being a few blocks short.
     check(peak(voiceAfter(voice, 2000)) < 0.001f, "then the chord ends");
+}
+
+/**
+ * The 5ms ramp that is all an Osc has left of an envelope.
+ *
+ * Not an envelope: what it owes is that a note neither starts nor stops with a step in it,
+ * and both edges can have one. A saw is at -1 at phase zero, so a fresh note without a ramp
+ * begins with a full-amplitude jump out of silence; and a note let go is at whatever phase
+ * it had reached, so ending it without a ramp drops that sample to nothing.
+ */
+void aNoteStartsAndStopsWithoutAStep() {
+    std::printf("a note starts and stops without a step\n");
+    auto biggestJump = [](const std::vector<float> &x) {
+        float worst = 0.0f;
+        for (std::size_t i = 1; i < x.size(); ++i) worst = std::max(worst, std::fabs(x[i] - x[i - 1]));
+        return worst;
+    };
+
+    {
+        OscNode square;
+        square.prepare(kRate);
+        square.setParam(0, 1.0f); // a square, which is at full amplitude from its first sample
+        NoteBuffer on;
+        on.push(noteOn(1, 0));
+        square.setNoteInput(0, &on);
+        square.setTiming(0.0, false, nullptr);
+        // One block is 32 frames of a 240-frame ramp, so the note is still on its way up.
+        const float opening = peak(run(square, 1));
+        const float full = peak(voiceIdle(square, 20));
+        // DaisySP's polyblep square is scaled to 0.707, not 1, which is why this is a
+        // ratio and why "full" is measured rather than assumed.
+        check(full > 0.7f, "a square reaches full level, " + std::to_string(full));
+        check(opening < 0.2f * full,
+              "and its first block is still opening, " + std::to_string(opening));
+    }
+
+    OscNode osc;
+    osc.prepare(kRate);
+    osc.setParam(0, 3.0f); // a sine, whose own slope is what the release is measured against
+
+    NoteBuffer on;
+    on.push(noteOn(1, 0));
+    osc.setNoteInput(0, &on);
+    osc.setTiming(0.0, false, nullptr);
+    run(osc, 1);
+    voiceIdle(osc, 40);
+    const float steady = biggestJump(voiceIdle(osc, 8));
+
+    // Across the join: the step a release makes is between the last sample the note was
+    // sounding and the first after the off, so a vector starting at the off cannot see it.
+    auto closing = voiceIdle(osc, 2);
+    NoteBuffer off;
+    off.push(noteOff(1));
+    osc.setNoteInput(0, &off);
+    osc.setTiming(0.0, false, nullptr);
+    const auto released = run(osc, 1);
+    closing.insert(closing.end(), released.begin(), released.end());
+    const auto tail = voiceIdle(osc, 12); // 13 blocks is 416 frames, past the 240-frame ramp
+    closing.insert(closing.end(), tail.begin(), tail.end());
+    check(biggestJump(closing) < 3.0f * steady,
+          "letting go is no sharper than the waveform, " + std::to_string(biggestJump(closing)) +
+                  " against " + std::to_string(steady));
+    check(peak(voiceIdle(osc, 4)) < 0.001f, "and it is over inside 13 blocks, not a release");
 }
 
 void anIdBelongsToTheSourceThatChoseIt() {
@@ -1223,15 +1321,12 @@ float magnitudeAt(const std::vector<float> &samples, float hz) {
     return static_cast<float>(std::sqrt(s1 * s1 + s2 * s2 - coefficient * s1 * s2) / n);
 }
 
-/** An FM holding middle C, with its envelope flat so only the knobs under test move. */
+/** An FM holding middle C. Its three knobs are all it has now; see FmNode. */
 void holdFm(FmNode &fm, float ratio, float index, float fall) {
     fm.prepare(kRate);
     fm.setParam(0, ratio);
     fm.setParam(1, index);
     fm.setParam(2, fall);
-    fm.setParam(3, 0.001f); // A
-    fm.setParam(4, 0.001f); // D
-    fm.setParam(5, 1.0f);   // S
     play(fm, noteOn(1, 0));
 }
 
@@ -1278,7 +1373,7 @@ void fmBrightnessFallsFasterThanLoudness() {
     const float lateRatio = magnitudeAt(late, 2.0f * kMiddleC) / magnitudeAt(late, kMiddleC);
     check(earlyRatio > 0.3f, "bright when struck, " + std::to_string(earlyRatio));
     check(lateRatio < 0.02f, "mellow a second on, " + std::to_string(lateRatio));
-    check(peak(late) > 0.9f, "and still as loud, held at full sustain");
+    check(peak(late) > 0.9f, "and still as loud: the fall is on the index, not the level");
 }
 
 /**
@@ -1974,6 +2069,7 @@ int main() {
     envEndsTheNotesOfASourceThatWasUnpatched();
     envMatchesAnOffAgainstItsOwnSource();
     aMixChannelIsAGainThatCanBeShut();
+    anAmpMultipliesAndIsOpenWithNothingPatched();
     stepsTakeTheirStepFromTheCount();
     stepsPlayTheirOwnPattern();
     aClosedGateIsARestNotASkip();
@@ -1992,6 +2088,7 @@ int main() {
     aRestStartsNothing();
     aTransposeRidesOnTheNote();
     aVoiceSoundsAChordAndLetsItGo();
+    aNoteStartsAndStopsWithoutAStep();
     anIdBelongsToTheSourceThatChoseIt();
     unpatchingASourceEndsItsNotes();
     aVoiceResolvesANoteAgainstItsOwnBeat();

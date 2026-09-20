@@ -156,15 +156,17 @@ class ModulationPanelTest {
         // A new range puts [ at the very end for any knob in the bottom fifth of its travel,
         // and a finger aiming at it from outside lands a little past the bar.
         val patch = Patch()
-        val voice = patch.add(Types.Osc, Offset.Zero)!!
-        val attack = voice.type.params[1]
-        patch.expose(voice, 1, initialModRange(attack, attack.default))
-        val row = panelRow(panel, d, voice.type, 1)
-        val low = panelBracketX(row, d, attack, voice.modRanges.getValue(1).low, closing = false)
+        // Env's A, which is where Osc's was before the envelopes left the synths: 5ms on a
+        // range to 5s, which is the bottom of its travel.
+        val env = patch.add(Types.Env, Offset.Zero)!!
+        val attack = env.type.params[0]
+        patch.expose(env, 0, initialModRange(attack, attack.default))
+        val row = panelRow(panel, d, env.type, 0)
+        val low = panelBracketX(row, d, attack, env.modRanges.getValue(0).low, closing = false)
         assertEquals("the new range starts at the end of the bar", row.left, low, 0.5f)
         assertEquals(
-            ParamRow(voice, 1) to false,
-            panelBracketAt(panel, d, voice, rows(voice), Offset(row.left - 15f * d, row.center.y)),
+            ParamRow(env, 0) to false,
+            panelBracketAt(panel, d, env, rows(env), Offset(row.left - 15f * d, row.center.y)),
         )
     }
 
@@ -180,7 +182,7 @@ class ModulationPanelTest {
 
     @Test
     fun `an exposed bar reads its range in its own units`() {
-        assertEquals("[0.017s \u2013 0.522s]", rangeReading(Types.Osc.params[1], ModRange(0.017f, 0.522f)))
+        assertEquals("[0.017s \u2013 0.522s]", rangeReading(Types.Env.params[0], ModRange(0.017f, 0.522f)))
         assertEquals("[300Hz \u2013 3000Hz]", rangeReading(Types.Filter.params[0], ModRange(300f, 3000f)))
     }
 
@@ -303,35 +305,36 @@ class ModulationPanelTest {
      */
     @Test
     fun `a knob in either column travels its own row`() {
-        val fm = Patch().add(Types.Fm, Offset.Zero)!!
-        val rows = fm.type.rowParams
-        rows.indices.forEach { slot ->
-            val bar = panelRowAt(panel, d, fm.type, rows.size, slot)
+        // Eight rows, which is what only a subpatch's panel reaches now: no module has more
+        // than four knobs since the envelopes left the synths.
+        val rows = (0 until MAX_PROMOTED)
+        rows.forEach { slot ->
+            val bar = panelRowAt(panel, d, Types.Subpatch, rows.count(), slot)
             assertEquals("slot $slot at its left", 0f, panelKnobPosition(bar, bar.left), 0.001f)
             assertEquals("slot $slot at its right", 1f, panelKnobPosition(bar, bar.right), 0.001f)
             assertEquals("slot $slot halfway", 0.5f, panelKnobPosition(bar, bar.center.x), 0.001f)
         }
     }
 
-    /** FM asked for it: ADSR belongs together, so A starts the second column. */
+    /**
+     * Two columns split at half, reading down the left and then down the right.
+     *
+     * A parameter could once ask to start the second column, because FM's seven knobs
+     * otherwise split ratio/index/fall/A and D/S/R and cut ADSR in two. FM has three knobs
+     * now, so nothing declares a break and nothing can: the only panel that reaches two
+     * columns is a subpatch's, whose rows are knobs promoted from the modules inside it.
+     */
     @Test
-    fun `a module can say where its second column starts`() {
-        val rows = Types.Fm.rowParams
-        assertEquals("A starts it", "A", Types.Fm.params[rows[Types.Fm.columnBreak]].name)
-        val rects = rows.indices.map { panelRowAt(panel, d, Types.Fm, rows.size, it) }
+    fun `past five rows the panel splits at half`() {
+        val rects = (0 until MAX_PROMOTED).map { panelRowAt(panel, d, Types.Subpatch, MAX_PROMOTED, it) }
         val left = rects.filter { it.left == rects[0].left }
-        assertEquals("ratio, index and fall on the left", 3, left.size)
-        assertEquals("and ADSR on the right", 4, rects.size - left.size)
-        rows.indices.forEach { slot ->
-            val name = Types.Fm.params[rows[slot]].name
-            val onLeft = rects[slot].left == rects[0].left
-            assertEquals("$name is in the column it belongs to", name in listOf("ratio", "index", "fall"), onLeft)
-        }
+        assertEquals("half down the left", MAX_PROMOTED / 2, left.size)
+        assertEquals("the rest down the right", MAX_PROMOTED / 2, rects.size - left.size)
+        assertTrue("reading order is kept", rects.take(MAX_PROMOTED / 2).all { it.left == rects[0].left })
         assertTrue("both columns keep a finger's height", rects.all { it.height >= 60f * d })
 
-        // A module with no break splits at half, as every one did before.
-        val eight = (0 until MAX_PARAMS).map { panelRowAt(panel, d, Types.Mix, MAX_PARAMS, it) }
-        assertEquals(4, eight.count { it.left == eight[0].left })
+        val seven = (0 until 7).map { panelRowAt(panel, d, Types.Subpatch, 7, it) }
+        assertEquals("an odd count puts the extra row on the left", 4, seven.count { it.left == seven[0].left })
     }
 
     @Test

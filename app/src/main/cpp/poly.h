@@ -27,6 +27,49 @@ inline float pitchOf(const NoteEvent &event, const ScaleList *scales) {
 }
 
 /**
+ * A note's on/off with the click taken off it, and nothing else.
+ *
+ * What is left of the envelope on a synth that no longer has one. Shaping a note is an
+ * Env's job now, inside a poly subpatch where there is one Env per note -- an envelope
+ * built into a synth can only be the same envelope for every voice, which is what made
+ * "patch an Env to FM's index" impossible and started the redesign. What a synth still
+ * owes is not sounding a step when a gate opens or closes, and that is this.
+ *
+ * Five milliseconds, smoothstepped so the slope is zero at both ends as well as the value
+ * -- the same reason the graph's crossfades are smoothstepped rather than linear. Long
+ * enough that the edge is not broadband, short enough that a staccato sixteenth still
+ * sounds staccato. It is not 30ms like a crossfade because a crossfade happens under a
+ * note you are already playing and this *is* the note starting.
+ */
+struct GateRamp {
+    void init(float sampleRate) {
+        step_ = 1.0f / std::max(1.0f, 0.005f * sampleRate);
+        position_ = 0.0f;
+    }
+
+    /**
+     * One sample of gain, 0 to 1. [finished] once a released note has reached silence --
+     * which is also the whole of "this voice is free", since there is nothing else left
+     * ringing.
+     *
+     * Nothing restarts the ramp. A voice that finished is already at zero, so a fresh note
+     * rises from silence; a voice stolen while still sounding carries on from where it is,
+     * up if it was held and back up if it was releasing, because dropping it to zero first
+     * is precisely the step this exists to avoid.
+     */
+    float process(bool gate, bool &finished) {
+        position_ = gate ? std::min(1.0f, position_ + step_) : std::max(0.0f, position_ - step_);
+        if (!gate && position_ <= 0.0f) finished = true;
+        return position_ * position_ * (3.0f - 2.0f * position_);
+    }
+
+private:
+    float step_ = 1.0f / 240.0f;
+    /** 0 to 1, linear; the gain returned is the smoothstep of it. */
+    float position_ = 0.0f;
+};
+
+/**
  * Notes in, sound out, with the voices inside it: everything a polyphonic synth does that
  * is not the sound itself.
  *

@@ -30,7 +30,9 @@ enum class NodeType(val id: Int) {
     Chance(17),
     Chord(18),
     Arp(19),
-    Euclid(20);
+    Euclid(20),
+    /** The VCA, back. Id 7 stays retired: that module took a control voltage. */
+    Amp(21);
 
     companion object {
         fun of(type: ModuleType): NodeType = when (type.name) {
@@ -51,6 +53,7 @@ enum class NodeType(val id: Int) {
             "Chord" -> Chord
             "Arp" -> Arp
             "Euclid" -> Euclid
+            "Amp" -> Amp
             else -> Unknown
         }
     }

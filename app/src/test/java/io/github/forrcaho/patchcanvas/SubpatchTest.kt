@@ -493,10 +493,11 @@ class SubpatchTest {
     @Test
     fun `a subpatch carries no more knobs than a module does`() {
         val f = SubpatchFixture()
-        val subpatch = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id, f.lfo.id))!!
+        val subpatch = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id, f.lfo.id, f.mix.id, f.env.id))!!
         f.patch.enterScope(subpatch.id)
 
-        val every = listOf(f.osc, f.filter, f.lfo).flatMap { m -> m.type.rowParams.map { m to it } }
+        val inside = listOf(f.osc, f.filter, f.lfo, f.mix, f.env)
+        val every = inside.flatMap { m -> m.type.rowParams.map { m to it } }
         assertTrue("the fixture has more knobs than a subpatch may take", every.size > MAX_PROMOTED)
         val taken = every.count { (m, i) -> f.patch.promote(m, i) }
         assertEquals(MAX_PROMOTED, taken)

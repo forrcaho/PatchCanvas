@@ -906,6 +906,12 @@ void twoSequencersMergeIntoOneVoice() {
     graph.postConnect(3, 0, 4, 0);
     graph.postSetParam(2, 1, 700.0f); // a fifth up, so the two are not the same note
     graph.postSetTempo(300.0f);       // and fast, so both keep starting notes throughout
+    // Out turned down, so the comparison below is of two voices against one rather than
+    // of the limiter against itself. With no envelope on it an Osc voice runs at full
+    // scale for the whole note, so two of them sum past the knee and come back the same
+    // loudness as one -- which made "unpatching one is quieter" false for a reason that
+    // has nothing to do with the cable.
+    graph.postSetParam(4, 0, 0.25f);
     graph.applyCommands();
     graph.setTransportRunning(true);
 
@@ -1055,6 +1061,55 @@ struct ModPatch {
         graph.applyCommands();
     }
 };
+
+/**
+ * An Amp with nothing on its modulation input passes its audio, and patching one fades.
+ *
+ * The node's side of this is in node_test; what is checked here is the wiring, because the
+ * substitution is the graph's -- an unpatched input is pointed at a buffer of ones rather
+ * than at silence_, and so is the *previous* side of a crossfade, or patching a modulator
+ * would fade up from zero and unpatching would fade down to it.
+ */
+void anUnpatchedAmpIsOpenAndPatchingOneFades() {
+    std::printf("an unpatched amp is open, and patching one fades\n");
+    Graph graph;
+    graph.setSampleRate(48000);
+
+    graph.postAdd(1, NodeType::Drone);
+    graph.postAdd(2, NodeType::Osc);
+    graph.postAdd(3, NodeType::Amp);
+    graph.postAdd(4, NodeType::Lfo);
+    graph.postAdd(5, NodeType::Out);
+    graph.postConnect(1, 0, 2, 0);
+    graph.postConnect(2, 0, 3, 0);
+    graph.postConnect(3, 0, 5, 0);
+    graph.postSetStep(1, 0, 0, true); // a held note, so there is a tone to pass
+    graph.postSetParam(2, 0, 3.0f);   // a sine: a saw's own reset is a step, and a big one
+    graph.postSetParam(4, 0, 0.02f);  // the slowest LFO, so it is near its own floor
+    graph.postSetParam(5, 0, 0.25f);
+    graph.applyCommands();
+
+    render(graph, 4);
+    const auto open = render(graph, 64);
+    check(energy(open.data(), static_cast<int32_t>(open.size())) > 0.0f,
+          "nothing patched to mod, and the amp passes its audio");
+    const float steady = maxStep(open);
+
+    // A saw LFO starts at zero and climbs, so the amp shuts as the crossfade lands.
+    // Measured across the join, not from the first sample after it: the step this is
+    // looking for is between the last sample the old routing produced and the first the
+    // new one does, which is exactly the boundary a vector starting at the connect misses.
+    auto joined = render(graph, 2);
+    graph.postConnect(4, 0, 3, 1);
+    graph.applyCommands();
+    const auto fading = render(graph, 45); // 1440 frames: the whole crossfade
+    joined.insert(joined.end(), fading.begin(), fading.end());
+    // Against the tone's own slope rather than an absolute: fading from silence instead of
+    // from unity would drop a full-amplitude sine to nothing in one sample.
+    check(maxStep(joined) < 2.0f * steady,
+          "and patching one fades rather than steps, " + std::to_string(maxStep(joined)) +
+                  " against " + std::to_string(steady));
+}
 
 void aModulatorDrivesAParameterAcrossItsRange() {
     std::printf("a modulator drives a parameter across its range\n");
@@ -1292,6 +1347,7 @@ int main() {
     aRemovedSourceEndsTheNotesItStarted();
     twoSequencersMergeIntoOneVoice();
     anIdIsOnlyUniqueToItsOwnSource();
+    anUnpatchedAmpIsOpenAndPatchingOneFades();
     aModulatorDrivesAParameterAcrossItsRange();
     anExponentialRangeSweepsGeometrically();
     aKnobMovedUnderAModulatorWaitsForItToLetGo();

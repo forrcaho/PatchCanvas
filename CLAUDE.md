@@ -196,13 +196,32 @@ notes it is sent in the meantime.
 plucked string finishes while still held. Any DaisySP code that calls `rand()` is edited
 before it is vendored -- Bionic's takes a mutex.
 
-**Retired modules stay retired.** `Osc` is the
+**Retired modules stay retired, and a retired id is never reused.** `Osc` is the
 polyphonic one -- what was called `Voice` -- and the monophonic oscillator is gone, which
 settled the worst naming collision in the project: "voice" now means only one of the eight
-slots inside an `Osc`. `Vca` retired with CV, since a `Mix` channel is `in * level` and was
-always a VCA with its level on a knob. `Filter` lost its cutoff jack and `Steps` its pitch
+slots inside an `Osc`. `Filter` lost its cutoff jack and `Steps` its pitch
 and gate outputs, so a sequencer says a note once rather than the same thing three ways.
-Node ids 1, 7 and 8 are retired and never reused; `Osc` is id 10, where `Voice` was.
+Node ids 1, 7 and 8 are retired and never reused; `Osc` is id 10, where `Voice` was. **A
+module can come back; its id cannot.** `Amp` is the VCA again, at id 21, because with the
+envelopes out of the synths the pair you reach for is `Env` and the thing `Env` opens, and
+that should be one cable rather than opening a `Mix`, exposing its level, setting brackets
+and then patching. Id 7 stays dead all the same: that module took a control voltage, and
+there is no such thing here.
+
+**No synth has an envelope.** `Osc` has one knob and `FM` three; what is left of the ADSR
+is a 5ms gate ramp (`GateRamp` in `poly.h`) that keeps a note from starting or stopping
+with a step in it. An envelope built into a synth is *the same envelope for all eight
+voices* and can be patched to nothing else -- which is why an `Env` on FM's modulation index
+was impossible, and why this redesign happened. Shaping is an `Env` inside a poly subpatch,
+where there is one per note. `FM` lost Chowning's brightness-follows-loudness with it:
+expose `index`, patch an `Env`, and the two envelopes no longer have to be one envelope.
+
+**An input that multiplies says so.** Silence is the right idle for an input that is summed
+or filtered and the wrong one for `Amp`'s modulation port, which with nothing patched would
+make the module silent and look broken -- there is no panel meter to say otherwise. A node
+declares such a port in `unityInputs()` and the graph hands it a buffer of ones, on the
+*previous* side of a crossfade as well as the current one, or patching a modulator would
+fade up from zero.
 
 **A module's color is the kind of cable it sends** -- greens for notes, steel blues, warm grays and
 grays for audio, purples for modulation -- in a shade of that family, never the cable

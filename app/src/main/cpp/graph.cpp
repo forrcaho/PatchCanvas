@@ -735,16 +735,21 @@ void Graph::process(int32_t frames) {
                 continue;
             }
             InputRef &ref = record.inputs[p];
+            // What nothing reads as on this port. Zero everywhere but a port that
+            // multiplies, which says so through unityInputs() -- see Node.
+            const float *idle = (node->unityInputs() & (1u << static_cast<uint32_t>(p))) != 0
+                    ? unity_.data()
+                    : silence_.data();
             const bool live = ref.sourceIndex >= 0 && nodes_[ref.sourceIndex].used;
             const float *source = live
                     ? nodes_[ref.sourceIndex].node->output(ref.sourcePort)
-                    : silence_.data();
+                    : idle;
 
             if (ref.rampRemaining > 0) {
                 const bool fromLive = ref.fromIndex >= 0 && nodes_[ref.fromIndex].used;
                 const float *previous = fromLive
                         ? nodes_[ref.fromIndex].node->output(ref.fromPort)
-                        : silence_.data();
+                        : idle;
 
                 float *blend = ramp_[p].data();
                 for (int32_t i = 0; i < frames; ++i) {

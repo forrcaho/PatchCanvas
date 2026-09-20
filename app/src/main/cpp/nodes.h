@@ -42,6 +42,8 @@ enum class NodeType : int32_t {
     Chord = 18,
     Arp = 19,
     Euclid = 20,
+    /** The VCA, back: id 7 stays retired, because this is not the module that had it. */
+    Amp = 21,
 };
 
 /**
@@ -362,15 +364,22 @@ private:
     const ScaleList *retunedFor_ = nullptr;
 };
 
-/** One note of an Osc: a band-limited waveform through its own envelope. */
+/**
+ * One note of an Osc: a band-limited waveform, on and off.
+ *
+ * It had an ADSR. The envelope went with the redesign, because a built-in one is the same
+ * envelope for every voice of the module and cannot be patched to anything else -- an Env
+ * inside a poly subpatch is per note and can be sent wherever you like. What is left is
+ * the click, which the gate ramp takes off; see GateRamp.
+ */
 struct OscVoice {
     daisysp::Oscillator osc;
-    daisysp::Adsr env;
+    GateRamp gate;
 
     void init(float sampleRate);
     void strike(float hz, float velocity, bool stolen);
     void setFreq(float hz) { osc.SetFreq(hz); }
-    float render(bool gate, bool &finished);
+    float render(bool open, bool &finished);
 };
 
 /**
@@ -388,16 +397,14 @@ struct OscVoice {
 class OscNode : public PolySynth<OscVoice, 8> {
 public:
     // Eight voices. A sixteen-note column would be a chord nobody plays, and every voice
-    // costs an oscillator and an envelope whether it is sounding or not.
+    // costs an oscillator whether it is sounding or not.
+    //
+    // One knob now, the waveform. Inside a poly subpatch only one of these voices is ever
+    // used at a time and the shaping is an Env's; outside one, eight voices of plain
+    // on/off tone is an organ, which is a real instrument and the honest thing to get
+    // from a module with no envelope in it.
 
-    void prepare(int32_t sampleRate) override;
     void setParam(int32_t index, float value) override;
-
-private:
-    float attack_ = 0.005f;
-    float decay_ = 0.12f;
-    float sustain_ = 0.6f;
-    float release_ = 0.25f;
 };
 
 /**
@@ -480,12 +487,12 @@ private:
  * Velocity scales both loudness and index, so a harder note is a brighter one.
  */
 struct FmVoice {
-    daisysp::Adsr env;
+    GateRamp gate;
 
     void init(float sampleRate);
     void strike(float hz, float velocity, bool stolen);
     void setFreq(float hz);
-    float render(bool gate, bool &finished);
+    float render(bool open, bool &finished);
 
     float sampleRate = 48000.0f;
     float hz = 0.0f;
@@ -505,8 +512,15 @@ struct FmVoice {
 
 /**
  * Two-operator FM: notes in, sound out. Order of knobs mirrors PatchCanvas.kt: ratio,
- * index, fall, A, D, S, R -- seven, which is what raised kMaxParams to eight and sent the
- * panel to two columns.
+ * index, fall.
+ *
+ * The envelope went with Osc's, and with it Chowning's coupling of brightness to loudness
+ * -- the index followed the amplitude envelope, so a note got brighter as it got louder.
+ * That is now a cable: expose the index and patch an Env to it, which is both the thing
+ * that could not be done before and a strictly larger set of sounds, since the envelope on
+ * the index no longer has to be the one on the amplitude. [fall] stays, because the index
+ * dying faster than the note is per *voice* and per strike and never was a knob's worth of
+ * envelope.
  *
  * A module rather than two oscillators patched together, and not only because modulation
  * runs once a block: each note needs its own modulator following its own pitch, and an
@@ -524,10 +538,6 @@ private:
     float ratio_ = 1.0f;
     float index_ = 2.0f;
     float fall_ = 1.0f;
-    float attack_ = 0.005f;
-    float decay_ = 0.3f;
-    float sustain_ = 0.5f;
-    float release_ = 0.4f;
 };
 
 /**
@@ -553,6 +563,37 @@ private:
     float rateHz_ = 1.0f;
     /** Order mirrors kWaves in OscNode::setParam: saw, square, triangle, sine. */
     int32_t wave_ = 3;
+};
+
+/**
+ * A gain something else turns: audio in, modulation in, audio out.
+ *
+ * The VCA, returning. It was retired with CV on the argument that a Mix channel is
+ * `in * level` and a level with a modulation jack is the same module -- which was true,
+ * and stopped being the point. Inside a poly subpatch the thing you reach for after Env
+ * is the thing Env opens, and reaching for it should be one cable rather than opening a
+ * Mix's panel, exposing a knob, setting its brackets and then patching. Node id 7 stays
+ * retired all the same: that module took a control voltage, and there is no such thing
+ * here any more.
+ *
+ * Per sample, not per block -- it reads the modulator as a signal rather than as a
+ * parameter, so an attack of a millisecond is an attack of a millisecond. A parameter is
+ * applied once per block, which is 1500Hz, and a plucked envelope through one is a
+ * staircase.
+ *
+ * With nothing patched to [mod] the port reads as 1.0 and this is a gain knob; see
+ * Node::unityInputs.
+ */
+class AmpNode : public Node {
+public:
+    int32_t inputCount() const override { return 2; }  // in, mod
+    int32_t outputCount() const override { return 1; }
+    uint32_t unityInputs() const override { return 1u << 1; }
+    void process(int32_t frames) override;
+    void setParam(int32_t index, float value) override;
+
+private:
+    float gain_ = 1.0f;
 };
 
 /** Sums its inputs. Necessary because an input takes exactly one source. */

@@ -140,9 +140,11 @@ class ModulationTest {
     @Test
     fun `the band grows downward, never wider`() {
         val patch = Patch()
-        val voice = patch.add(Types.Osc, Offset(40f, 60f))!!
+        // Pluck, because its four knobs reach a second row of the band; Osc has one knob
+        // now that its envelope has gone to Env.
+        val voice = patch.add(Types.Pluck, Offset(40f, 60f))!!
         val closed = voice.bounds
-        patch.expose(voice, 4, ModRange(0.1f, 1f))
+        patch.expose(voice, 3, ModRange(0.1f, 1f))
 
         // Wider would move every output jack, since they sit on the right edge.
         assertEquals(closed.left, voice.bounds.left, 0f)
@@ -154,8 +156,8 @@ class ModulationTest {
     @Test
     fun `the deepest row of the band lies on the module's bottom edge`() {
         val patch = Patch()
-        val voice = patch.add(Types.Osc, Offset(40f, 60f))!!
-        patch.expose(voice, 3, ModRange(0f, 1f)) // S: the second row
+        val voice = patch.add(Types.Pluck, Offset(40f, 60f))!!
+        patch.expose(voice, 3, ModRange(0f, 1f)) // R: the second row
         val at = modPortIn(voice.bounds, 1f, voice.type, 3, voice.portsBody)
         assertEquals(voice.bounds.bottom, at.y, 0.001f)
     }

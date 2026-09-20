@@ -58,6 +58,19 @@ public:
     virtual uint32_t noteInputs() const { return 0; }
     virtual uint32_t noteOutputs() const { return 0; }
 
+    /**
+     * Signal inputs whose *unpatched* value is 1.0 rather than 0.0, one bit per port index.
+     *
+     * Silence is the right idle for an input that is summed or filtered, and the wrong one
+     * for an input that multiplies. An Amp with nothing on its modulation input is a VCA
+     * with no control voltage, which in hardware is a module that does nothing audible and
+     * on a phone is a module you assume is broken -- there is no panel meter to tell you
+     * which. So the port says what its own silence means, and the graph hands it a buffer
+     * of ones instead. Patching then crossfades from unity to the modulator and unpatching
+     * fades back, which is the same three cases repatch() already gets right.
+     */
+    virtual uint32_t unityInputs() const { return 0; }
+
     virtual void prepare(int32_t sampleRate) { sampleRate_ = sampleRate; }
 
     /**

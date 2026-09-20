@@ -29,6 +29,9 @@ constexpr std::size_t kCommandCapacity = 256;
  */
 class Graph {
 public:
+    /** Only to fill the unity buffer; see unityInputs() in node.h. */
+    Graph() { unity_.fill(1.0f); }
+
     /**
      * Frees whatever is still owned. Safe only once no callback can be running, which
      * is true by the time a Graph is being destroyed -- but stating it as RAII rather
@@ -360,6 +363,8 @@ private:
     int32_t rampInSamples_ = 1454;  // ~30ms at 48k, recomputed in setSampleRate
     int32_t rampOutSamples_ = 1454; // ~30ms at 48k
     std::array<float, kBlockSize> silence_{};
+    /** What an unpatched input reads when its node declares it a unityInputs() port. */
+    std::array<float, kBlockSize> unity_{};
 
     // One per port index, not per node: only one node is processing at a time, so the
     // scratch a ramp renders into can be reused across the whole graph.
