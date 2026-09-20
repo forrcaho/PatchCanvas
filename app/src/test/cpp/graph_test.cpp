@@ -1111,6 +1111,80 @@ void anUnpatchedAmpIsOpenAndPatchingOneFades() {
                   " against " + std::to_string(steady));
 }
 
+/**
+ * A poly subpatch, as the interface flattens one: a note edge, two copies of what is
+ * inside, and a summing node.
+ *
+ * Built by hand here because that is exactly what GraphSync sends -- the engine is handed a
+ * flat graph and never learns a subpatch existed. What this checks is that the flat graph
+ * *works*: that two notes down one cable end up on two different copies, sounding at the
+ * same time, and that both reach the output through the sum.
+ *
+ * Each copy is an Osc with no envelope and an Amp, so each instance is a voice the way one
+ * would actually be built; the Amps are left wide open, since an unpatched modulation input
+ * reads as unity.
+ */
+void aFlattenedPolySubpatchSoundsTwoNotesAtOnce() {
+    std::printf("a flattened poly subpatch sounds two notes at once\n");
+    Graph graph;
+    graph.setSampleRate(48000);
+
+    constexpr int64_t kDrone = 1;
+    constexpr int64_t kEdge = 2;
+    constexpr int64_t kSum = 3;
+    constexpr int64_t kOut = 4;
+    // Instance k's two nodes. The interface's numbering is the module's id with the
+    // instance in the high bits; any two distinct ids do the same job here.
+    const int64_t osc[2] = {10, 20};
+    const int64_t amp[2] = {11, 21};
+
+    graph.postAdd(kDrone, NodeType::Drone);
+    graph.postAdd(kEdge, NodeType::PolyIn);
+    graph.postAdd(kSum, NodeType::PolySum);
+    graph.postAdd(kOut, NodeType::Out);
+    graph.postSetParam(kEdge, 0, 2.0f); // two voices
+    graph.postConnect(kDrone, 0, kEdge, 0);
+    for (int k = 0; k < 2; ++k) {
+        graph.postAdd(osc[k], NodeType::Osc);
+        graph.postAdd(amp[k], NodeType::Amp);
+        graph.postConnect(kEdge, k, osc[k], 0);
+        graph.postConnect(osc[k], 0, amp[k], 0);
+        graph.postConnect(amp[k], 0, kSum, k);
+    }
+    graph.postConnect(kSum, 0, kOut, 0);
+    graph.postSetParam(kOut, 0, 0.2f); // below the limiter, so two voices measure as two
+    graph.applyCommands();
+
+    graph.postSetStep(kDrone, 0, 0, true); // one note held
+    graph.applyCommands();
+    render(graph, 40);
+    const auto one = render(graph, 128);
+    const float withOne = energy(one.data(), static_cast<int32_t>(one.size()));
+    check(withOne > 0.0f, "one note reaches the output through the sum");
+
+    graph.postSetStep(kDrone, 1, 7, true); // a fifth above it, on a second cell
+    graph.applyCommands();
+    render(graph, 40);
+    const auto two = render(graph, 128);
+    const float withTwo = energy(two.data(), static_cast<int32_t>(two.size()));
+    // A quarter more, not twice: energy() here is the mean absolute value, and two tones
+    // at unrelated frequencies add to about the root of two rather than to two. What the
+    // margin has to exclude is the second note stealing the first's instance, which would
+    // leave this unchanged.
+    check(withTwo > 1.25f * withOne,
+          "and a second note takes the other instance rather than stealing the first, " +
+                  std::to_string(withTwo) + " against " + std::to_string(withOne));
+
+    // Ending the first note leaves the second sounding: the edge sent each Off to the
+    // instance holding that note, which is the whole of what it is for.
+    graph.postSetStep(kDrone, 0, 0, false);
+    graph.applyCommands();
+    render(graph, 200);
+    const auto rest = render(graph, 128);
+    const float left = energy(rest.data(), static_cast<int32_t>(rest.size()));
+    check(left > 0.5f * withOne && left < 1.5f * withOne, "one off leaves one note sounding");
+}
+
 void aModulatorDrivesAParameterAcrossItsRange() {
     std::printf("a modulator drives a parameter across its range\n");
     ModPatch m;
@@ -1348,6 +1422,7 @@ int main() {
     twoSequencersMergeIntoOneVoice();
     anIdIsOnlyUniqueToItsOwnSource();
     anUnpatchedAmpIsOpenAndPatchingOneFades();
+    aFlattenedPolySubpatchSoundsTwoNotesAtOnce();
     aModulatorDrivesAParameterAcrossItsRange();
     anExponentialRangeSweepsGeometrically();
     aKnobMovedUnderAModulatorWaitsForItToLetGo();

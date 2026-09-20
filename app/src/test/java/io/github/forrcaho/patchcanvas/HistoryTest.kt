@@ -153,8 +153,8 @@ class ReplaceWithTest {
 
         live.replaceWith(patchFromJson(snapshot)!!)
 
-        assertEquals(2, live.pinned.size)
-        assertNull(live.pinned.firstOrNull { it.id != OUT_ID && it.id != IN_ID })
+        assertEquals(2, live.pinned.count { it.parent == TOP })
+        assertNull(live.pinned.firstOrNull { it.parent == TOP && it.id != OUT_ID && it.id != IN_ID })
         assertEquals(before.module(OUT_ID)!!.params[0], live.module(OUT_ID)!!.params[0], 0.001f)
     }
 

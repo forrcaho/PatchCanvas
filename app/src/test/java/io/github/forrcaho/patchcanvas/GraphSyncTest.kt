@@ -106,6 +106,53 @@ class GraphSyncTest {
     }
 
     /**
+     * The one subpatch that is *not* silent to the engine, which is the whole of what makes
+     * it different.
+     *
+     * A plain subpatch promises the sound does not change; a poly one changes it on purpose,
+     * from one oscillator to four, and that has to arrive as nodes and cables. Asserted the
+     * other way round from the test above, because "this sends something" is the claim and a
+     * feature that quietly sent nothing would look exactly like the invariant holding.
+     */
+    @Test
+    fun `making a poly subpatch of a playing patch sends the engine copies`() {
+        val patch = Patch()
+        val seq = patch.add(Types.Seq, Offset.Zero)!!
+        val osc = patch.add(Types.Osc, Offset.Zero)!!
+        patch.connect(PortRef(seq.id, PortDirection.OUTPUT, 0), PortRef(osc.id, PortDirection.INPUT, 0))
+        patch.connect(PortRef(osc.id, PortDirection.OUTPUT, 0), PortRef(OUT_ID, PortDirection.INPUT, 0))
+        sync.sync(patch)
+        rec.clear()
+
+        val poly = patch.makeSubpatch(setOf(osc.id), Types.Poly)!!
+        poly.setParam(0, 3f)
+        sync.sync(patch)
+
+        val added = rec.log.filterIsInstance<Cmd.Add>()
+        assertEquals("two more oscillators, a note edge and a sum", 4, added.size)
+        assertEquals("two more oscillators", 2, added.count { it.type == NodeType.Osc })
+        assertEquals(1, added.count { it.type == NodeType.PolyIn })
+        assertEquals(1, added.count { it.type == NodeType.PolySum })
+        assertTrue(
+            "the oscillator already playing is instance 0, and is not remade",
+            added.none { it.id == osc.id },
+        )
+        assertTrue(
+            "its voices knob reaches the note edge",
+            Cmd.SetParam(poly.id, 0, 3f) in rec.log,
+        )
+
+        rec.clear()
+        patch.unpack(poly)
+        sync.sync(patch)
+        assertEquals(
+            "unpacking takes the copies and both edges away again",
+            4,
+            rec.log.filterIsInstance<Cmd.Remove>().size,
+        )
+    }
+
+    /**
      * Promoting a knob is the same promise as subpatching: it moves where a control is reached
      * from, not what it is. The engine holds the module inside either way, and a command
      * here would be a knob written twice or, worse, a node rebuilt under a playing patch.
@@ -157,8 +204,11 @@ class GraphSyncTest {
 
         val adds = rec.log.filterIsInstance<Cmd.Add>()
         val connects = rec.log.filterIsInstance<Cmd.Connect>()
-        assertEquals(patch.modules.size, adds.size)
-        assertEquals(patch.connections.size, connects.size)
+        // Against the flattened graph, not the module list: the demo's poly subpatch is
+        // three modules on screen and four copies of them plus two edges underneath.
+        val graph = patch.engineGraph()
+        assertEquals(graph.nodes.size, adds.size)
+        assertEquals(graph.cables.size, connects.size)
         // the rails are ordinary nodes to the engine
         assertTrue(adds.any { it.id == OUT_ID && it.type == NodeType.Out })
         assertTrue(adds.any { it.id == IN_ID && it.type == NodeType.In })

@@ -420,10 +420,16 @@ data class ModuleType(
     val grid: GridKind = GridKind.NONE,
     /**
      * Part of how a patch is organized rather than something that sounds: a subpatch and the
-     * two rails inside it. Never a node in the engine, which only ever sees the patch
-     * flattened -- see [Patch.engineConnections].
+     * two rails inside it. What the engine gets is the patch flattened -- see
+     * [Patch.engineGraph] -- so none of these is ever a node under its own name.
      */
     val structural: Boolean = false,
+    /**
+     * A subpatch's box, of either kind. Structural, but unlike the rails it is a box on the
+     * canvas with ports of its own and something inside it, which is what nearly every
+     * "is this a subpatch?" in the model actually means.
+     */
+    val box: Boolean = false,
 ) {
     /** Indices of the parameters drawn as rows of the panel; the rest live in its header. */
     val rowParams: List<Int> get() = params.indices.filter { !params[it].header }
@@ -761,7 +767,32 @@ object Types {
      * rails.
      */
     val Subpatch = ModuleType(
-        "Subpatch", emptyList(), emptyList(), Color(0xFFB9C2CE), structural = true,
+        "Subpatch", emptyList(), emptyList(), Color(0xFFB9C2CE), structural = true, box = true,
+    )
+
+    /**
+     * A subpatch that is monophonic inside and polyphonic from outside.
+     *
+     * One of everything in there, and the engine is given [voices] copies of the lot. Notes
+     * arriving at its note input are shared out one per instance, exactly as a synth shares
+     * them among its own voices; every other input is broadcast to all of them, and their
+     * outputs are summed back into one.
+     *
+     * This is the answer to the thing that started the redesign. Polyphony used to live
+     * inside each synth, so every voice of an Osc shared one envelope and nothing could be
+     * patched per note -- an Env on FM's modulation index was not expressible. Here the
+     * envelope is an ordinary Env module inside an ordinary subpatch, and it is per note
+     * because the whole subpatch is.
+     *
+     * A poly subpatch may not contain another. Instances would multiply, the id space that
+     * stamps out the copies is one level deep on purpose, and nothing yet says what an
+     * inner poly's stealing would mean against an outer one's.
+     */
+    val Poly = ModuleType(
+        "Poly", emptyList(), emptyList(), Color(0xFF9FB4A8), structural = true, box = true,
+        // Its one knob, and the only knob any subpatch has of its own. Not exposable: see
+        // PatchModule.canExpose -- a modulator that adds and removes nodes is not a knob.
+        params = listOf(Param("voices", 1f, MAX_PORTS.toFloat(), 4f, "", STEP, short = "vce")),
     )
 
     /**
@@ -771,6 +802,21 @@ object Types {
     val SubpatchIn = ModuleType(
         "Subpatch in", emptyList(), emptyList(), Color(0xFFB9C2CE), pinned = Edge.LEFT, structural = true,
     )
+
+    /**
+     * What the rails are called inside a poly subpatch, and drawn as a stack.
+     *
+     * The same two types either way -- a rail's type is in the file, and its ports, drawing
+     * and hit testing are the boundary's whatever kind of box it belongs to. Only the name
+     * changes, and it changes because what you are looking at inside a poly subpatch is one
+     * instance of several: "Instance in" says the notes arriving here are this copy's share
+     * rather than everything the box was sent.
+     */
+    fun railName(box: ModuleType, rail: ModuleType): String = when {
+        box != Poly -> rail.name
+        rail == SubpatchIn -> "Instance in"
+        else -> "Instance out"
+    }
 
     /** Inside a subpatch, the right rail: each of the subpatch's outputs, as a sink for what is inside. */
     val SubpatchOut = ModuleType(
@@ -782,6 +828,9 @@ object Types {
      * the Add menu on 2026-09-19, and a patch that has one still loads and plays it -- retiring
      * it outright would have meant refusing every patch and saved subpatch made with it.
      */
+    /** The two box types, by the name a file calls them. Not in [byName]: neither sounds. */
+    val boxes: Map<String, ModuleType> = listOf(Subpatch, Poly).associateBy { it.name }
+
     val byName: Map<String, ModuleType> =
         (palette + listOf(Steps, Out, In)).associateBy { it.name } +
             // The name Seq had for its first night. Not a conversion: the same module, renamed.
@@ -940,7 +989,12 @@ class PatchModule(
      */
     var modRanges by mutableStateOf(emptyMap<Int, ModRange>())
 
-    fun canExpose(index: Int): Boolean = !isPinned && index in type.rowParams
+    /**
+     * A knob may take a modulation jack unless it is a rail's or a box's. A Poly's voices
+     * knob adds and removes nodes, which is not something a modulator can be allowed to do
+     * once a block.
+     */
+    fun canExpose(index: Int): Boolean = !isPinned && !type.structural && index in type.rowParams
 
     /**
      * The degree shown on the grid's top row.
@@ -1984,10 +2038,56 @@ internal fun panelKnobPosition(bar: Rect, screenX: Float): Float =
 
 data class PortRef(val moduleId: Long, val dir: PortDirection, val index: Int)
 
+/**
+ * How a poly subpatch's copies are numbered, and the one place the engine's ids are not the
+ * patch's.
+ *
+ * Instance 0 *is* the module's own id, so everything that asks the engine about a module by
+ * id -- where a sequencer has got to, where a modulated knob is -- reads the first instance
+ * without knowing there are others. Later instances carry their number in bits 48 and up,
+ * where a patch's ids never reach: ids are handed out one at a time from 100 and a patch
+ * would have to have had 2^48 modules in it to collide.
+ */
+internal const val INSTANCE_SHIFT = 48
+
+internal fun cloneId(id: Long, instance: Int): Long =
+    if (instance == 0) id else id or (instance.toLong() shl INSTANCE_SHIFT)
+
+/**
+ * The node that adds instance outputs [port] back into one signal, for poly subpatch [poly].
+ *
+ * Above the instance numbers, which stop at [MAX_PORTS], so a summing node can never be
+ * mistaken for a copy of something.
+ */
+internal fun sumId(poly: Long, port: Int): Long = poly or ((0x80L + port) shl INSTANCE_SHIFT)
+
+/** One node the engine runs, and where its knobs, sequence and ranges come from. */
+class EngineNode(
+    val id: Long,
+    val type: NodeType,
+    /** The module it is a copy of, or null for a poly subpatch's summing node. */
+    val module: PatchModule?,
+)
+
+/** The patch as the engine holds it. See [Patch.engineGraph]. */
+class EngineGraph(
+    val nodes: List<EngineNode>,
+    val cables: Set<Connection>,
+    /**
+     * Destinations that merge their sources rather than replacing them.
+     *
+     * Carried rather than worked out again from the patch, because half of these are ports
+     * on nodes the patch has no module for -- a poly subpatch's note edge is not a module,
+     * and asking the patch what kind of port it has would find nothing.
+     */
+    val noteInputs: Set<PortRef>,
+)
+
 data class Connection(val from: PortRef, val to: PortRef)
 
 /** A default subpatch name, which is what a new subpatch is numbered against. */
-private val SUBPATCH_NUMBER = Regex("""Subpatch (\d+)""")
+/** "Subpatch 3", "Poly 1": a box's default name, for reading the number back out of it. */
+private fun boxNumber(type: ModuleType) = Regex("""${Regex.escape(type.name)} (\d+)""")
 
 /** How long a name may be, in characters: enough to be a label, short enough to fit a box. */
 internal const val MAX_NAME = 16
@@ -2117,7 +2217,7 @@ class Patch {
 
     /** [scope], or [TOP] if the subpatch it names has gone -- undone, deleted or unpacked. */
     val scopeOrTop: Long
-        get() = scope.takeIf { it == TOP || module(it)?.type == Types.Subpatch } ?: TOP
+        get() = scope.takeIf { it == TOP || module(it)?.type?.box == true } ?: TOP
 
     /** The modules and rails on screen in [scopeOrTop]. */
     val shownFree: List<PatchModule> get() = scopeOrTop.let { at -> modules.filter { !it.isPinned && it.parent == at } }
@@ -2128,11 +2228,38 @@ class Patch {
 
     /** Pinned types are never added; the rails exist for the life of the patch. */
     fun add(type: ModuleType, at: Offset): PatchModule? {
+        if (type.box) return addBox(type, at)
         if (type.pinned != null || type.structural) return null
         return PatchModule(nextId++, type, at).also {
             it.parent = scopeOrTop
             modules.add(it)
         }
+    }
+
+    /**
+     * An empty subpatch of either kind, with its two rails, where nothing is selected.
+     *
+     * The other way round from collapsing a selection, and the one that makes a subpatch the
+     * thing you reach for first: drop the box, go inside, build there. It starts with no
+     * ports at all and gains them the way any subpatch does after the fact -- by patching to
+     * a rail's edge.
+     */
+    fun addBox(type: ModuleType, at: Offset): PatchModule? {
+        if (!type.box) return null
+        if (type == Types.Poly && insidePoly(scopeOrTop)) return null
+        val ports = SubpatchPorts()
+        val box = PatchModule(nextId++, type, at, ports).also {
+            it.parent = scopeOrTop
+            it.name = nextBoxName(type)
+        }
+        val railIn = PatchModule(nextId++, Types.SubpatchIn, Offset.Zero, ports).also { it.parent = box.id }
+        val railOut = PatchModule(nextId++, Types.SubpatchOut, Offset.Zero, ports).also { it.parent = box.id }
+        Snapshot.withMutableSnapshot {
+            modules.add(box)
+            modules.add(railIn)
+            modules.add(railOut)
+        }
+        return box
     }
 
     /**
@@ -2174,6 +2301,31 @@ class Patch {
         return found
     }
 
+    /**
+     * The poly subpatch [id] is inside, at any depth, or null for one that is in none.
+     *
+     * At most one can be found, because a poly subpatch may not contain another -- see
+     * [Types.Poly]. That is what lets an instance be a single number everywhere below.
+     */
+    fun polyOf(id: Long): PatchModule? {
+        var at = module(id)?.parent ?: TOP
+        var depth = 0
+        while (at != TOP && depth++ < 64) {
+            val box = module(at) ?: return null
+            if (box.type == Types.Poly) return box
+            at = box.parent
+        }
+        return null
+    }
+
+    /** How many copies of its contents a poly subpatch is worth. Its one knob. */
+    fun voicesOf(poly: PatchModule): Int =
+        poly.params.getOrElse(0) { 4f }.roundToInt().coerceIn(1, MAX_PORTS)
+
+    /** Whether [scope] is a poly subpatch or sits inside one. */
+    fun insidePoly(scope: Long): Boolean =
+        scope != TOP && (module(scope)?.type == Types.Poly || polyOf(scope) != null)
+
     /** A subpatch's left rail or right rail. */
     fun subpatchRail(subpatch: Long, type: ModuleType): PatchModule? =
         modules.firstOrNull { it.parent == subpatch && it.type == type }
@@ -2188,12 +2340,12 @@ class Patch {
      * why subpatching's promise holds here too: promoting changes no sound.
      */
     fun promote(module: PatchModule, index: Int): Boolean {
-        val subpatch = module(scopeOrTop)?.takeIf { it.type == Types.Subpatch } ?: return false
+        val subpatch = module(scopeOrTop)?.takeIf { it.type.box } ?: return false
         if (module.parent != subpatch.id || module.isPinned) return false
         if (index !in module.type.rowParams) return false
         val ports = subpatch.subpatchPorts ?: return false
         val ref = ParamRef(module.id, index)
-        if (ref in ports.promoted || ports.promoted.size >= MAX_PROMOTED) return false
+        if (ref in ports.promoted || ports.promoted.size >= roomToPromote(subpatch)) return false
         ports.promoted.add(ref)
         return true
     }
@@ -2210,11 +2362,11 @@ class Patch {
      * promotion is possible rather than offering it everywhere and refusing most taps.
      */
     fun canPromote(module: PatchModule, index: Int): Boolean {
-        val subpatch = module(scopeOrTop)?.takeIf { it.type == Types.Subpatch } ?: return false
+        val subpatch = module(scopeOrTop)?.takeIf { it.type.box } ?: return false
         if (module.parent != subpatch.id || module.isPinned) return false
         if (index !in module.type.rowParams) return false
         val ports = subpatch.subpatchPorts ?: return false
-        return ParamRef(module.id, index) in ports.promoted || ports.promoted.size < MAX_PROMOTED
+        return ParamRef(module.id, index) in ports.promoted || ports.promoted.size < roomToPromote(subpatch)
     }
 
     /** Whether this knob is already out at the edge of the subpatch being looked at. */
@@ -2229,14 +2381,26 @@ class Patch {
      * reference to a module that has since gone is dropped rather than drawn empty.
      */
     fun panelRows(module: PatchModule): List<ParamRow> =
-        if (module.type == Types.Subpatch) {
-            module.subpatchPorts?.promoted.orEmpty().mapNotNull { ref ->
-                module(ref.moduleId)?.takeIf { ref.index in it.type.params.indices }
-                    ?.let { ParamRow(it, ref.index) }
-            }
+        if (module.type.box) {
+            // A Poly's own voices knob comes first, then the promoted ones. It is the only
+            // knob a box has of its own, and it belongs at the top of the panel it opens
+            // rather than behind a second gesture.
+            module.type.rowParams.map { ParamRow(module, it) } +
+                module.subpatchPorts?.promoted.orEmpty().mapNotNull { ref ->
+                    module(ref.moduleId)?.takeIf { ref.index in it.type.params.indices }
+                        ?.let { ParamRow(it, ref.index) }
+                }
         } else {
             module.type.rowParams.map { ParamRow(module, it) }
         }
+
+    /**
+     * How many knobs may be promoted to [box]'s edge.
+     *
+     * One fewer on a Poly, whose voices knob takes a row of the same panel. The limit is
+     * what a panel lays out at a finger's height, so it counts rows and not promotions.
+     */
+    private fun roomToPromote(box: PatchModule): Int = MAX_PROMOTED - box.type.rowParams.size
 
     /**
      * "Subpatch 1", "Subpatch 2", ... -- one past the highest number in use.
@@ -2246,16 +2410,17 @@ class Patch {
      * would be a worse answer than a gap in the numbering. A renamed subpatch simply drops
      * out of the count, and the number it held can come round again.
      */
-    internal fun nextSubpatchName(): String {
+    internal fun nextBoxName(type: ModuleType): String {
+        val numbered = boxNumber(type)
         val taken = modules.mapNotNull { m ->
-            SUBPATCH_NUMBER.matchEntire(m.name.orEmpty())?.groupValues?.get(1)?.toIntOrNull()
+            numbered.matchEntire(m.name.orEmpty())?.groupValues?.get(1)?.toIntOrNull()
         }
-        return "Subpatch ${(taken.maxOrNull() ?: 0) + 1}"
+        return "${type.name} ${(taken.maxOrNull() ?: 0) + 1}"
     }
 
     fun duplicate(module: PatchModule): PatchModule? = when {
         module.isPinned -> null
-        module.type == Types.Subpatch -> duplicateSubpatch(module)
+        module.type.box -> duplicateSubpatch(module)
         else -> add(module.type, module.position + Offset(28f, 28f))?.also {
             it.parent = module.parent
             it.name = module.name
@@ -2269,10 +2434,10 @@ class Patch {
      * and exposed parameters, and every cable between them -- the rails' wiring included.
      * Cables to the outside are not copied, as duplicating a single module copies none.
      */
-    private fun duplicateSubpatch(subpatch: PatchModule): PatchModule =
+    private fun duplicateSubpatch(subpatch: PatchModule): PatchModule? =
         // The copy is a new subpatch and takes the next free number; the subpatches nested inside
         // it keep their names, since those are only ever read from within it.
-        adoptSubpatch(this, subpatch, subpatch.position + Offset(28f, 28f), subpatch.parent, nextSubpatchName())
+        adoptSubpatch(this, subpatch, subpatch.position + Offset(28f, 28f), subpatch.parent, nextBoxName(subpatch.type))
 
     /**
      * Copies [makeSubpatch] and everything inside it out of [source] and into this patch, under
@@ -2290,16 +2455,20 @@ class Patch {
         at: Offset,
         parent: Long,
         name: String? = subpatch.name,
-    ): PatchModule {
+    ): PatchModule? {
         val inside = source.descendants(subpatch.id)
+        // A poly subpatch may not contain another, so a copy that would nest one is
+        // refused rather than half made. Duplicating and loading both come through here.
+        val carries = (inside + subpatch.id).any { source.module(it)?.type == Types.Poly }
+        if (carries && (parent != TOP && insidePoly(parent))) return null
         // A snapshot before anything is added, since source may be this patch.
         val originals = source.modules.filter { it.id == subpatch.id || it.id in inside }.toList()
         val newId = originals.associate { it.id to nextId++ }
-        val sharedCopies = originals.filter { it.type == Types.Subpatch }
+        val sharedCopies = originals.filter { it.type.box }
             .associate { it.id to (it.subpatchPorts ?: SubpatchPorts()).copy() }
         originals.forEach { from ->
             val ports = when (from.type) {
-                Types.Subpatch -> sharedCopies.getValue(from.id)
+                Types.Subpatch, Types.Poly -> sharedCopies.getValue(from.id)
                 Types.SubpatchIn, Types.SubpatchOut -> sharedCopies[from.parent]
                 else -> null
             }
@@ -2345,18 +2514,26 @@ class Patch {
      * per outside source, feeding every module inside it used to reach; a cable going out
      * becomes an output port, one per inside source, feeding everything outside it did.
      */
-    fun makeSubpatch(ids: Set<Long>): PatchModule? {
+    fun makeSubpatch(ids: Set<Long>, type: ModuleType = Types.Subpatch): PatchModule? {
+        if (!type.box) return null
         val chosen = modules.filter { it.id in ids }
         if (chosen.isEmpty() || chosen.size != ids.size || chosen.any { it.isPinned }) return null
         val at = chosen.first().parent
         if (chosen.any { it.parent != at }) return null
+        // A poly subpatch may not contain another, from either direction: not around a
+        // selection that already has one in it, and not inside one.
+        if (type == Types.Poly) {
+            if (insidePoly(at)) return null
+            val within = ids + ids.flatMap { descendants(it) }
+            if (within.any { module(it)?.type == Types.Poly }) return null
+        }
 
         val ports = SubpatchPorts()
         val subpatch = PatchModule(
-            nextId++, Types.Subpatch,
+            nextId++, type,
             Offset(chosen.minOf { it.position.x }, chosen.minOf { it.position.y }),
             ports,
-        ).also { it.parent = at; it.name = nextSubpatchName() }
+        ).also { it.parent = at; it.name = nextBoxName(it.type) }
         val railIn = PatchModule(nextId++, Types.SubpatchIn, Offset.Zero, ports).also { it.parent = subpatch.id }
         val railOut = PatchModule(nextId++, Types.SubpatchOut, Offset.Zero, ports).also { it.parent = subpatch.id }
 
@@ -2398,7 +2575,7 @@ class Patch {
      * gives back the same cables.
      */
     fun unpack(subpatch: PatchModule) {
-        if (subpatch.type != Types.Subpatch) return
+        if (!subpatch.type.box) return
         val railIn = subpatchRail(subpatch.id, Types.SubpatchIn)
         val railOut = subpatchRail(subpatch.id, Types.SubpatchOut)
         val through = mutableListOf<Connection>()
@@ -2501,7 +2678,7 @@ class Patch {
      * kind of thing this project refuses to draw.
      */
     private fun dropOrphanedSubpatchPorts(subpatchId: Long, candidates: List<Pair<PortDirection, Int>>) {
-        val subpatch = module(subpatchId)?.takeIf { it.type == Types.Subpatch } ?: return
+        val subpatch = module(subpatchId)?.takeIf { it.type.box } ?: return
         // Highest index first: removing a port renumbers the ones after it.
         candidates.sortedByDescending { it.second }.forEach { (dir, index) ->
             val rail = subpatchRail(subpatchId, if (dir == PortDirection.INPUT) Types.SubpatchIn else Types.SubpatchOut)
@@ -2529,7 +2706,7 @@ class Patch {
      * then patched, and a sweep between those two would take it away again.
      */
     fun sweepUnusedSubpatchPorts() {
-        modules.filter { it.type == Types.Subpatch }.forEach { subpatch ->
+        modules.filter { it.type.box }.forEach { subpatch ->
             val ports = subpatch.subpatchPorts ?: return@forEach
             forEachSubpatchRail(subpatch.id) { dir, rail, railDir ->
                 val list = if (dir == PortDirection.INPUT) ports.inputs else ports.outputs
@@ -2559,7 +2736,7 @@ class Patch {
     }
 
     fun addSubpatchPort(subpatchId: Long, inside: PortRef): Boolean {
-        val subpatch = module(subpatchId)?.takeIf { it.type == Types.Subpatch } ?: return false
+        val subpatch = module(subpatchId)?.takeIf { it.type.box } ?: return false
         val ports = subpatch.subpatchPorts ?: return false
         val owner = module(inside.moduleId) ?: return false
         if (owner.parent != subpatchId || owner.isPinned) return false
@@ -2579,44 +2756,145 @@ class Patch {
         }
     }
 
-    /** What the engine runs: every module that makes or shapes sound, at any depth. */
+    /** What the engine runs at the top level: every module that makes or shapes sound. */
     val engineModules: List<PatchModule> get() = modules.filter { !it.type.structural }
 
     /**
-     * Every cable the engine should have, with subpatches flattened away: each one runs from a
-     * real output to a real input, following any chain of subpatch ports in between.
+     * Every cable the engine should have, with subpatches flattened away.
      *
-     * The engine never learns that subpatches exist. That is the whole of the design -- a
-     * subpatch is how a patch is shown and organized, and the sound is the same flat graph
-     * whether the modules are loose or nested three deep.
+     * [engineGraph]'s cables, which is the whole of it: for a patch with no poly subpatch in
+     * it every module is its own node, so this is the same set it always was.
      */
-    fun engineConnections(): Set<Connection> {
+    fun engineConnections(): Set<Connection> = engineGraph().cables
+
+    /**
+     * The patch as the engine will actually hold it: a flat list of nodes and the cables
+     * between them, with every subpatch resolved away.
+     *
+     * A plain subpatch resolves to nothing -- a cable through its ports arrives as the one
+     * cable it stands for, which is why subpatching a playing patch sends the engine nothing.
+     * A poly subpatch resolves to *copies*: [Patch.voicesOf] of everything inside it, plus a
+     * PolyIn that shares the notes out and a PolySum per signal output that adds them back
+     * up. The engine learns nothing about either; it is handed a flat graph, as it always
+     * has been.
+     *
+     * Instance 0 keeps the module's own id, which is not a detail. Telemetry -- where a
+     * sequencer has got to, where a modulated knob is -- is asked for by module id, and the
+     * panel and the canvas both ask. Numbering from the original means every one of those
+     * reads the first instance without knowing instances exist.
+     */
+    fun engineGraph(): EngineGraph {
         val byId = modules.associateBy { it.id }
         val into = connections.groupBy { it.to }
-        fun sources(ref: PortRef, depth: Int): List<PortRef> {
+        val polys = modules.filter { it.type == Types.Poly }
+        val railOut = modules.filter { it.type == Types.SubpatchOut }.associateBy { it.parent }
+
+        /** The one note input a poly shares out. Every other input is broadcast whole. */
+        fun shared(poly: PatchModule): Int =
+            poly.ports(PortDirection.INPUT).indexOfFirst { it.kind == SignalKind.NOTE }
+
+        /**
+         * Every engine output feeding [ref], for instance [k] of whatever poly subpatch the
+         * thing reading it is inside.
+         */
+        fun sources(ref: PortRef, k: Int, depth: Int): List<PortRef> {
             if (depth > 64) return emptyList() // only a corrupt file could nest this deep
             val module = byId[ref.moduleId] ?: return emptyList()
             return when (module.type) {
                 // A subpatch's input, seen from inside: whatever feeds the box's input.
-                Types.SubpatchIn -> into[PortRef(module.parent, PortDirection.INPUT, ref.index)].orEmpty()
-                    .flatMap { sources(it.from, depth + 1) }
+                Types.SubpatchIn -> {
+                    val box = byId[module.parent] ?: return emptyList()
+                    if (box.type == Types.Poly && ref.index == shared(box)) {
+                        // Crossing out of a poly by its note input is the one edge that is
+                        // a node: this instance's share of the notes, and nobody else's.
+                        listOf(PortRef(box.id, PortDirection.OUTPUT, k))
+                    } else {
+                        // Everything else crosses whole, and lands on every instance. The
+                        // instance number is this poly's, so outside it there is none.
+                        val outer = if (box.type == Types.Poly) 0 else k
+                        into[PortRef(box.id, PortDirection.INPUT, ref.index)].orEmpty()
+                            .flatMap { sources(it.from, outer, depth + 1) }
+                    }
+                }
                 // A subpatch's output, seen from outside: whatever feeds its right rail.
                 Types.Subpatch -> {
-                    val railOut = modules.firstOrNull { it.parent == module.id && it.type == Types.SubpatchOut }
-                        ?: return emptyList()
-                    into[PortRef(railOut.id, PortDirection.INPUT, ref.index)].orEmpty()
-                        .flatMap { sources(it.from, depth + 1) }
+                    val rail = railOut[module.id] ?: return emptyList()
+                    into[PortRef(rail.id, PortDirection.INPUT, ref.index)].orEmpty()
+                        .flatMap { sources(it.from, k, depth + 1) }
                 }
-                else -> if (module.type.structural) emptyList() else listOf(ref)
+                Types.Poly -> {
+                    val rail = railOut[module.id] ?: return emptyList()
+                    val inside = into[PortRef(rail.id, PortDirection.INPUT, ref.index)].orEmpty()
+                    if (module.ports(PortDirection.OUTPUT).getOrNull(ref.index)?.kind == SignalKind.NOTE) {
+                        // Notes merge at the destination rather than through a summing node,
+                        // because merging event streams is what a note input already does --
+                        // and each instance's events stay themselves, tagged by their slot.
+                        (0 until voicesOf(module)).flatMap { j ->
+                            inside.flatMap { sources(it.from, j, depth + 1) }
+                        }
+                    } else {
+                        listOf(PortRef(sumId(module.id, ref.index), PortDirection.OUTPUT, 0))
+                    }
+                }
+                else -> if (module.type.structural) emptyList()
+                else listOf(ref.copy(moduleId = cloneId(module.id, k)))
             }
         }
-        val flat = mutableSetOf<Connection>()
+
+        val nodes = mutableListOf<EngineNode>()
+        modules.forEach { m ->
+            if (m.type.structural) return@forEach
+            val copies = polyOf(m.id)?.let { voicesOf(it) } ?: 1
+            for (k in 0 until copies) nodes += EngineNode(cloneId(m.id, k), NodeType.of(m.type), m)
+        }
+        polys.forEach { poly ->
+            // The note edge takes the poly's own id, so its voices knob reaches it as any
+            // module's knob reaches its node. Only where there is a note port to share out:
+            // a poly subpatch with no notes coming in is N copies running in lockstep, which
+            // is a strange thing to build but not a reason to add a node that does nothing.
+            if (shared(poly) >= 0) nodes += EngineNode(poly.id, NodeType.PolyIn, poly)
+            poly.ports(PortDirection.OUTPUT).forEachIndexed { i, port ->
+                if (port.kind != SignalKind.NOTE) {
+                    nodes += EngineNode(sumId(poly.id, i), NodeType.PolySum, null)
+                }
+            }
+        }
+
+        val cables = mutableSetOf<Connection>()
+        val noteInputs = mutableSetOf<PortRef>()
         connections.forEach { cable ->
             val sink = byId[cable.to.moduleId] ?: return@forEach
             if (sink.type.structural) return@forEach
-            sources(cable.from, 0).forEach { flat += Connection(it, cable.to) }
+            val notes = kindOf(cable.to) == SignalKind.NOTE
+            val copies = polyOf(sink.id)?.let { voicesOf(it) } ?: 1
+            for (k in 0 until copies) {
+                val dest = cable.to.copy(moduleId = cloneId(sink.id, k))
+                if (notes) noteInputs += dest
+                sources(cable.from, k, 0).forEach { cables += Connection(it, dest) }
+            }
         }
-        return flat
+        polys.forEach { poly ->
+            val note = shared(poly)
+            if (note >= 0) {
+                val dest = PortRef(poly.id, PortDirection.INPUT, 0)
+                noteInputs += dest
+                into[PortRef(poly.id, PortDirection.INPUT, note)].orEmpty().forEach { cable ->
+                    sources(cable.from, 0, 0).forEach { cables += Connection(it, dest) }
+                }
+            }
+            val rail = railOut[poly.id]
+            poly.ports(PortDirection.OUTPUT).forEachIndexed { i, port ->
+                if (port.kind == SignalKind.NOTE || rail == null) return@forEachIndexed
+                val inside = into[PortRef(rail.id, PortDirection.INPUT, i)].orEmpty()
+                for (k in 0 until voicesOf(poly)) {
+                    val dest = PortRef(sumId(poly.id, i), PortDirection.INPUT, k)
+                    inside.forEach { cable ->
+                        sources(cable.from, k, 0).forEach { cables += Connection(it, dest) }
+                    }
+                }
+            }
+        }
+        return EngineGraph(nodes, cables, noteInputs)
     }
 
     /**
@@ -2723,7 +3001,7 @@ sealed interface Interaction {
      * canvas has is already spoken for -- and a lasso would be one more outcome for the
      * gesture loop to tell apart on the first move.
      */
-    data class Selecting(val ids: Set<Long>) : Interaction
+    data class Selecting(val ids: Set<Long>, val type: ModuleType = Types.Subpatch) : Interaction
 
     /**
      * A module is being named, with the system keyboard up.
@@ -2763,7 +3041,8 @@ sealed interface MenuItem {
     data class Add(val type: ModuleType) : MenuItem
     data class Duplicate(val moduleId: Long) : MenuItem
     data class Delete(val moduleId: Long) : MenuItem
-    data object StartSubpatch : MenuItem
+    /** Starts choosing modules to collapse, into a subpatch of [type]. */
+    data class StartSubpatch(val type: ModuleType) : MenuItem
     data class Unpack(val moduleId: Long) : MenuItem
     data class Rename(val moduleId: Long) : MenuItem
 
@@ -2799,7 +3078,7 @@ sealed interface MenuItem {
 internal fun Patch.subpatchPortAt(ref: PortRef): Triple<PatchModule, PortDirection, Int>? {
     val module = module(ref.moduleId) ?: return null
     return when {
-        module.type == Types.Subpatch && ref.dir != PortDirection.MOD ->
+        module.type.box && ref.dir != PortDirection.MOD ->
             Triple(module, ref.dir, ref.index)
         module.type == Types.SubpatchIn && ref.dir == PortDirection.OUTPUT ->
             module(module.parent)?.let { Triple(it, PortDirection.INPUT, ref.index) }
@@ -2822,7 +3101,16 @@ private fun menuItems(
         ?.let { (subpatch, dir, index) -> listOf(MenuItem.RemovePort(subpatch.id, dir, index)) }
         .orEmpty()
     targetId == null -> Types.palette.map { MenuItem.Add(it) } +
-        MenuItem.StartSubpatch + MenuItem.OpenLibrary +
+        // The boxes come first among what the menu offers after the modules: an empty one
+        // you go inside, then the same thing made out of what is already on the canvas.
+        // Both kinds of each, except that a poly subpatch cannot be made inside one.
+        listOfNotNull(
+            MenuItem.Add(Types.Subpatch),
+            MenuItem.Add(Types.Poly).takeIf { !patch.insidePoly(patch.scopeOrTop) },
+            MenuItem.StartSubpatch(Types.Subpatch),
+            MenuItem.StartSubpatch(Types.Poly).takeIf { !patch.insidePoly(patch.scopeOrTop) },
+        ) +
+        MenuItem.OpenLibrary +
         // Saving the patch belongs here rather than on a module: it is about all of them,
         // and the empty canvas is the only thing that stands for the patch as a whole.
         listOfNotNull(
@@ -2830,7 +3118,7 @@ private fun menuItems(
             // Next to Save, and only when there is something to clear.
             MenuItem.NewPatch.takeIf { patch.free.isNotEmpty() },
         )
-    patch.module(targetId)?.type == Types.Subpatch -> listOfNotNull(
+    patch.module(targetId)?.type?.box == true -> listOfNotNull(
         MenuItem.Duplicate(targetId),
         // Only when it has any: an empty panel would be a door onto nothing, and the way
         // to put knobs there is inside the subpatch, where the chip is.
@@ -4124,6 +4412,7 @@ fun PatchCanvas(
                         showTitle = camera.zoom >= Camera.TITLE_ZOOM,
                         showLabels = camera.zoom >= Camera.LABEL_ZOOM,
                         alpha = 1f,
+                        stacked = module.type == Types.Poly,
                     )
                     if (module.id in flash.ids && pulse.value > 0f) {
                         drawFlash(module.bounds, 1f, pulse.value, 3f / camera.zoom)
@@ -4164,6 +4453,11 @@ fun PatchCanvas(
                     showTitle = true,
                     showLabels = true,
                     alpha = if (live) 1f else 0.38f,
+                    // "Instance in" inside a poly subpatch, where what you are looking at is
+                    // one copy of several and the notes on this rail are this copy's share.
+                    title = patch.module(rail.parent)
+                        ?.let { Types.railName(it.type, rail.type) } ?: rail.title,
+                    stacked = patch.module(rail.parent)?.type == Types.Poly,
                 )
                 // After the box, not before: drawModuleBox fills opaquely, so a highlight
                 // drawn underneath is painted straight over and never appears.
@@ -4303,15 +4597,15 @@ fun PatchCanvas(
                 val count = choosing.ids.size
                 drawChip(
                     frame.selectionButton(done = true), d,
-                    // "Subpatch \u00d73", not "Subpatch 3": subpatches are named "Subpatch 1", "Subpatch 2" now,
-                    // and a button reading "Subpatch 1" over a selection of one looked like the
-                    // name of the subpatch it was about to make.
-                    if (count == 0) "Tap modules" else "Subpatch \u00d7$count",
+                    // "Subpatch \u00d73", not "Subpatch 3": subpatches are named "Subpatch 1",
+                    // "Subpatch 2", so a button reading "Subpatch 1" over a selection of one
+                    // looked like the name of the subpatch it was about to make.
+                    if (count == 0) "Tap modules" else "${choosing.type.name} \u00d7$count",
                     open = count > 0,
-                    accent = Types.Subpatch.accent,
+                    accent = choosing.type.accent,
                     measurer = screenMeasurer,
                 )
-                drawChip(frame.selectionButton(done = false), d, "Cancel", false, Types.Subpatch.accent, screenMeasurer)
+                drawChip(frame.selectionButton(done = false), d, "Cancel", false, choosing.type.accent, screenMeasurer)
             }
             drawScales(
                 frame, d, patch, scales, playingEntry, card == FloatingCard.Scales, scaleView,
@@ -4876,6 +5170,10 @@ internal val ModuleFill = Color(0xFF232830)
  * measured apart still looked alike on the phone, and why the test measures after this.
  */
 internal const val MODULE_BORDER_ALPHA = 0.55f
+
+/** How a stacked box says it is several: how many outlines behind it, and how far apart. */
+private const val STACK_LAYERS = 2
+private const val STACK_STEP = 4f
 
 private val GridLine = Color(0xFF232A33)
 private val GridCell = Color(0xFF12151A)
@@ -5892,7 +6190,7 @@ private fun handleTap(
             }
             is MenuItem.Duplicate -> patch.module(chosen.moduleId)?.let { patch.duplicate(it) }
             is MenuItem.Delete -> patch.module(chosen.moduleId)?.let { patch.remove(it) }
-            is MenuItem.StartSubpatch -> return Interaction.Selecting(emptySet())
+            is MenuItem.StartSubpatch -> return Interaction.Selecting(emptySet(), chosen.type)
             is MenuItem.Unpack -> patch.module(chosen.moduleId)?.let { patch.unpack(it) }
             is MenuItem.Rename ->
                 return if (patch.module(chosen.moduleId) == null) Interaction.Idle
@@ -5938,7 +6236,7 @@ private fun handleTap(
             // Nothing chosen is not an error to announce; the mode simply stays until it is
             // given something or cancelled.
             if (current.ids.isEmpty()) return current
-            patch.makeSubpatch(current.ids)
+            patch.makeSubpatch(current.ids, current.type)
             return Interaction.Idle
         }
         if (frame.selectionButton(done = false).contains(screen)) return Interaction.Idle
@@ -5946,6 +6244,7 @@ private fun handleTap(
             ?: return current
         return Interaction.Selecting(
             if (module.id in current.ids) current.ids - module.id else current.ids + module.id,
+            current.type,
         )
     }
 
@@ -5972,7 +6271,7 @@ private fun handleTap(
         patch.hitModule(camera, frame, screen)?.let { module ->
             // A subpatch's body is its way in. Opening a composite is going inside it, as
             // opening a primitive shows its controls.
-            if (module.type == Types.Subpatch) {
+            if (module.type.box) {
                 patch.enterScope(module.id)
                 return Interaction.Idle
             }
@@ -6026,8 +6325,14 @@ private fun handleTap(
 /**
  * Mirrors kMaxPorts in node.h. A module with more ports than this would have its extra
  * cables silently dropped by the engine, so it is asserted in a test rather than trusted.
+ *
+ * Eight since poly subpatches, where it bounds the voices too: the engine's note edge hands
+ * one output to each instance and its summing node takes one input back, so a port is an
+ * instance at those two nodes. No module declares more than four, which is still as many
+ * jacks as a 116dp face holds at a finger's height; a subpatch's box grows with the ports
+ * it was given and was never bound by a declaration.
  */
-internal const val MAX_PORTS = 4
+internal const val MAX_PORTS = 8
 
 /** Mirrors kMaxParams in node.h. A ninth knob would simply never reach the engine. */
 internal const val MAX_PARAMS = 8
@@ -6193,7 +6498,7 @@ private fun MenuItem.label(): String = when (this) {
     is MenuItem.Load -> name
     is MenuItem.LibraryEmpty -> "Nothing saved"
     is MenuItem.Delete -> "Delete"
-    is MenuItem.StartSubpatch -> "Subpatch\u2026"
+    is MenuItem.StartSubpatch -> "${type.name}\u2026"
     is MenuItem.Unpack -> "Unpack"
 }
 
@@ -6206,7 +6511,8 @@ private fun MenuItem.tint(): Color = when (this) {
     is MenuItem.Save, is MenuItem.OpenLibrary, is MenuItem.Load -> Types.Subpatch.accent
     is MenuItem.LibraryEmpty -> Color(0xFF6C7482)
     is MenuItem.Delete -> Color(0xFFE07A6B)
-    is MenuItem.StartSubpatch, is MenuItem.Unpack -> Types.Subpatch.accent
+    is MenuItem.StartSubpatch -> type.accent
+    is MenuItem.Unpack -> Types.Subpatch.accent
 }
 
 private fun DrawScope.drawMenu(layout: MenuLayout, d: Float, measurer: TextMeasurer) {
@@ -6393,8 +6699,36 @@ private fun DrawScope.drawModuleBox(
     showTitle: Boolean,
     showLabels: Boolean,
     alpha: Float,
+    /** What the header says, for a rail whose name depends on the box it belongs to. */
+    title: String = module.title,
+    /** Drawn as a pile of boxes: a poly subpatch, and the rails inside one. */
+    stacked: Boolean = false,
 ) {
     val corner = CornerRadius(PatchModule.CORNER * unit, PatchModule.CORNER * unit)
+
+    if (stacked) {
+        // Two outlines up and to the right, behind the box. A poly subpatch is one thing
+        // you build and several the engine runs, and the box is the only place to say so:
+        // its ports, its panel and what is inside it are all singular.
+        for (layer in STACK_LAYERS downTo 1) {
+            val step = STACK_STEP * unit * layer
+            drawRoundRect(
+                color = ModuleFill.copy(alpha = alpha),
+                topLeft = rect.topLeft + Offset(step, -step),
+                size = rect.size,
+                cornerRadius = corner,
+            )
+            drawRoundRect(
+                color = module.type.accent.copy(
+                    alpha = MODULE_BORDER_ALPHA * alpha / (layer + 1f),
+                ),
+                topLeft = rect.topLeft + Offset(step, -step),
+                size = rect.size,
+                cornerRadius = corner,
+                style = Stroke(width = strokeWidth),
+            )
+        }
+    }
 
     drawRoundRect(
         color = ModuleFill.copy(alpha = alpha),
@@ -6411,13 +6745,13 @@ private fun DrawScope.drawModuleBox(
     )
 
     if (showTitle) {
-        val title = measurer.measure(module.title, TitleStyle)
+        val header = measurer.measure(title, TitleStyle)
         drawText(
-            title,
+            header,
             alpha = alpha,
             topLeft = Offset(
-                rect.left + (rect.width - title.size.width) / 2f,
-                rect.top + (PatchModule.HEADER * unit - title.size.height) / 2f,
+                rect.left + (rect.width - header.size.width) / 2f,
+                rect.top + (PatchModule.HEADER * unit - header.size.height) / 2f,
             ),
         )
     }
@@ -6761,25 +7095,42 @@ private fun DrawScope.drawPanel(
 fun rememberDemoPatch(): Patch = remember { demoPatch() }
 
 /**
- * The patch a fresh install opens with: a complete instrument, so the first thing you
- * hear is music rather than a test tone. The transport steps Steps, Steps sends notes to
- * Osc, and Osc feeds the filter and both output channels.
+ * The patch a fresh install opens with: a complete instrument, so the first thing you hear
+ * is music rather than a test tone.
  *
- * An organ, as it stands: Osc has no envelope any more, so a note is on while it is held
- * and off when it is not. Giving it a shape is a poly subpatch with an Env and an Amp in
- * it, which is what the demo should become.
+ * A poly subpatch, because that is the shape the whole app is now about. Seq sends notes to
+ * a box called Voice; inside the box there is *one* of everything -- an oscillator, an
+ * envelope and an amp the envelope opens -- and the engine is handed four copies of it.
+ * What comes out is summed and filtered.
+ *
+ * It is also the demo doing the explaining. Opening the box is the first thing anyone will
+ * try, and what they find is a monophonic patch they can read in one look: notes in on the
+ * left, sound out on the right, and an envelope shaping it that is theirs to repatch. The
+ * old demo had the envelope hidden inside Osc where nothing could reach it.
  */
 fun demoPatch(): Patch =
     Patch().apply {
-        val steps = add(Types.Steps, Offset(165f, 40f))!!
-        val osc = add(Types.Osc, Offset(330f, 40f))!!
-        val filter = add(Types.Filter, Offset(495f, 40f))!!
+        val steps = add(Types.Steps, Offset(110f, 40f))!!
+        val osc = add(Types.Osc, Offset(275f, 40f))!!
+        val env = add(Types.Env, Offset(275f, 180f))!!
+        val amp = add(Types.Amp, Offset(440f, 40f))!!
+        val filter = add(Types.Filter, Offset(605f, 40f))!!
 
         fun out(m: PatchModule, i: Int) = PortRef(m.id, PortDirection.OUTPUT, i)
         fun into(m: PatchModule, i: Int) = PortRef(m.id, PortDirection.INPUT, i)
 
-        connect(out(steps, 0), into(osc, 0))   // notes
-        connect(out(osc, 0), into(filter, 0))
+        // Notes to both the oscillator and the envelope. One source, so collapsing these
+        // into the box gives it one note input rather than two.
+        connect(out(steps, 0), into(osc, 0))
+        connect(out(steps, 0), into(env, 0))
+        connect(out(osc, 0), into(amp, 0))
+        connect(out(env, 0), into(amp, 1))
+        connect(out(amp, 0), into(filter, 0))
         connect(out(filter, 0), PortRef(OUT_ID, PortDirection.INPUT, 0))
         connect(out(filter, 0), PortRef(OUT_ID, PortDirection.INPUT, 1))
+
+        makeSubpatch(setOf(osc.id, env.id, amp.id), Types.Poly)?.also {
+            it.name = "Voice"
+            it.position = Offset(275f, 40f)
+        }
     }

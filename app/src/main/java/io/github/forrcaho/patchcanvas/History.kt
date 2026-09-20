@@ -100,12 +100,12 @@ fun Patch.replaceWith(source: Patch): Set<Long> {
 
         // One shared set of ports per subpatch, made first so the rails inside can take it
         // whichever order the modules arrive in.
-        val shared = source.modules.filter { it.type == Types.Subpatch }
+        val shared = source.modules.filter { it.type.box }
             .associate { it.id to (it.subpatchPorts ?: SubpatchPorts()).copy() }
 
         source.modules.filter { it.id != OUT_ID && it.id != IN_ID }.forEach { from ->
             val ports = when (from.type) {
-                Types.Subpatch -> shared[from.id]
+                Types.Subpatch, Types.Poly -> shared[from.id]
                 Types.SubpatchIn, Types.SubpatchOut -> shared[from.parent]
                 else -> null
             }

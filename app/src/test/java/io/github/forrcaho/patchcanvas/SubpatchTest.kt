@@ -392,9 +392,9 @@ class SubpatchTest {
         // Naming one for what it does takes its number out of use, and the next subpatch
         // gets the lowest one free rather than counting subpatches.
         second.name = "Reverb"
-        assertEquals("Subpatch 2", f.patch.nextSubpatchName())
+        assertEquals("Subpatch 2", f.patch.nextBoxName(Types.Subpatch))
         first.name = "Bass"
-        assertEquals("Subpatch 1", f.patch.nextSubpatchName())
+        assertEquals("Subpatch 1", f.patch.nextBoxName(Types.Subpatch))
     }
 
     @Test

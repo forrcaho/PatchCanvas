@@ -32,7 +32,14 @@ enum class NodeType(val id: Int) {
     Arp(19),
     Euclid(20),
     /** The VCA, back. Id 7 stays retired: that module took a control voltage. */
-    Amp(21);
+    Amp(21),
+    /**
+     * A poly subpatch's two edges: the note input shared out one per instance, and the
+     * instance outputs summed back into one. Neither is a module -- nothing offers them in
+     * a menu and no file names them. See Patch.engineGraph.
+     */
+    PolyIn(22),
+    PolySum(23);
 
     companion object {
         fun of(type: ModuleType): NodeType = when (type.name) {
@@ -227,18 +234,22 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
      * lands hands it over.
      */
     fun sync(patch: Patch, fonts: Map<String, Long> = emptyMap()) {
-        // The patch flattened: subpatches and their rails are not nodes, and a cable through a
-        // subpatch's ports arrives as the one cable it stands for. So subpatching modules that are
-        // already playing sends the engine nothing at all.
-        val sounding = patch.engineModules
-        val nodes = sounding.associate { it.id to NodeType.of(it.type) }
-        val cables = patch.engineConnections()
+        // The patch flattened. A plain subpatch and its rails are not nodes, and a cable
+        // through its ports arrives as the one cable it stands for -- so subpatching modules
+        // that are already playing sends the engine nothing at all. A poly subpatch is
+        // flattened by copying: as many of everything inside it as it has voices, with a node
+        // at each of its edges. Either way the engine is handed a flat graph.
+        val graph = patch.engineGraph()
+        val sounding = graph.nodes
+        val nodes = sounding.associate { it.id to it.type }
+        val cables = graph.cables
 
         // Note inputs are excluded: they merge rather than replace, so a new cable into
-        // one supersedes nothing and the cable that left still has to be sent.
+        // one supersedes nothing and the cable that left still has to be sent. Asked of the
+        // flattened graph, because half of these are ports on nodes no module has.
         val replaced = (cables - syncedCables)
             .map { it.to }
-            .filter { patch.kindOf(it) != SignalKind.NOTE }
+            .filter { it !in graph.noteInputs }
             .toSet()
 
         (syncedCables - cables).forEach {
@@ -275,14 +286,14 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
         // wrong -- but only until the range arrived, and a queue drained partway through a
         // sync would let a block render in between. Every range of a node that was just
         // made, because the engine's node knows none of them.
-        val ranges = sounding.associate { it.id to it.modRanges }
-        ranges.forEach { (id, exposed) ->
-            val type = patch.module(id)?.type ?: return@forEach
-            val previous = if (id in fresh) null else syncedRanges[id]
-            exposed.forEach { (index, range) ->
+        val ranges = sounding.associate { it.id to it.module?.modRanges.orEmpty() }
+        sounding.forEach { node ->
+            val type = node.module?.type ?: return@forEach
+            val previous = if (node.id in fresh) null else syncedRanges[node.id]
+            node.module.modRanges.forEach { (index, range) ->
                 if (previous?.get(index) != range) {
                     val exponential = type.params.getOrNull(index)?.curve == ParamCurve.EXPONENTIAL
-                    commands.setModRange(id, index, range.low, range.high, exponential)
+                    commands.setModRange(node.id, index, range.low, range.high, exponential)
                 }
             }
         }
@@ -298,8 +309,8 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
         // A font before the knobs, though either order sounds the same: the node applies
         // its preset whenever either arrives. Resent to a node that was just made, and to
         // one whose font changed or has only now finished loading.
-        val wanted = sounding.filter { it.type == Types.Sf }
-            .mapNotNull { m -> m.font?.let { name -> fonts[name] }?.let { m.id to it } }
+        val wanted = sounding.filter { it.module?.type == Types.Sf }
+            .mapNotNull { n -> n.module?.font?.let { name -> fonts[name] }?.let { n.id to it } }
             .toMap()
         wanted.forEach { (id, handle) ->
             if (id in fresh || syncedFonts[id] != handle) commands.setFont(id, handle)
@@ -308,7 +319,7 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
         // Knobs last, and every knob of a node that was just added: the engine's node
         // starts at its own C++ defaults, which are not required to agree with the ones
         // declared here, and a patch loaded from disk has values for all of them.
-        val params = sounding.associate { it.id to it.params.toList() }
+        val params = sounding.associate { it.id to it.module?.params.orEmpty().toList() }
         params.forEach { (id, values) ->
             val previous = syncedParams[id]
             values.forEachIndexed { index, value ->
@@ -323,8 +334,8 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
         // the scale sounding on the beat it starts, so a change of scale resends the list
         // below and not a single step.
         val steps = sounding
-            .filter { it.type.stepCount > 0 }
-            .associate { it.id to it.steps.toList() }
+            .filter { (it.module?.type?.stepCount ?: 0) > 0 }
+            .associate { it.id to it.module!!.steps.toList() }
         steps.forEach { (id, sequence) ->
             val previous = syncedSteps[id]
             sequence.forEachIndexed { index, step ->
@@ -336,7 +347,8 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
 
         // Dots, by slot: what changed, a cleared slot for each one that went, and all of them
         // for a node that was just made.
-        val dots = sounding.filter { it.type.grid == GridKind.DOTS }.associate { it.id to it.dots.toList() }
+        val dots = sounding.filter { it.module?.type?.grid == GridKind.DOTS }
+            .associate { it.id to it.module!!.dots.toList() }
         dots.forEach { (id, list) ->
             val previous = if (id in fresh) null else syncedDots[id]
             list.forEachIndexed { slot, dot ->

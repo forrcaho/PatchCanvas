@@ -77,7 +77,8 @@ being edited out from under it.
 | File | |
 | --- | --- |
 | `PatchCanvas.kt` | model, camera, gestures, drawing, panel — the bulk of the UI |
-| `GraphSync.kt` | the diff, `NodeType` mirror, `GraphCommands` seam for tests |
+| | `engineGraph()` in there is the flattening, poly subpatches included |
+| `GraphSync.kt` | the diff over `engineGraph()`, `NodeType` mirror, `GraphCommands` seam |
 | `PatchStore.kt` | JSON persistence, hand-rolled on `org.json` |
 | `SoundFontStore.kt` | the user's `.sf2` banks in `soundfonts`, loaded on demand |
 | `SubpatchStore.kt` | the subpatch library: a saved subpatch is a patch file holding one subpatch |
@@ -86,12 +87,13 @@ being edited out from under it.
 | `ScalaFile.kt` | `.scl` parsing — untrusted input, every bad shape returns null |
 | `ScaleLibrary.kt` | seeds the bundled scales and reads the user's folder |
 | `graph.{h,cpp}` | command queue, topological sort, crossfades, node lifetime |
+| | `kMaxNodes` is 256: a poly subpatch is flattened by copying |
 | `transport.h` | musical time: one position every clocked node divides, header-only |
 | `scales.h` | scale tables and the looping scale list; where a degree becomes a pitch |
 | `nodes.{h,cpp}` | the module set, DaisySP-backed |
 | `processors.{h,cpp}` | notes in, notes out: Chance, Chord, Arp, Euclid |
 | `soundfont.{h,cpp}` | the SF node over TinySoundFont; a SoundFont loaded once and shared |
-| `poly.h` | `PolySynth`: voice allocation, stealing, glides -- every synth but its sound |
+| `poly.h` | `PolySynth` and `GateRamp`: voice allocation, stealing, glides, declick |
 | `audio_engine.{h,cpp}` | Oboe streams, ADPF, debug capture |
 
 ## Invariants
@@ -190,9 +192,13 @@ comes back through `collectGarbage`, as a scale list does. An SF node's synth is
 its font loads in the background, so the node exists before its synth and must keep the
 notes it is sent in the meantime.
 
-**Every synth is polyphonic, and shares one voice engine.** A synth is a `Voice` inside
-`PolySynth` (`poly.h`), which owns allocation, stealing, Off-by-source-and-id, glides and
-`notesCut`; a new synth supplies only its sound. A voice says when it is finished, and a
+**Every synth is polyphonic, and shares one voice engine -- and so does a poly subpatch.**
+A synth is a `Voice` inside `PolySynth` (`poly.h`), which owns allocation, stealing,
+Off-by-source-and-id, glides and `notesCut`; a new synth supplies only its sound. `PolyIn`
+keeps the *same* rules deliberately -- idle first, then the oldest released, then steal --
+because each of them was paid for by a bug, with one addition a synth does not need: a
+stolen instance is sent an Off first, since what is inside it is an ordinary `Env` holding
+an ordinary note and nothing else would ever end it. A voice says when it is finished, and a
 plucked string finishes while still held. Any DaisySP code that calls `rand()` is edited
 before it is vendored -- Bionic's takes a mutex.
 
@@ -241,13 +247,28 @@ the reference device runs at font scale 1.5; a menu tile sized for 12sp text ove
 there and nowhere else. Grow the box with the setting rather than shrinking the text back
 against it.
 
+**A poly subpatch is monophonic inside and cloned on the way out.** One of everything in
+there, and `GraphSync` hands the engine `voices` copies of the lot, plus a `PolyIn` that
+shares the notes out one per instance and a `PolySum` per signal output that adds them back
+up. Instance 0 *keeps the module's own id*, which is not a detail: telemetry -- where a
+sequencer is, where a modulated knob is -- is asked for by module id, so numbering from the
+original means every one of those reads the first instance without knowing instances exist.
+Later instances carry their number in bits 48 and up, where a patch's ids never reach.
+**Only notes are shared out**; audio and modulation are broadcast to every instance,
+because the instances are copies of one voice rather than separate patches. A poly
+subpatch's note *output* merges at the destination rather than through a node, since that
+is what a note input already does. **A poly subpatch may not contain another** -- instances
+would multiply and the id space is one level deep on purpose -- and that is refused from
+every direction: added inside one, made from a selection inside one, wrapped around one,
+duplicated or loaded into one. `kMaxPorts` is 8 because a port is an instance at those two
+edge nodes, which makes 8 the voice limit too; no module declares more than four.
+
 **Subpatches never reach the engine.** Every module is in one flat list with a `parent`
 (`TOP`, or the id of the subpatch it is in). A subpatch is a module of type `Subpatch` whose ports
 are its own, stored in a `SubpatchPorts` it shares with the two pinned rails inside it
 (`SubpatchIn` on the left, `SubpatchOut` on the right) -- so inside a subpatch, the existing rail
-drawing, hit testing and cables all apply unchanged. `GraphSync` reads
-`engineModules` and `engineConnections()`, which follow any chain of subpatch ports to the
-real output at the far end. A subpatch's ports are stored, never derived from the cables, so
+drawing, hit testing and cables all apply unchanged. `GraphSync` reads `engineGraph()`, which follows any chain of
+subpatch ports to the real output at the far end and stamps out a poly subpatch's copies. A subpatch's ports are stored, never derived from the cables, so
 unplugging one leaves the jack to plug back into -- but a port whose jack *inside* stops
 existing (its parameter unexposed, its module deleted) is dropped, since nothing could
 reach it again. Dropping one renumbers every cable that named a later port: indices are

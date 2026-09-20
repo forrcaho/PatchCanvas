@@ -8,7 +8,13 @@
 #include "nodes.h"
 #include "spsc_queue.h"
 
-constexpr int32_t kMaxNodes = 64;
+/**
+ * 256, where it was 64. A poly subpatch is flattened by *copying*: eight instances of a
+ * six-module subpatch is forty-eight nodes for one box on screen, and the patch around it
+ * still has to fit. A Record is about 1.4KB and a node about 8KB, so this is a couple of
+ * megabytes for a graph that is full, and a graph that is full is the one worth affording.
+ */
+constexpr int32_t kMaxNodes = 256;
 constexpr std::size_t kCommandCapacity = 256;
 
 /**
@@ -241,7 +247,12 @@ private:
          */
         mutable bool fresh = false;
     };
-    static constexpr int32_t kMaxNoteSources = 4;
+    /**
+     * Eight, to match the instances of a poly subpatch: its note output is every instance's
+     * note output, and they merge at whatever is patched to it rather than through a
+     * summing node, because merging event streams is exactly what a note input does.
+     */
+    static constexpr int32_t kMaxNoteSources = 8;
 
     /**
      * A parameter, and whatever is modulating it.

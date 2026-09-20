@@ -601,13 +601,18 @@ class MenuLayoutTest {
     /**
      * The reference device runs at font scale 1.5, where 12sp labels are 18dp tall in
      * tiles sized for 12: "Save patch..." spilled into the tile beside it. Tiles grow with
-     * the setting, and the biggest menu there is -- every module, Subpatch, Load and Save patch
-     * -- still has to fit the screen at that size, wherever it is opened.
+     * the setting, and the biggest menu there is -- every module, both boxes twice over,
+     * Load and Save patch -- still has to fit the screen at that size, wherever it is
+     * opened.
      */
     @Test
     fun `at a large text size the tiles grow and the whole menu still fits`() {
         val everything = Types.palette.map { MenuItem.Add(it) } +
-            listOf(MenuItem.StartSubpatch, MenuItem.OpenLibrary, MenuItem.Save(null))
+            listOf(
+                MenuItem.Add(Types.Subpatch), MenuItem.Add(Types.Poly),
+                MenuItem.StartSubpatch(Types.Subpatch), MenuItem.StartSubpatch(Types.Poly),
+                MenuItem.OpenLibrary, MenuItem.Save(null),
+            )
         val normal = menuLayout(everything, Offset(1200f, 540f), d, screen)
         val large = menuLayout(everything, Offset(1200f, 540f), d, screen, textScale = 1.5f)
 

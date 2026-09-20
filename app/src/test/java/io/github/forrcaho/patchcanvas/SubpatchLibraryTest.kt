@@ -143,8 +143,8 @@ class SubpatchLibraryTest {
         // What the patch sent to Out becomes what the subpatch sends out.
         assertTrue("it has something to say", loaded.ports(PortDirection.OUTPUT).isNotEmpty())
         assertEquals(
-            "everything that was in the patch is inside it",
-            patch.free.size,
+            "everything that was at the patch's top level is inside it",
+            patch.free.count { it.parent == TOP },
             into.modules.count { it.parent == loaded.id && !it.isPinned },
         )
     }

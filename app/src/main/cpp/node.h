@@ -9,7 +9,19 @@
 
 /** Frames processed per inner block. 96-frame bursts divide by this exactly. */
 constexpr int32_t kBlockSize = 32;
-constexpr int32_t kMaxPorts = 4;
+/**
+ * Eight, since poly subpatches: a PolyIn hands one note output to each instance and a
+ * PolySum takes one input back, so the port limit is also the voice limit. It was four,
+ * which was as many jacks as a 116dp module face could hold at a finger's height -- and
+ * still is, for a module. What has eight is a subpatch, whose box grows with the ports it
+ * was given and was never bound by a type's declaration.
+ *
+ * The cost is the note buffers: a node carries one per port either way, at about a
+ * kilobyte each, so this doubles a node from 4KB to 8KB. With kMaxNodes at 256 that is
+ * two megabytes, which is nothing on a phone and was worth not building a second, wider
+ * kind of node to hold the two that needed it.
+ */
+constexpr int32_t kMaxPorts = 8;
 /**
  * Eight, since FM: two operators want a ratio, an index and its decay besides an
  * envelope's A, D, S and R. Five was the old limit, set by what a panel's single column of

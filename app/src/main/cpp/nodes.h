@@ -44,6 +44,9 @@ enum class NodeType : int32_t {
     Euclid = 20,
     /** The VCA, back: id 7 stays retired, because this is not the module that had it. */
     Amp = 21,
+    /** A poly subpatch's two edges. Neither is a module: see PolyInNode. */
+    PolyIn = 22,
+    PolySum = 23,
 };
 
 /**
@@ -64,6 +67,93 @@ constexpr Interval kIntervals[] = {
 };
 constexpr int32_t kIntervalCount = static_cast<int32_t>(sizeof(kIntervals) / sizeof(kIntervals[0]));
 constexpr int32_t kDefaultInterval = 3; // 1/8
+
+/**
+ * The note edge of a poly subpatch: one note input, one note output per instance.
+ *
+ * A poly subpatch is monophonic on the inside and cloned on the way to the engine, so what
+ * reaches the graph is N copies of everything inside it and these two nodes at its edges.
+ * Nothing about nesting crosses into C++; a poly subpatch is a *flattening* with a
+ * different rule, exactly as a plain subpatch is.
+ *
+ * This is where the notes are shared out. Its rules are PolySynth's, and deliberately the
+ * same ones: a note takes an idle instance, then the oldest instance already released, and
+ * only then steals one still holding -- and a stolen instance is sent an Off first, because
+ * whatever is inside it is an ordinary Env holding an ordinary note and nothing else would
+ * ever end it. An Off finds its instance by id *and* source, since ids belong to the source
+ * that chose them.
+ *
+ * Eight outputs always, whatever the voices knob says, so a port index is valid the moment
+ * the graph sees it: Graph's Connect bounds-checks against kMaxPorts, and knobs are sent
+ * after cables, so declaring only as many outputs as the knob asks for would drop the
+ * cables of instances 5 to 8 on the sync that turned it up. The knob bounds which
+ * instances are *chosen*, which is the thing it actually means.
+ */
+class PolyInNode : public Node {
+public:
+    /** As many as there are ports. See kMaxPorts. */
+    static constexpr int32_t kInstances = kMaxPorts;
+
+    int32_t inputCount() const override { return 1; }  // notes
+    int32_t outputCount() const override { return kInstances; }
+    uint32_t noteInputs() const override { return 1u << 0; }
+    uint32_t noteOutputs() const override { return (1u << static_cast<uint32_t>(kInstances)) - 1u; }
+    void process(int32_t frames) override;
+    /** Knob 0: how many instances, 1 to kInstances. Mirrors Types.Poly in PatchCanvas.kt. */
+    void setParam(int32_t index, float value) override;
+    void notesCut(int32_t port, int32_t source) override;
+    void heldNotes(int32_t port, NoteBuffer &into) const override;
+
+    /** How many instances are holding a note. For tests. */
+    int32_t instancesHeld() const;
+
+private:
+    struct Instance {
+        /**
+         * The On this instance was given, kept whole.
+         *
+         * Two uses: an Off for a stolen instance has to carry the same id and degree, and
+         * heldNotes has to hand the same event to a cable patched later. A Change replaces
+         * it, so what is handed over is where the note is now rather than where it began.
+         */
+        NoteEvent note{};
+        bool held = false;
+        /** When it was taken, for choosing which to steal. */
+        int64_t age = 0;
+    };
+
+    int32_t choose() const;
+    int32_t holding(uint32_t id, int32_t source) const;
+
+    int32_t voices_ = 4;
+    Instance instances_[kInstances];
+    int64_t age_ = 0;
+    /**
+     * Instances whose source was unpatched, one bit each, released at the top of the next
+     * block. Not released in notesCut itself: that runs in applyCommands, and a note output
+     * is cleared by its producer at the top of process(), so an event written there would
+     * be thrown away before anything read it.
+     */
+    uint32_t cut_ = 0;
+};
+
+/**
+ * The signal edge of a poly subpatch: one input per instance, summed.
+ *
+ * Summed rather than averaged, like Mix and like PolySynth: a chord is louder than one
+ * note, which is true of every instrument, and Out's limiter catches what that costs at the
+ * top. An instance that is not sounding contributes silence, so the sum is over what is
+ * playing rather than over the knob.
+ *
+ * Eight inputs always, for the reason PolyIn has eight outputs. An unwired one reads as
+ * silence and adds nothing, so there is no knob here at all.
+ */
+class PolySumNode : public Node {
+public:
+    int32_t inputCount() const override { return kMaxPorts; }
+    int32_t outputCount() const override { return 1; }
+    void process(int32_t frames) override;
+};
 
 /** Anything not yet implemented: right shape, silent. */
 class NullNode : public Node {

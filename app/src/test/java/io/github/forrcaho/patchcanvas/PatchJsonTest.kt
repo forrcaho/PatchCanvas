@@ -49,7 +49,8 @@ class PatchJsonTest {
     @Test
     fun `reload does not duplicate the rails`() {
         val restored = patchFromJson(sample().toJson())!!
-        assertEquals(2, restored.pinned.size)
+        // At the top level: the demo's poly subpatch has two pinned rails of its own.
+        assertEquals(2, restored.pinned.count { it.parent == TOP })
         assertEquals(1, restored.modules.count { it.id == OUT_ID })
         assertEquals(1, restored.modules.count { it.id == IN_ID })
     }

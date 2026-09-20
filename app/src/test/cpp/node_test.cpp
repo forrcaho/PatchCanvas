@@ -1025,6 +1025,167 @@ void aVoiceSoundsAChordAndLetsItGo() {
     check(peak(voiceAfter(voice, 2000)) < 0.001f, "then the chord ends");
 }
 
+/** Hands [events] to a PolyIn and renders one block. */
+void polySend(PolyInNode &poly, const NoteBuffer &events) {
+    poly.setNoteInput(0, &events);
+    poly.setTiming(0.0, false, nullptr);
+    poly.process(kBlockSize);
+    poly.setNoteInput(0, &kNoNotes);
+}
+
+/** Which instances said something this block, and what kind. */
+int32_t polyCount(const PolyInNode &poly, int32_t instance) {
+    return poly.noteOutput(instance)->count;
+}
+
+/**
+ * A chord goes out one note per instance, and an Off follows its own note home.
+ *
+ * This is the whole of what a poly subpatch adds: inside it there is one of everything, so
+ * the boundary has to decide which copy each note belongs to. The rules are PolySynth's --
+ * idle first, then the oldest released, then steal -- because they are the same rules and
+ * were each paid for by a bug.
+ */
+void aPolySubpatchGivesEachNoteItsOwnInstance() {
+    std::printf("a poly subpatch gives each note its own instance\n");
+    PolyInNode poly;
+    poly.prepare(kRate);
+    poly.setParam(0, 4.0f);
+
+    NoteBuffer chord;
+    chord.push(noteOn(1, 0));
+    chord.push(noteOn(2, 4));
+    chord.push(noteOn(3, 7));
+    polySend(poly, chord);
+    check(poly.instancesHeld() == 3, "three notes take three instances, " +
+                                             std::to_string(poly.instancesHeld()));
+    for (int32_t k = 0; k < 3; ++k) {
+        check(polyCount(poly, k) == 1, "instance " + std::to_string(k) + " got one note");
+    }
+    check(polyCount(poly, 3) == 0, "and the fourth got none");
+
+    NoteBuffer off;
+    off.push(noteOff(2));
+    polySend(poly, off);
+    check(polyCount(poly, 1) == 1 && poly.noteOutput(1)->events[0].kind == NoteKind::Off,
+          "the off goes to the instance that has that note");
+    check(polyCount(poly, 0) == 0 && polyCount(poly, 2) == 0, "and to no other");
+    check(poly.instancesHeld() == 2, "which lets its instance go");
+}
+
+/** The voices knob bounds which instances are chosen, not how many ports exist. */
+void aPolySubpatchUsesOnlyTheInstancesItsKnobAllows() {
+    std::printf("a poly subpatch uses only the instances its knob allows\n");
+    PolyInNode poly;
+    poly.prepare(kRate);
+    check(poly.outputCount() == PolyInNode::kInstances,
+          "every instance has a port whatever the knob says");
+
+    poly.setParam(0, 2.0f);
+    NoteBuffer three;
+    three.push(noteOn(1, 0));
+    three.push(noteOn(2, 4));
+    three.push(noteOn(3, 7));
+    polySend(poly, three);
+    check(poly.instancesHeld() == 2, "at two voices, three notes hold two instances");
+    check(polyCount(poly, 2) == 0, "and the third instance is never given one");
+}
+
+/**
+ * Stealing tells the instance to let go first.
+ *
+ * Inside an instance is an ordinary Env holding an ordinary note. Nothing else would ever
+ * end it, so an On landing on a held instance without an Off in front of it leaves that
+ * Env open forever and the instance never comes back.
+ */
+void stealingAnInstanceEndsTheNoteItWasHolding() {
+    std::printf("stealing an instance ends the note it was holding\n");
+    PolyInNode poly;
+    poly.prepare(kRate);
+    poly.setParam(0, 1.0f);
+
+    NoteBuffer first;
+    first.push(noteOn(1, 0));
+    polySend(poly, first);
+
+    NoteBuffer second;
+    second.push(noteOn(2, 7));
+    polySend(poly, second);
+    check(polyCount(poly, 0) == 2, "the one instance is told two things");
+    check(poly.noteOutput(0)->events[0].kind == NoteKind::Off, "an off for the note it had");
+    check(poly.noteOutput(0)->events[0].id == 1, "named as that note");
+    check(poly.noteOutput(0)->events[1].kind == NoteKind::On, "then the on that took it");
+}
+
+/** Two sources both counting from one, which is what every source does. */
+void aPolySubpatchMatchesAnOffAgainstItsOwnSource() {
+    std::printf("a poly subpatch matches an off against its own source\n");
+    PolyInNode poly;
+    poly.prepare(kRate);
+    poly.setParam(0, 4.0f);
+
+    NoteBuffer both;
+    both.push(noteOn(1, 0, 0));
+    both.push(noteOn(1, 7, 1));
+    polySend(poly, both);
+    check(poly.instancesHeld() == 2, "the same id from two sources is two notes");
+
+    NoteBuffer one;
+    one.push(noteOff(1, 1));
+    polySend(poly, one);
+    check(poly.instancesHeld() == 1, "and one source's off ends one of them");
+    check(polyCount(poly, 1) == 1 && polyCount(poly, 0) == 0, "the second one");
+}
+
+/**
+ * Unpatching a source ends what it was holding, and a cable patched while notes are held
+ * is given them.
+ *
+ * Both are rules the rest of the engine already keeps; the boundary has to keep them too,
+ * because from inside the subpatch it is the source.
+ */
+void aPolySubpatchEndsAndDeliversHeldNotes() {
+    std::printf("a poly subpatch ends and delivers held notes\n");
+    PolyInNode poly;
+    poly.prepare(kRate);
+    poly.setParam(0, 4.0f);
+
+    NoteBuffer on;
+    on.push(noteOn(1, 5, 0));
+    polySend(poly, on);
+
+    NoteBuffer into;
+    poly.heldNotes(0, into);
+    check(into.count == 1 && into.events[0].kind == NoteKind::On && into.events[0].degree == 5,
+          "an instance hands over the note it is holding");
+    NoteBuffer other;
+    poly.heldNotes(1, other);
+    check(other.count == 0, "and an instance holding nothing hands over nothing");
+
+    poly.notesCut(0, 0);
+    polySend(poly, kNoNotes);
+    check(polyCount(poly, 0) == 1 && poly.noteOutput(0)->events[0].kind == NoteKind::Off,
+          "unpatching the source releases what it held");
+    check(poly.instancesHeld() == 0, "leaving nothing held");
+}
+
+/** The other edge: every instance's audio back into one cable. */
+void aPolySubpatchSumsItsInstances() {
+    std::printf("a poly subpatch sums its instances\n");
+    const auto quarter = constantBuffer(0.25f);
+    const auto quiet = constantBuffer(0.0f);
+    PolySumNode sum;
+    sum.prepare(kRate);
+    for (int32_t p = 0; p < kMaxPorts; ++p) sum.setInput(p, quiet.data());
+
+    sum.setInput(0, quarter.data());
+    check(std::fabs(peak(run(sum, 2)) - 0.25f) < 0.001f, "one instance sounding is itself");
+    sum.setInput(1, quarter.data());
+    sum.setInput(2, quarter.data());
+    check(std::fabs(peak(run(sum, 2)) - 0.75f) < 0.001f,
+          "three of them sum rather than average");
+}
+
 /**
  * The 5ms ramp that is all an Osc has left of an envelope.
  *
@@ -2070,6 +2231,12 @@ int main() {
     envMatchesAnOffAgainstItsOwnSource();
     aMixChannelIsAGainThatCanBeShut();
     anAmpMultipliesAndIsOpenWithNothingPatched();
+    aPolySubpatchGivesEachNoteItsOwnInstance();
+    aPolySubpatchUsesOnlyTheInstancesItsKnobAllows();
+    stealingAnInstanceEndsTheNoteItWasHolding();
+    aPolySubpatchMatchesAnOffAgainstItsOwnSource();
+    aPolySubpatchEndsAndDeliversHeldNotes();
+    aPolySubpatchSumsItsInstances();
     stepsTakeTheirStepFromTheCount();
     stepsPlayTheirOwnPattern();
     aClosedGateIsARestNotASkip();

@@ -33,12 +33,12 @@ private const val TAG = "PatchSubpatches"
  * exactly one routine knows how a subpatch is copied -- the same one that duplicates it.
  */
 fun Patch.subpatchToJson(subpatch: PatchModule, name: String? = subpatch.name): String? {
-    if (subpatch.type != Types.Subpatch) return null
+    if (!subpatch.type.box) return null
     val lone = Patch()
     // [name] is what the saved copy is called, which is not always what the subpatch in the
     // patch is called: saving "Filt Osc" to the library as "Bass voice" must not rename
     // the one you are still playing.
-    lone.adoptSubpatch(this, subpatch, Offset.Zero, TOP, name)
+    lone.adoptSubpatch(this, subpatch, Offset.Zero, TOP, name) ?: return null
     return lone.toJson()
 }
 
@@ -79,7 +79,7 @@ fun Patch.loadSubpatch(
 ): PatchModule? {
     val source = patchFromJson(text, scales) ?: return null
     val loose = source.modules.filter { !it.isPinned && it.parent == TOP }
-    val subpatch = loose.singleOrNull()?.takeIf { it.type == Types.Subpatch } ?: run {
+    val subpatch = loose.singleOrNull()?.takeIf { it.type.box } ?: run {
         Log.w(TAG, "not a saved subpatch: ${loose.size} modules at the top level")
         return null
     }

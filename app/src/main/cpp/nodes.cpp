@@ -777,6 +777,121 @@ void LfoNode::setParam(int32_t index, float value) {
 
 // ---------------------------------------------------------------- Mix
 
+// ---------------------------------------------------------------- poly subpatch edges
+
+void PolyInNode::setParam(int32_t index, float value) {
+    if (index == 0) {
+        voices_ = static_cast<int32_t>(clampf(value, 1.0f, static_cast<float>(kInstances)) + 0.5f);
+    }
+}
+
+int32_t PolyInNode::choose() const {
+    // PolySynth's rule, and for its reasons: stealing an instance that is still holding
+    // restarts whatever is inside it mid-note, so it is the last resort rather than the
+    // first, and by the time every instance is held the next note was going to cost
+    // something regardless.
+    for (int32_t k = 0; k < voices_; ++k) {
+        if (!instances_[k].held && instances_[k].note.id == 0) return k;
+    }
+    int32_t chosen = -1;
+    for (int32_t k = 0; k < voices_; ++k) {
+        if (instances_[k].held) continue;
+        if (chosen < 0 || instances_[k].age < instances_[chosen].age) chosen = k;
+    }
+    if (chosen >= 0) return chosen;
+    for (int32_t k = 0; k < voices_; ++k) {
+        if (chosen < 0 || instances_[k].age < instances_[chosen].age) chosen = k;
+    }
+    return chosen < 0 ? 0 : chosen;
+}
+
+int32_t PolyInNode::holding(uint32_t id, int32_t source) const {
+    for (int32_t k = 0; k < kInstances; ++k) {
+        // Both, because ids belong to the source that chose them: two sequencers patched
+        // to this subpatch are each counting from one.
+        if (instances_[k].held && instances_[k].note.id == id &&
+            instances_[k].note.source == static_cast<uint8_t>(source)) {
+            return k;
+        }
+    }
+    return -1;
+}
+
+int32_t PolyInNode::instancesHeld() const {
+    int32_t n = 0;
+    for (const auto &instance : instances_) n += instance.held ? 1 : 0;
+    return n;
+}
+
+void PolyInNode::notesCut(int32_t port, int32_t source) {
+    (void) port; // one note input, so there is nothing to tell apart
+    for (int32_t k = 0; k < kInstances; ++k) {
+        if (instances_[k].held && instances_[k].note.source == static_cast<uint8_t>(source)) {
+            cut_ |= 1u << static_cast<uint32_t>(k);
+        }
+    }
+}
+
+void PolyInNode::heldNotes(int32_t port, NoteBuffer &into) const {
+    if (port < 0 || port >= kInstances || !instances_[port].held) return;
+    NoteEvent on = instances_[port].note;
+    // An On even where a Change moved it last: what the new cable missed is the start.
+    on.kind = NoteKind::On;
+    on.offset = 0;
+    into.push(on);
+}
+
+void PolyInNode::process(int32_t frames) {
+    (void) frames;
+    for (int32_t k = 0; k < kInstances; ++k) notesOut(k).clear();
+
+    for (int32_t k = 0; k < kInstances; ++k) {
+        if ((cut_ & (1u << static_cast<uint32_t>(k))) == 0) continue;
+        NoteEvent off = instances_[k].note;
+        off.kind = NoteKind::Off;
+        off.offset = 0;
+        notesOut(k).push(off);
+        instances_[k].held = false;
+    }
+    cut_ = 0;
+
+    const NoteBuffer &in = notesIn(0);
+    for (int32_t e = 0; e < in.count; ++e) {
+        const NoteEvent &event = in.events[e];
+        if (event.kind == NoteKind::On) {
+            const int32_t k = choose();
+            if (instances_[k].held) {
+                // Told to let go on the same sample. Inside the instance is an ordinary
+                // Env holding an ordinary note, and nothing else would ever end it.
+                NoteEvent off = instances_[k].note;
+                off.kind = NoteKind::Off;
+                off.offset = event.offset;
+                notesOut(k).push(off);
+            }
+            instances_[k].note = event;
+            instances_[k].held = true;
+            instances_[k].age = age_++;
+            notesOut(k).push(event);
+            continue;
+        }
+        const int32_t k = holding(event.id, event.source);
+        if (k < 0) continue;
+        notesOut(k).push(event);
+        if (event.kind == NoteKind::Off) instances_[k].held = false;
+        // A Change moves the note, so what heldNotes hands over moves with it.
+        if (event.kind == NoteKind::Change) instances_[k].note = event;
+    }
+}
+
+void PolySumNode::process(int32_t frames) {
+    float *o = out(0);
+    for (int32_t i = 0; i < frames; ++i) {
+        float sum = 0.0f;
+        for (int32_t p = 0; p < kMaxPorts; ++p) sum += input(p)[i];
+        o[i] = sum;
+    }
+}
+
 // ---------------------------------------------------------------- Amp
 
 void AmpNode::process(int32_t frames) {
@@ -878,6 +993,8 @@ Node *makeNode(NodeType type) {
         case NodeType::Steps: return new StepsNode();
         case NodeType::Mix: return new MixNode();
         case NodeType::Amp: return new AmpNode();
+        case NodeType::PolyIn: return new PolyInNode();
+        case NodeType::PolySum: return new PolySumNode();
         case NodeType::Osc: return new OscNode();
         case NodeType::Pluck: return new PluckNode();
         case NodeType::Fm: return new FmNode();

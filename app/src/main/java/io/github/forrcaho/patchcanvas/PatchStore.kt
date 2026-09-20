@@ -49,7 +49,7 @@ fun Patch.toJson(): String {
         m.name?.let { entry.put("name", it) }
         m.font?.let { entry.put("font", it) }
         if (m.parent != TOP) entry.put("parent", m.parent)
-        if (m.type == Types.Subpatch) {
+        if (m.type.box) {
             // The rails inside are not modules in the file: they carry no knobs and no
             // position, only ids for the cables inside to name, and the subpatch's ports.
             entry.put("in", subpatchRail(m.id, Types.SubpatchIn)?.id ?: -1L)
@@ -280,11 +280,11 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
         for (i in 0 until modules.length()) {
             val m = modules.optJSONObject(i) ?: continue
             val name = m.optString("type")
-            val type = Types.byName[name] ?: Types.Subpatch.takeIf { it.name == name } ?: continue
+            val type = Types.byName[name] ?: Types.boxes[name] ?: continue
             if (type.pinned != null) continue // rails already exist; never duplicate them
             val id = m.optLong("id", -1L)
             if (id < 0L || patch.module(id) != null) continue
-            val shared = if (type == Types.Subpatch) {
+            val shared = if (type.box) {
                 SubpatchPorts().also {
                     it.inputs.addAll(portsFrom(m.optJSONArray("inputs")))
                     it.outputs.addAll(portsFrom(m.optJSONArray("outputs")))
@@ -335,7 +335,7 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
             var at = module.parent
             while (at != TOP) {
                 val subpatch = patch.module(at)
-                if (subpatch?.type != Types.Subpatch || !seen.add(at)) {
+                if (subpatch?.type?.box != true || !seen.add(at)) {
                     module.parent = TOP
                     break
                 }
