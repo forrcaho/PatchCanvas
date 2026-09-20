@@ -195,4 +195,41 @@ class PatchJsonTest {
         }
         assertNotNull("and the current one still does", patchFromJson(sample().toJson()))
     }
+
+    @Test
+    fun `a patch has a name, saved and undone, and absent until it is given one`() {
+        val patch = demoPatch()
+        assertEquals("Patch", patch.title)
+        assertTrue("nothing in the file until it is named", !patch.toJson().contains("\"name\":\"Patch\""))
+
+        patch.name = "Rhythm study"
+        val json = patch.toJson()
+        assertEquals("Rhythm study", patchFromJson(json)!!.title)
+        assertEquals("and the round trip is byte for byte", json, patchFromJson(json)!!.toJson())
+
+        // Undo restores it through the model, like every other part of a patch.
+        val before = demoPatch().toJson()
+        patch.replaceWith(patchFromJson(before)!!)
+        assertEquals("Patch", patch.title)
+    }
+
+    @Test
+    fun `a new patch is empty, in the default tuning and tempo, and undoes back`() {
+        val patch = demoPatch()
+        patch.name = "Something"
+        patch.tempo = 96f
+        patch.scales = listOf(ScaleEntry(Scale.Chromatic, rootCents = 300f))
+        val before = patch.toJson()
+
+        patch.reset()
+        assertTrue("nothing left but the rails", patch.free.isEmpty())
+        assertTrue(patch.connections.isEmpty())
+        assertEquals("Patch", patch.title)
+        assertEquals(TEMPO.default, patch.tempo)
+        assertEquals(0f, patch.scales.single().rootCents)
+        assertEquals("and the rails are back to their defaults", 1f, patch.module(OUT_ID)!!.params[0])
+
+        patch.replaceWith(patchFromJson(before)!!)
+        assertEquals("undo brings the whole patch back", before, patch.toJson())
+    }
 }

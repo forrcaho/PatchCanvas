@@ -233,6 +233,12 @@ data class Param(
      */
     val short: String = if (name.length <= 4) name else name.take(3),
     /**
+     * Starts the panel's second column, where it would otherwise fall wherever half the rows
+     * do. FM's A: without it the columns split ratio/index/fall/A and D/S/R, which cuts ADSR
+     * in two -- said on the phone, and true of any module whose knobs come in groups.
+     */
+    val newColumn: Boolean = false,
+    /**
      * A degree of the sounding scale, read with the note it is: "-12  C3". For a knob that
      * picks a note, where a bare number said nothing about which -- asked for on the phone
      * about Euclid, 2026-09-19.
@@ -437,6 +443,11 @@ data class ModuleType(
      * Found by tapping it on a screen; nothing else would have.
      */
     val hasPanel: Boolean get() = params.isNotEmpty() || grid != GridKind.NONE
+
+    /**
+     * Which row starts the panel's second column, or -1 to split at half. See [Param.newColumn].
+     */
+    val columnBreak: Int get() = rowParams.indexOfFirst { params[it].newColumn }
 
     /** The parameter choosing a clocked module's interval, or -1 for one the transport does not drive. */
     val intervalParam: Int get() = params.indexOfFirst { it.choice == Choice.DIVISION }
@@ -669,7 +680,7 @@ object Types {
             Param("index", 0f, 10f, 2f, "", LIN, short = "idx"),
             // How fast the brightness dies away on its own, under the envelope's loudness.
             Param("fall", 0.01f, 20f, 1f, "s", EXP),
-            Param("A", 0.001f, 5f, 0.005f, "s", EXP),
+            Param("A", 0.001f, 5f, 0.005f, "s", EXP, newColumn = true),
             Param("D", 0.001f, 5f, 0.3f, "s", EXP),
             Param("S", 0f, 1f, 0.5f, "", LIN),
             Param("R", 0.001f, 10f, 0.4f, "s", EXP),
@@ -775,6 +786,9 @@ const val IN_ID = 2L
 
 /** The patch itself, as a module's parent: not inside any group. */
 const val TOP = 0L
+
+/** What a patch is called until it is named. */
+const val DEFAULT_PATCH_NAME = "Patch"
 private const val FIRST_FREE_ID = 100L
 
 /** Free modules live in world units, and one world unit is one dp. */
@@ -853,9 +867,10 @@ class PatchModule(
     val title: String get() = name ?: type.name
 
     /**
-     * Which SoundFont an SF module plays, by the name the library lists it under; null on
-     * everything else. A name rather than a handle, so the file says what it was saved with
-     * and a patch opened where that font is missing says so rather than guessing.
+     * Which SoundFont an SF module plays, by the name the library lists it under; null until
+     * one is chosen, and on everything else. A name rather than a handle, so the file says
+     * what it was saved with and a patch opened where that font is missing says so rather
+     * than guessing.
      */
     var font by mutableStateOf<String?>(null)
 
@@ -1192,11 +1207,17 @@ internal fun panelRowAt(panel: Rect, d: Float, type: ModuleType, count: Int, slo
     // Past five rows, two columns: the first half down the left, the rest down the right,
     // so reading order is still top to bottom and the parameters' order is kept.
     val columns = if (count > PANEL_ONE_COLUMN) 2 else 1
-    val perColumn = (count + columns - 1) / columns
-    val column = slot / maxOf(perColumn, 1)
-    val within = slot % maxOf(perColumn, 1)
-    val rowHeight = minOf(PatchModule.PANEL_ROW_MAX * d, area.height / maxOf(perColumn, 1))
-    val block = rowHeight * perColumn
+    // Where the second column starts: the module's own break when it has one and all its rows
+    // are here -- a group's panel shows other modules' knobs and has none -- or half of them.
+    val declared = type.columnBreak
+    val first = if (columns == 1) count
+        else if (declared in 1 until count && count == type.rowParams.size) declared
+        else (count + 1) / 2
+    val column = if (slot < first) 0 else 1
+    val within = if (slot < first) slot else slot - first
+    val deepest = maxOf(first, count - first)
+    val rowHeight = minOf(PatchModule.PANEL_ROW_MAX * d, area.height / maxOf(deepest, 1))
+    val block = rowHeight * deepest
     val top = area.top + (area.height - block) / 2f + within * rowHeight
     // The gap between the columns is a gutter as wide as a side one, because it has the
     // same work to do: the left column's [ ] chip and the right column's promote chip both
@@ -1518,7 +1539,14 @@ private fun DrawScope.drawPresetPage(panel: Rect, d: Float, sf: SfView, code: In
     val presets = sf.font?.presets.orEmpty()
     if (presets.isEmpty()) {
         val note = measurer.measure(
-            if (sf.failed) "${sf.fontName} is not a SoundFont this can read" else "Loading ${sf.fontName}\u2026",
+            when {
+                // Nothing ships with the app, so this is the first thing an SF panel says
+                // until a `.sf2` is put where it can find one.
+                sf.fonts.isEmpty() -> "No SoundFonts. Put .sf2 files in ${sf.folder}"
+                sf.fontName == null -> "Choose a bank above"
+                sf.failed -> "${sf.fontName} is not a SoundFont this can read"
+                else -> "Loading ${sf.fontName}\u2026"
+            },
             PanelParamStyle,
         )
         drawText(note, topLeft = page.area.center - Offset(note.size.width / 2f, note.size.height / 2f))
@@ -1664,8 +1692,8 @@ internal fun presetPage(panel: Rect, d: Float, fontCount: Int, fontScale: Float 
     // Two lines of text to a tile, in sp, so the tile grows with the text setting -- the
     // reference device runs at 1.5 (see Frame.fontScale).
     val tileH = PRESET_TILE_H * d * maxOf(1f, fontScale)
-    val strip = if (fontCount > 1) PRESET_STRIP_H * d * maxOf(1f, fontScale) + 6f * d else 0f
-    val fonts = if (fontCount > 1) {
+    val strip = if (fontCount > 0) PRESET_STRIP_H * d * maxOf(1f, fontScale) + 6f * d else 0f
+    val fonts = if (fontCount > 0) {
         val width = minOf(PRESET_TILE_W * d, body.width / fontCount)
         (0 until fontCount).map { i ->
             Rect(Offset(body.left + i * width, body.top), Size(width - 6f * d, strip - 6f * d))
@@ -1693,11 +1721,14 @@ internal const val SF_PRESET = 0
 internal class SfView(
     val menu: Boolean,
     val scroll: Int,
-    val fontName: String,
+    /** The bank this module plays, or null until one is chosen. */
+    val fontName: String?,
     /** Null until the font has loaded, and for good if it could not be read. */
     val font: LoadedFont?,
     val failed: Boolean,
     val fonts: List<String>,
+    /** Where the user's `.sf2` files go, for a panel with none to offer. */
+    val folder: String,
     /** The text setting, which the page's tiles grow with. */
     val fontScale: Float = 1f,
 )
@@ -1952,6 +1983,37 @@ class Patch {
     var beatsPerBar by mutableIntStateOf(BEATS_PER_BAR.default.toInt())
 
     /**
+     * What this patch is called, or null for the default. Shown on the breadcrumb's first
+     * chip -- which is there at the top level now, so the patch has somewhere to be named --
+     * and renamed by holding it, as a group is.
+     */
+    var name by mutableStateOf<String?>(null)
+
+    /** The name to draw, and what a saved file is offered as. */
+    val title: String get() = name ?: DEFAULT_PATCH_NAME
+
+    /**
+     * Everything back to a fresh patch: no modules, no cables, the default tuning, tempo and
+     * name, and the rails as they start. Undoable, like any edit, because it goes through the
+     * model and the autosave records it.
+     */
+    fun reset() {
+        Snapshot.withMutableSnapshot {
+            scope = TOP
+            modules.forEach { it.expanded = false }
+            connections.clear()
+            modules.removeAll { it.id != OUT_ID && it.id != IN_ID }
+            pinned.forEach { rail ->
+                rail.type.params.forEachIndexed { index, param -> rail.setParam(index, param.default) }
+            }
+            scales = listOf(ScaleEntry(Scale.Chromatic))
+            tempo = TEMPO.default
+            beatsPerBar = BEATS_PER_BAR.default.toInt()
+            name = null
+        }
+    }
+
+    /**
      * Modules to pulse, after an undo moved something you were not looking at.
      *
      * View state, like the camera and the open panel: never serialized, invisible to the
@@ -2023,9 +2085,6 @@ class Patch {
         if (type.pinned != null || type.structural) return null
         return PatchModule(nextId++, type, at).also {
             it.parent = scopeOrTop
-            // Said outright rather than left null to mean "the default", so a patch keeps
-            // the font it was made with if the bundled one ever changes.
-            if (type == Types.Sf) it.font = DEFAULT_SOUNDFONT
             modules.add(it)
         }
     }
@@ -2410,6 +2469,40 @@ class Patch {
         }
     }
 
+/**
+     * Drops every group port that nothing is plugged into on either side.
+     *
+     * A group's ports are stored rather than derived so that unplugging one leaves the jack
+     * to plug back into. That is right for a port with a cable on its other side and wrong
+     * for one with none: Forrest made a second output by mistake on 2026-09-19, dragged the
+     * cable to the port he meant, and the empty one stayed -- nothing about it said it was
+     * unused, and the only way out was a long press he had no reason to guess at. A port
+     * that has nothing on either side is one nobody is in the middle of using.
+     *
+     * Swept after a cable is removed rather than checked when one is: a port is made and
+     * then patched, and a sweep between those two would take it away again.
+     */
+    fun sweepUnusedGroupPorts() {
+        modules.filter { it.type == Types.Group }.forEach { group ->
+            val ports = group.groupPorts ?: return@forEach
+            forEachGroupRail(group.id) { dir, rail, railDir ->
+                val list = if (dir == PortDirection.INPUT) ports.inputs else ports.outputs
+                // Highest first: removing one renumbers those after it.
+                for (index in list.indices.reversed()) {
+                    val inside = connections.any { c ->
+                        val end = if (dir == PortDirection.INPUT) c.from else c.to
+                        end.moduleId == rail.id && end.dir == railDir && end.index == index
+                    }
+                    val outside = connections.any { c ->
+                        val end = if (dir == PortDirection.INPUT) c.to else c.from
+                        end.moduleId == group.id && end.dir == dir && end.index == index
+                    }
+                    if (!inside && !outside) removeGroupPort(group, dir, index)
+                }
+            }
+        }
+    }
+
     /** Each of a group's two rails, with the direction of the box's ports it stands for. */
     private inline fun forEachGroupRail(
         groupId: Long,
@@ -2543,7 +2636,9 @@ class Patch {
 
         if (kindOf(inp) == SignalKind.NOTE) {
             val cable = Connection(out, inp)
-            if (!connections.remove(cable)) connections.add(cable)
+            // Patching a pair already patched takes that cable back, which can leave a group
+            // port with nothing on either side.
+            if (connections.remove(cable)) sweepUnusedGroupPorts() else connections.add(cable)
             return true
         }
         connections.removeAll { it.to == inp }
@@ -2553,6 +2648,7 @@ class Patch {
 
     fun disconnect(ref: PortRef) {
         connections.removeAll { it.from == ref || it.to == ref }
+        sweepUnusedGroupPorts()
     }
 }
 
@@ -2631,6 +2727,9 @@ sealed interface MenuItem {
     /** Takes a port off a group, from the box outside or the rail inside. */
     data class RemovePort(val groupId: Long, val dir: PortDirection, val index: Int) : MenuItem
 
+    /** Everything away, back to an empty patch. Undo puts it back, like any other edit. */
+    data object NewPatch : MenuItem
+
     /** Writes a group to the library. Null is the whole patch, saved as one group. */
     data class Save(val moduleId: Long?) : MenuItem
 
@@ -2680,7 +2779,11 @@ private fun menuItems(
         MenuItem.StartGroup + MenuItem.OpenLibrary +
         // Saving the patch belongs here rather than on a module: it is about all of them,
         // and the empty canvas is the only thing that stands for the patch as a whole.
-        listOfNotNull(MenuItem.Save(null).takeIf { patch.free.any { m -> m.parent == TOP } })
+        listOfNotNull(
+            MenuItem.Save(null).takeIf { patch.free.any { m -> m.parent == TOP } },
+            // Next to Save, and only when there is something to clear.
+            MenuItem.NewPatch.takeIf { patch.free.isNotEmpty() },
+        )
     patch.module(targetId)?.type == Types.Group -> listOfNotNull(
         MenuItem.Duplicate(targetId),
         // Only when it has any: an empty panel would be a door onto nothing, and the way
@@ -2733,7 +2836,9 @@ internal fun Patch.groupPortSlotHit(frame: Frame, source: PortRef, screen: Offse
  * until it quietly is not.
  */
 internal fun Patch.breadcrumbAt(frame: Frame, screen: Offset): Long? {
-    if (scopeOrTop == TOP || modules.any { it.expanded }) return null
+    // At the top level the bar is one chip, the patch's own: it is where the patch is named,
+    // which it had nowhere to be before.
+    if (modules.any { it.expanded }) return null
     scopePath().forEachIndexed { level, id ->
         if (frame.breadcrumbChip(level).contains(screen)) return id
     }
@@ -3557,8 +3662,8 @@ fun PatchCanvas(
                             // read before anything is chosen, and only a tap chooses.
                             if (open.type == Types.Sf && !onHistory) {
                                 val d = frame.density
-                                val fontName = open.font ?: DEFAULT_SOUNDFONT
-                                val loadedFont = soundFonts?.loaded?.get(fontName)
+                                val fontName = open.font
+                                val loadedFont = fontName?.let { soundFonts?.loaded?.get(it) }
                                 val presets = loadedFont?.presets.orEmpty()
                                 val page = presetPage(panel, d, fontNames.size, frame.fontScale)
                                 if (presetMenu) {
@@ -3882,10 +3987,10 @@ fun PatchCanvas(
                                     // a press anywhere else on it means.
                                     Interaction.Menu(down.position, hitModule?.id, heldPort)
                                 } else if (crumb != null) {
-                                    // Holding a crumb renames that group -- the way to name the
-                                    // one you are inside, whose box is a level up and not on
-                                    // screen. "Patch" is not a group and has no name to give.
-                                    if (crumb == TOP) Interaction.Idle else Interaction.Renaming(crumb)
+                                    // Holding a crumb renames what it names -- the group you are
+                                    // inside, whose box is a level up and not on screen, or at
+                                    // the top of the path the patch itself.
+                                    Interaction.Renaming(crumb)
                                 } else if (hitModule != null && hitModule.isPinned) {
                                     if (hitModule.type.hasPanel) {
                                         patch.modules.forEach { it.expanded = false }
@@ -4100,11 +4205,13 @@ fun PatchCanvas(
 
             patch.modules.firstOrNull { it.expanded }?.let { open ->
                 val sfView = if (open.type == Types.Sf) {
-                    val name = open.font ?: DEFAULT_SOUNDFONT
+                    val name = open.font
                     SfView(
                         menu = presetMenu, scroll = presetScroll, fontName = name,
-                        font = soundFonts?.loaded?.get(name), failed = soundFonts?.failed(name) == true,
-                        fonts = fontNames, fontScale = frame.fontScale,
+                        font = name?.let { soundFonts?.loaded?.get(it) },
+                        failed = name != null && soundFonts?.failed(name) == true,
+                        fonts = fontNames, folder = soundFonts?.folder().orEmpty(),
+                        fontScale = frame.fontScale,
                     )
                 } else {
                     null
@@ -4134,12 +4241,12 @@ fun PatchCanvas(
             // Not over an open panel: its header is where the chips would land, the "Osc" of
             // an Osc panel was the thing they covered on the emulator, and a panel's taps go to
             // its own loop, so the breadcrumb would be a picture of a control that did nothing.
-            if (patch.scopeOrTop != TOP && patch.modules.none { it.expanded }) {
+            if (patch.modules.none { it.expanded }) {
                 val path = patch.scopePath()
                 path.forEachIndexed { level, id ->
                     drawChip(
                         frame.breadcrumbChip(level), d,
-                        if (id == TOP) "Patch" else patch.module(id)?.title ?: "Group",
+                        if (id == TOP) patch.title else patch.module(id)?.title ?: "Group",
                         open = id == path.last(),
                         accent = Types.Group.accent,
                         measurer = screenMeasurer,
@@ -4180,8 +4287,17 @@ fun PatchCanvas(
         // get an IME, a cursor and autocorrect, so naming puts a composable over the canvas
         // instead of another shape inside it. Nothing else lives up here.
         (interaction as? Interaction.Renaming)?.let { renaming ->
-            patch.module(renaming.moduleId)?.let { module ->
-                RenameOverlay(module) { interaction = Interaction.Idle }
+            val module = patch.module(renaming.moduleId)
+            if (renaming.moduleId == TOP) {
+                // The patch itself, from the first crumb. A name equal to the default is no
+                // name, as a module's own type name is no name.
+                RenameOverlay(TOP, patch.title, Types.Group.accent, {
+                    patch.name = it?.takeIf { name -> name != DEFAULT_PATCH_NAME }
+                }) { interaction = Interaction.Idle }
+            } else if (module != null) {
+                RenameOverlay(module.id, module.title, module.type.accent, {
+                    module.name = it?.takeIf { name -> name != module.type.name }
+                }) { interaction = Interaction.Idle }
             }
         }
         (interaction as? Interaction.Typing)?.let { typing ->
@@ -4190,7 +4306,7 @@ fun PatchCanvas(
         (interaction as? Interaction.Saving)?.let { saving ->
             val group = saving.moduleId?.let { patch.module(it) }
             SaveOverlay(
-                initial = group?.title ?: "Patch",
+                initial = group?.title ?: patch.title,
                 library = library,
                 // Built when the name is known, since saving the whole patch names the group
                 // it makes on the way out.
@@ -4216,17 +4332,23 @@ fun PatchCanvas(
  * cancel this app has everywhere else, and a name is one step of it.
  */
 @Composable
-private fun RenameOverlay(module: PatchModule, onDone: () -> Unit) {
-    val initial = module.title
-    var text by remember(module.id) {
+private fun RenameOverlay(
+    /** What is being renamed, so the field resets when it changes: a module's id, or the patch. */
+    key: Any,
+    initial: String,
+    accent: Color,
+    /** The trimmed name, or null for "use the default". */
+    onName: (String?) -> Unit,
+    onDone: () -> Unit,
+) {
+    var text by remember(key) {
         mutableStateOf(TextFieldValue(initial, TextRange(0, initial.length)))
     }
     val focus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
 
     fun commit() {
-        val trimmed = text.text.trim()
-        module.name = trimmed.takeIf { it.isNotEmpty() && it != module.type.name }
+        onName(text.text.trim().takeIf { it.isNotEmpty() })
         keyboard?.hide()
         onDone()
     }
@@ -4235,7 +4357,7 @@ private fun RenameOverlay(module: PatchModule, onDone: () -> Unit) {
         Modifier
             .fillMaxSize()
             .background(Color(0x99000000))
-            .pointerInput(module.id) { detectTapGestures { commit() } },
+            .pointerInput(key) { detectTapGestures { commit() } },
         contentAlignment = Alignment.TopCenter,
     ) {
         Box(
@@ -4244,7 +4366,7 @@ private fun RenameOverlay(module: PatchModule, onDone: () -> Unit) {
                 .padding(top = 72.dp, start = 24.dp, end = 24.dp)
                 .widthIn(max = 360.dp)
                 .background(Color(0xFF1B1F26), RoundedCornerShape(12.dp))
-                .border(2.dp, module.type.accent.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
+                .border(2.dp, accent.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
                 .padding(horizontal = 16.dp, vertical = 14.dp)
                 // Swallows taps on the card itself, which would otherwise reach the scrim
                 // behind it and commit halfway through an edit.
@@ -4259,7 +4381,7 @@ private fun RenameOverlay(module: PatchModule, onDone: () -> Unit) {
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Medium,
                 ),
-                cursorBrush = SolidColor(module.type.accent),
+                cursorBrush = SolidColor(accent),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { commit() }),
                 modifier = Modifier
@@ -4269,7 +4391,7 @@ private fun RenameOverlay(module: PatchModule, onDone: () -> Unit) {
         }
     }
 
-    LaunchedEffect(module.id) {
+    LaunchedEffect(key) {
         focus.requestFocus()
         keyboard?.show()
     }
@@ -5740,6 +5862,7 @@ private fun handleTap(
                     world - Offset(PatchModule.WIDTH / 2f, PatchModule.heightFor(Types.Group) / 2f),
                 )
             }
+            is MenuItem.NewPatch -> patch.reset()
             is MenuItem.LibraryEmpty -> Unit
             is MenuItem.RemovePort -> patch.module(chosen.groupId)?.let {
                 patch.removeGroupPort(it, chosen.dir, chosen.index)
@@ -6018,6 +6141,7 @@ private fun MenuItem.label(): String = when (this) {
     is MenuItem.Rename -> "Rename\u2026"
     is MenuItem.Knobs -> "Knobs\u2026"
     is MenuItem.RemovePort -> "Remove port"
+    is MenuItem.NewPatch -> "New patch"
     is MenuItem.Save -> if (moduleId == null) "Save patch\u2026" else "Save\u2026"
     is MenuItem.OpenLibrary -> "Load\u2026"
     is MenuItem.Load -> name
@@ -6032,6 +6156,7 @@ private fun MenuItem.tint(): Color = when (this) {
     is MenuItem.Duplicate, is MenuItem.Rename -> Color(0xFF8A93A3)
     is MenuItem.Knobs -> Types.Group.accent
     is MenuItem.RemovePort -> Color(0xFFE07A6B)
+    is MenuItem.NewPatch -> Color(0xFFE07A6B)
     is MenuItem.Save, is MenuItem.OpenLibrary, is MenuItem.Load -> Types.Group.accent
     is MenuItem.LibraryEmpty -> Color(0xFF6C7482)
     is MenuItem.Delete -> Color(0xFFE07A6B)
@@ -6449,6 +6574,7 @@ private fun DrawScope.drawPanel(
     if (sf != null) {
         val code = module.params.getOrElse(SF_PRESET) { 0f }.roundToInt()
         val label = when {
+            sf.fontName == null -> "Choose a bank\u2026"
             sf.font != null -> sf.font.presetFor(code)?.name ?: "Not in ${sf.fontName}"
             sf.failed -> "Can't read ${sf.fontName}"
             else -> "Loading ${sf.fontName}\u2026"

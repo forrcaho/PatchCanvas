@@ -39,13 +39,30 @@ not a redundancy. The Compose compiler is applied as
 
 `rememberDemoPatch()` supplies the starting patch — five modules, five cables.
 
+## Tunings and SoundFonts
+
+Both are files you put on the device, in the app's own folder on external storage --
+`Android/data/io.github.forrcaho.patchcanvas/files/` -- which is reachable over USB or
+from a file manager.
+
+| Folder | What goes in it |
+| --- | --- |
+| `scales/` | Scala `.scl` tunings. The bundled ones are seeded here on first run; add your own beside them. |
+| `soundfonts/` | SoundFont `.sf2` banks for the **SF** module. Nothing ships with the app. |
+| `groups/` | Groups saved from the app, each a patch file holding one group. |
+
+A good free bank to start with is [GeneralUser GS](https://www.schristiancollins.com/generaluser)
+by S. Christian Collins -- 32MB, 261 instruments and 13 drum kits, and its license allows
+use in any project. Download it, unzip it, and copy `GeneralUser-GS.sf2` into `soundfonts/`;
+the SF module lists it by its file name. SF3 (compressed) banks are not supported.
+
 ## License
 
 MIT -- see [LICENSE](LICENSE).
 
-Planned dependencies are permissively licensed and compatible: Oboe (Apache-2.0)
-and the DaisySP core (MIT, which itself bundles the Plaits and Soundpipe MIT
-notices). The `DaisySP-LGPL` submodule is deliberately *not* used -- clone DaisySP
+Planned dependencies are permissively licensed and compatible: Oboe (Apache-2.0),
+the DaisySP core (MIT, which itself bundles the Plaits and Soundpipe MIT notices)
+and TinySoundFont (MIT). The `DaisySP-LGPL` submodule is deliberately *not* used -- clone DaisySP
 without `--recursive` -- so nothing here carries a copyleft relinking obligation.
 Shipping those notices in an in-app licenses screen is a release requirement, not
 a courtesy.

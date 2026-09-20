@@ -313,6 +313,27 @@ class ModulationPanelTest {
         }
     }
 
+    /** FM asked for it: ADSR belongs together, so A starts the second column. */
+    @Test
+    fun `a module can say where its second column starts`() {
+        val rows = Types.Fm.rowParams
+        assertEquals("A starts it", "A", Types.Fm.params[rows[Types.Fm.columnBreak]].name)
+        val rects = rows.indices.map { panelRowAt(panel, d, Types.Fm, rows.size, it) }
+        val left = rects.filter { it.left == rects[0].left }
+        assertEquals("ratio, index and fall on the left", 3, left.size)
+        assertEquals("and ADSR on the right", 4, rects.size - left.size)
+        rows.indices.forEach { slot ->
+            val name = Types.Fm.params[rows[slot]].name
+            val onLeft = rects[slot].left == rects[0].left
+            assertEquals("$name is in the column it belongs to", name in listOf("ratio", "index", "fall"), onLeft)
+        }
+        assertTrue("both columns keep a finger's height", rects.all { it.height >= 60f * d })
+
+        // A module with no break splits at half, as every one did before.
+        val eight = (0 until MAX_PARAMS).map { panelRowAt(panel, d, Types.Mix, MAX_PARAMS, it) }
+        assertEquals(4, eight.count { it.left == eight[0].left })
+    }
+
     @Test
     fun `five rows or fewer stay in one column, as they were`() {
         (1..PANEL_ONE_COLUMN).forEach { count ->

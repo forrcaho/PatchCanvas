@@ -4,6 +4,7 @@ import androidx.compose.ui.geometry.Offset
 import java.io.File
 import java.util.Locale
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -1140,16 +1141,30 @@ class SoundFontSyncTest {
     private val bank = 0x5F0L
     private val other = 0x6F0L
 
+    private val chosen = "A Bank"
+
+    /** An SF with a bank chosen, as the panel's page sets it. */
     private fun sfPatch(): Pair<Patch, PatchModule> {
         val patch = Patch()
         val sf = patch.add(Types.Sf, Offset.Zero)!!
+        sf.font = chosen
         return patch to sf
     }
 
     @Test
-    fun `a new SF plays the default bank, and is sent it once it has loaded`() {
+    fun `an SF with no bank is sent nothing at all`() {
+        val patch = Patch()
+        val sf = patch.add(Types.Sf, Offset.Zero)!!
+        assertNull("a new SF has no bank: none ship with the app", sf.font)
+        val rec = Recorder()
+        GraphSync(rec).sync(patch, mapOf(chosen to bank))
+        assertTrue(rec.log.any { it == Cmd.Add(sf.id, NodeType.Sf) })
+        assertTrue("and nothing to play it with", rec.log.none { it is Cmd.SetFont })
+    }
+
+    @Test
+    fun `an SF is sent its bank once that has loaded`() {
         val (patch, sf) = sfPatch()
-        assertEquals(DEFAULT_SOUNDFONT, sf.font)
 
         val rec = Recorder()
         val sync = GraphSync(rec)
@@ -1157,11 +1172,11 @@ class SoundFontSyncTest {
         assertTrue("nothing to send while the font loads", rec.log.none { it is Cmd.SetFont })
 
         rec.log.clear()
-        sync.sync(patch, mapOf(DEFAULT_SOUNDFONT to bank))
+        sync.sync(patch, mapOf(chosen to bank))
         assertEquals(listOf(Cmd.SetFont(sf.id, bank)), rec.log.filterIsInstance<Cmd.SetFont>())
 
         rec.log.clear()
-        sync.sync(patch, mapOf(DEFAULT_SOUNDFONT to bank))
+        sync.sync(patch, mapOf(chosen to bank))
         assertTrue("and not again", rec.log.isEmpty())
     }
 
@@ -1169,7 +1184,7 @@ class SoundFontSyncTest {
     fun `a font already loaded goes with the node that is added`() {
         val (patch, sf) = sfPatch()
         val rec = Recorder()
-        GraphSync(rec).sync(patch, mapOf(DEFAULT_SOUNDFONT to bank))
+        GraphSync(rec).sync(patch, mapOf(chosen to bank))
         val add = rec.log.indexOf(Cmd.Add(sf.id, NodeType.Sf))
         val font = rec.log.indexOf(Cmd.SetFont(sf.id, bank))
         assertTrue("added, then given its font", add >= 0 && font > add)
@@ -1180,7 +1195,7 @@ class SoundFontSyncTest {
         val (patch, sf) = sfPatch()
         val rec = Recorder()
         val sync = GraphSync(rec)
-        val fonts = mapOf(DEFAULT_SOUNDFONT to bank, "Other" to other)
+        val fonts = mapOf(chosen to bank, "Other" to other)
         sync.sync(patch, fonts)
 
         rec.log.clear()
@@ -1199,7 +1214,7 @@ class SoundFontSyncTest {
     fun `nothing but an SF is sent a font`() {
         val patch = demoPatch()
         val rec = Recorder()
-        GraphSync(rec).sync(patch, mapOf(DEFAULT_SOUNDFONT to bank))
+        GraphSync(rec).sync(patch, mapOf(chosen to bank))
         assertTrue(rec.log.none { it is Cmd.SetFont })
     }
 }

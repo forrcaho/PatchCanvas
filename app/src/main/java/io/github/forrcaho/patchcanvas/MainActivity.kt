@@ -195,11 +195,11 @@ class MainActivity : ComponentActivity() {
                 .collect { graphSync.sync(patch, soundFonts.handles()) }
         }
 
-        // Fonts load when a module wants one, not at launch: GeneralUser GS is seconds of
-        // parsing and 60MB of memory, and a patch with no SF module should pay neither.
+        // Fonts load when a module names one: parsing a bank is seconds and tens of MB, and a
+        // patch with no SF module should pay neither.
         scope.launch {
             snapshotFlow {
-                patch.modules.filter { it.type == Types.Sf }.map { it.font ?: DEFAULT_SOUNDFONT }.toSet()
+                patch.modules.filter { it.type == Types.Sf }.mapNotNull { it.font }.toSet()
             }
                 .distinctUntilChanged()
                 .collect { names -> names.forEach { launch { soundFonts.ensure(it) } } }

@@ -75,7 +75,7 @@ being edited out from under it.
 | `PatchCanvas.kt` | model, camera, gestures, drawing, panel — the bulk of the UI |
 | `GraphSync.kt` | the diff, `NodeType` mirror, `GraphCommands` seam for tests |
 | `PatchStore.kt` | JSON persistence, hand-rolled on `org.json` |
-| `SoundFontStore.kt` | the fonts: the shipped bank in assets, the user's in `soundfonts`, loaded on demand |
+| `SoundFontStore.kt` | the user's `.sf2` banks in `soundfonts`, loaded on demand |
 | `GroupStore.kt` | the group library: a saved group is a patch file holding one group |
 | `History.kt` | undo as a stack of serialized patches, plus `Patch.replaceWith` |
 | `Scale.kt` | the tuning model: degrees in octaves, with a period |

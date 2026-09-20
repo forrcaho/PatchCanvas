@@ -10,7 +10,7 @@
 #include <vector>
 #include <cstdio>
 #include <initializer_list>
-#include <fstream>
+#include <functional>
 #include <iterator>
 #include <memory>
 
@@ -1282,65 +1282,151 @@ void fmBrightnessFallsFasterThanLoudness() {
 }
 
 /**
- * The bank the app ships, loaded once for every SF test: parsing it is most of a second
- * under the sanitizers. Null if the file is not where the build keeps it.
+ * A SoundFont made here: one preset, one instrument, one looping sine.
+ *
+ * The app shipped GeneralUser GS until 2026-09-19 and these tests loaded it out of the
+ * assets; it is the user's to install now, so the tests carry their own bank instead. A
+ * made one is better for them anyway: 250Hz exactly (192 samples at 48kHz, so the loop is
+ * seamless) at key 60, where a real bank's presets are each tuned however their sampler
+ * felt -- GeneralUser's piano is 12 cents sharp at C5 and its organs sound an octave down.
+ * What these tests measure is the node's tuning, so the bank's own must be exact.
+ *
+ * Little-endian, as SF2 is and as every machine this builds on is.
  */
-const SoundFont *shippedBank() {
+std::vector<char> sineBank() {
+    std::vector<char> out;
+    auto u8 = [&](int v) { out.push_back(static_cast<char>(v & 0xFF)); };
+    auto u16 = [&](int v) { u8(v); u8(v >> 8); };
+    auto u32 = [&](uint32_t v) { u8(static_cast<int>(v)); u8(static_cast<int>(v >> 8)); u8(static_cast<int>(v >> 16)); u8(static_cast<int>(v >> 24)); };
+    auto tag = [&](const char *t) { for (int i = 0; i < 4; ++i) u8(t[i]); };
+    auto name20 = [&](const char *n) {
+        int i = 0;
+        for (; i < 20 && n[i] != 0; ++i) u8(n[i]);
+        for (; i < 20; ++i) u8(0);
+    };
+    // A chunk whose size is filled in once its body is written.
+    auto chunk = [&](const char *t, const std::function<void()> &body) {
+        tag(t);
+        const std::size_t at = out.size();
+        u32(0);
+        body();
+        const uint32_t size = static_cast<uint32_t>(out.size() - at - 4);
+        for (int i = 0; i < 4; ++i) out[at + i] = static_cast<char>((size >> (8 * i)) & 0xFF);
+    };
+
+    // 192 samples is 250Hz at 48kHz; eight cycles, looped whole.
+    constexpr int32_t kCycle = 192;
+    constexpr int32_t kCycles = 8;
+    constexpr int32_t kSamples = kCycle * kCycles;
+
+    tag("RIFF");
+    const std::size_t riffSize = out.size();
+    u32(0);
+    tag("sfbk");
+
+    chunk("LIST", [&] {
+        tag("INFO");
+        chunk("ifil", [&] { u16(2); u16(1); });
+        chunk("isng", [&] { name20("EMU8000"); });
+        chunk("INAM", [&] { name20("Sine"); });
+    });
+    chunk("LIST", [&] {
+        tag("sdta");
+        chunk("smpl", [&] {
+            for (int32_t i = 0; i < kSamples; ++i) {
+                const double phase = 2.0 * M_PI * (i % kCycle) / kCycle;
+                u16(static_cast<int>(std::lround(std::sin(phase) * 16000.0)) & 0xFFFF);
+            }
+            // The 46 zero samples SF2 requires after each sample.
+            for (int32_t i = 0; i < 46; ++i) u16(0);
+        });
+    });
+    chunk("LIST", [&] {
+        tag("pdta");
+        chunk("phdr", [&] {
+            name20("Sine"); u16(0); u16(0); u16(0); u32(0); u32(0); u32(0);   // preset 0, bank 0
+            name20("EOP"); u16(0); u16(0); u16(1); u32(0); u32(0); u32(0);    // terminal
+        });
+        chunk("pbag", [&] { u16(0); u16(0); u16(1); u16(0); });
+        chunk("pmod", [&] { for (int i = 0; i < 10; ++i) u8(0); });
+        chunk("pgen", [&] {
+            u16(41); u16(0);   // instrument 0
+            u16(0); u16(0);    // terminal
+        });
+        chunk("inst", [&] {
+            name20("SineI"); u16(0);
+            name20("EOI"); u16(1);
+        });
+        chunk("ibag", [&] { u16(0); u16(0); u16(3); u16(0); });
+        chunk("imod", [&] { for (int i = 0; i < 10; ++i) u8(0); });
+        chunk("igen", [&] {
+            u16(43); u8(0); u8(127);   // key range, every key
+            u16(54); u16(1);           // sample modes: loop continuously
+            u16(53); u16(0);           // sample 0
+            u16(0); u16(0);            // terminal
+        });
+        chunk("shdr", [&] {
+            name20("SineS");
+            u32(0); u32(kSamples); u32(0); u32(kSamples);   // start, end, loop start, loop end
+            u32(48000);
+            u8(60); u8(0);            // key 60 plays it at its own rate; no correction
+            u16(0); u16(1);           // no link, mono
+            name20("EOS");
+            u32(0); u32(0); u32(0); u32(0); u32(0); u8(0); u8(0); u16(0); u16(0);
+        });
+    });
+
+    const uint32_t size = static_cast<uint32_t>(out.size() - riffSize - 4);
+    for (int i = 0; i < 4; ++i) out[riffSize + i] = static_cast<char>((size >> (8 * i)) & 0xFF);
+    return out;
+}
+
+/** What a note at key 60 sounds as in the made bank: 192 samples a cycle at 48kHz. */
+constexpr float kBankHz = 250.0f;
+
+/** The made bank, parsed once. */
+const SoundFont *testBank() {
     static std::unique_ptr<SoundFont> bank = [] {
-        std::ifstream in("src/main/assets/soundfonts/GeneralUser GS.sf2", std::ios::binary);
-        std::vector<char> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        return std::unique_ptr<SoundFont>(
-                bytes.empty() ? nullptr : SoundFont::load(bytes.data(), static_cast<int32_t>(bytes.size())));
+        const std::vector<char> bytes = sineBank();
+        return std::unique_ptr<SoundFont>(SoundFont::load(bytes.data(), static_cast<int32_t>(bytes.size())));
     }();
     return bank.get();
 }
 
-/** An SF node playing [program] of bank 0 from the shipped bank. */
+/** An SF node playing [program] of bank 0 from the made bank. */
 void readySf(SfNode &sf, int32_t program) {
     sf.prepare(kRate);
     sf.setParam(0, static_cast<float>(program));
-    Resource *none = sf.swapResource(new SoundFontSynth(*shippedBank()));
+    Resource *none = sf.swapResource(new SoundFontSynth(*testBank()));
     check(none == nullptr, "a fresh node had no synth to give back");
 }
 
-/**
- * GM 81, the sawtooth lead, for anything measuring pitch. A bank's presets are not all in
- * tune with themselves -- in GeneralUser GS the piano is stretched 12 cents sharp at C5 and
- * the flute 6 -- and this one is within half a cent at both Cs, so what a test finds wrong is
- * the node's and not the bank's. The flute was tried first and read 5 cents flat.
- */
-constexpr int32_t kLead = 81;
-
-void theShippedBankLoadsWithItsPresets() {
-    std::printf("the shipped bank loads, with its presets\n");
-    const SoundFont *bank = shippedBank();
-    check(bank != nullptr, "GeneralUser GS parses");
+void theMadeBankLoadsWithItsPreset() {
+    std::printf("the made bank loads, with its preset\n");
+    const SoundFont *bank = testBank();
+    check(bank != nullptr, "it parses");
     if (bank == nullptr) return;
-    check(bank->presetCount() > 200, "with its instruments, " + std::to_string(bank->presetCount()));
-    bool piano = false, drums = false;
-    for (int32_t i = 0; i < bank->presetCount(); ++i) {
-        if (bank->presetBank(i) == 0 && bank->presetProgram(i) == 0) piano = true;
-        if (bank->presetBank(i) == 128) drums = true;
-    }
-    check(piano, "program 0 of bank 0 is there, which is what a new SF plays");
-    check(drums, "and the drum kits, in bank 128");
+    check(bank->presetCount() == 1, "one preset, " + std::to_string(bank->presetCount()));
+    check(bank->presetBank(0) == 0 && bank->presetProgram(0) == 0,
+          "bank 0 program 0, which is what a new SF plays");
+    check(std::string(bank->presetName(0)) == "Sine", "named");
     const char junk[] = "RIFF....not a soundfont";
     check(SoundFont::load(junk, sizeof(junk)) == nullptr, "and anything else is refused");
 }
 
 void anSfPlaysItsNoteInTune() {
     std::printf("an sf plays its note in tune, a quarter tone included\n");
-    if (shippedBank() == nullptr) return;
+    if (testBank() == nullptr) return;
     const float cents[2] = {0.0f, 50.0f};
     for (float c : cents) {
         SfNode sf;
-        readySf(sf, kLead);
+        readySf(sf, 0);
         NoteEvent note = noteOn(1, 12); // an octave above middle C
         note.cents = c;
         play(sf, note);
         voiceIdle(sf, 100); // past the attack
         const auto tone = voiceIdle(sf, 300);
-        const float wanted = 2.0f * kMiddleC * std::exp2(c / 1200.0f);
+        const float wanted = 2.0f * kBankHz * std::exp2(c / 1200.0f);
         const float heard = pitchOf(tone);
         // A quarter tone is between two keys, so this is the channel's tuning at work: the
         // path every non-12 scale takes.
@@ -1352,16 +1438,16 @@ void anSfPlaysItsNoteInTune() {
 
 void anSfGlidesAndLetsGo() {
     std::printf("an sf glides a held note, and lets it go\n");
-    if (shippedBank() == nullptr) return;
+    if (testBank() == nullptr) return;
     SfNode sf;
-    readySf(sf, kLead);
+    readySf(sf, 0);
     play(sf, noteOn(1, 12));
     voiceIdle(sf, 100);
     NoteEvent move = noteOn(1, 16);
     move.kind = NoteKind::Change;
     play(sf, move);
     voiceIdle(sf, 100); // well past the 30ms glide
-    const float wanted = 2.0f * kMiddleC * std::exp2(4.0f / 12.0f);
+    const float wanted = 2.0f * kBankHz * std::exp2(4.0f / 12.0f);
     const float heard = pitchOf(voiceIdle(sf, 300));
     check(std::fabs(1200.0f * std::log2(heard / wanted)) < 5.0f,
           "a Change moves it to " + std::to_string(wanted) + "Hz, heard " + std::to_string(heard));
@@ -1376,27 +1462,27 @@ void anSfWithoutItsFontIsSilent() {
     std::printf("an sf without its font is silent, and takes one later\n");
     SfNode sf;
     sf.prepare(kRate);
-    sf.setParam(0, static_cast<float>(kLead));
+    sf.setParam(0, static_cast<float>(0));
     play(sf, noteOn(1, 12));
     check(peak(voiceIdle(sf, 20)) == 0.0f, "silent while the font loads");
-    if (shippedBank() == nullptr) return;
+    if (testBank() == nullptr) return;
 
     // The note it was sent before its font is struck when the font arrives: a drone's
     // chord is sent once, and a node that dropped it would stay silent until retoggled.
-    delete sf.swapResource(new SoundFontSynth(*shippedBank()));
+    delete sf.swapResource(new SoundFontSynth(*testBank()));
     voiceIdle(sf, 100);
     const float heard = pitchOf(voiceIdle(sf, 300));
-    check(std::fabs(1200.0f * std::log2(heard / (2.0f * kMiddleC))) < 5.0f,
+    check(std::fabs(1200.0f * std::log2(heard / (2.0f * kBankHz))) < 5.0f,
           "a note held before the font sounds once it lands, heard " + std::to_string(heard));
     play(sf, noteOff(1));
     voiceIdle(sf, 3 * kRate / kBlockSize);
     // Swapping in a synth hands back the one it replaces, for the graph to free off the
     // audio thread. Under ASan a dropped one is a leak, and a double free a crash.
-    delete sf.swapResource(new SoundFontSynth(*shippedBank()));
-    Resource *old = sf.swapResource(new SoundFontSynth(*shippedBank()));
+    delete sf.swapResource(new SoundFontSynth(*testBank()));
+    Resource *old = sf.swapResource(new SoundFontSynth(*testBank()));
     check(old != nullptr, "a second synth gives the first back");
     delete old;
-    sf.setParam(0, static_cast<float>(kLead));
+    sf.setParam(0, static_cast<float>(0));
     play(sf, noteOn(2, 0));
     check(peak(voiceIdle(sf, 200)) > 0.05f, "and sounds once it has one");
 }
@@ -1916,7 +2002,7 @@ int main() {
     fmWithNoIndexIsASine();
     fmIndexAndRatioPlaceTheSidebands();
     fmBrightnessFallsFasterThanLoudness();
-    theShippedBankLoadsWithItsPresets();
+    theMadeBankLoadsWithItsPreset();
     anSfPlaysItsNoteInTune();
     anSfGlidesAndLetsGo();
     anSfWithoutItsFontIsSilent();

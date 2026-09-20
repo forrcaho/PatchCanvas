@@ -136,6 +136,7 @@ fun Patch.replaceWith(source: Patch): Set<Long> {
         scales = source.scales
         tempo = source.tempo
         beatsPerBar = source.beatsPerBar
+        name = source.name
 
         // Null if the snapshot predates the module, in which case there is nothing left
         // to have open and the panel closing is the right answer.

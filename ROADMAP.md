@@ -2182,7 +2182,14 @@ decision already taken for FM on 2026-09-15.
 fit. The landscape panel is about 980dp wide, so a half-width bar is still long enough to
 set finely, and nothing is hidden behind a chip. `kMaxParams` rises from 5 to 8 with it.
 
-**The app ships GeneralUser GS**, S. Christian Collins' GM bank, whole: 29.8MB, 259
+**The app shipped GeneralUser GS for a day**, and stopped on 2026-09-19: 32MB of the
+download for a file anyone who wants an SF module can fetch, and the README says where. An
+SF module starts with no bank and asks for one; the tests carry a SoundFont they build
+themselves, which is better for them than a real bank whose presets are each tuned however
+their sampler felt. What follows is why that bank was the one, and holds if one is ever
+bundled again.
+
+**The bank was GeneralUser GS**, S. Christian Collins' GM bank, whole: 29.8MB, 259
 presets and 11 kits, under a custom license that explicitly allows bundling in free
 software, modified or not. Chosen 2026-09-18 over the alternatives that turned up: the
 small GM sets are GPL (TimGM6mb) or not redistributable (the 3MB Roland/Microsoft set),
@@ -2445,6 +2452,37 @@ held. The add menu has fifteen modules and fits, at the reference font scale, on
 - **The scale chip says the key.** It showed how many degrees the scale has ("12-TET · 12"),
   which the name mostly says; it shows the root's note and octave now ("12-TET · C4"). The
   root moves the whole patch and could not be seen without opening the card.
+
+### The second session: unused ports, a named patch, and no bundled bank
+
+**2026-09-19, from Forrest's second session**, again with his choices:
+
+- **A group port with nothing on either side goes by itself.** He made a second output by
+  dragging a jack to the rail's `+`, moved the cable to the port he had meant, and the empty
+  one stayed -- nothing about it said it was unused, and the only way out was a long press
+  he had no reason to guess at (it does offer "Remove port", which he had not found). Ports
+  are still *stored*, so unplugging one that is patched on its other side still leaves the
+  jack to plug back into; a port with nothing on either side is one nobody is in the middle
+  of using. Swept after a cable is removed rather than checked when one is added -- a port is
+  made and then patched, and a sweep between those two would take it away again -- and on
+  load, so a file written before the rule opens clean.
+- **A panel can say where its second column starts.** FM's split fell ratio/index/fall/A and
+  D/S/R, which cuts ADSR in two. `A` now declares the break. Any module whose knobs come in
+  groups can do the same; without it the split is still at half.
+- **A patch has a name, and the breadcrumb is there at the top level** to hold it -- one chip
+  reading "Patch" until it is renamed, by holding it as a group's crumb is held. The name is
+  in the file, undone like anything else, and absent from a file until it is given.
+- **"New patch"** clears everything back to an empty canvas -- default tuning, tempo and
+  name, rails as they start -- from the canvas menu, beside "Save patch". Undo puts it back,
+  because it goes through the model like any edit.
+- **The bundled SoundFont is gone**, at his call: 32MB of the download for a file anyone who
+  wants the SF module can fetch. The README says where to get GeneralUser GS and what the
+  folders are for. An SF module starts with **no bank** and asks for one; with the folder
+  empty its page says where to put `.sf2` files. The node tests build a **SoundFont of their
+  own** -- one looping sine, 250Hz at key 60 -- which is better than a real bank for them:
+  GeneralUser's own presets are each tuned however their sampler felt, and what these tests
+  measure is the node's tuning. Writing it found nothing in the engine; it is 80 lines of
+  RIFF chunks in the test file.
 
 **Found on the way:** CLAUDE.md said `NodeType` mirroring the C++ enum was asserted. It was
 not -- only that Kotlin's ids were distinct. A test now reads the enum out of `nodes.h` and

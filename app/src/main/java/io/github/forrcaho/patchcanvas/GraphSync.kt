@@ -296,7 +296,7 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
         // its preset whenever either arrives. Resent to a node that was just made, and to
         // one whose font changed or has only now finished loading.
         val wanted = sounding.filter { it.type == Types.Sf }
-            .mapNotNull { m -> fonts[m.font ?: DEFAULT_SOUNDFONT]?.let { m.id to it } }
+            .mapNotNull { m -> m.font?.let { name -> fonts[name] }?.let { m.id to it } }
             .toMap()
         wanted.forEach { (id, handle) ->
             if (id in fresh || syncedFonts[id] != handle) commands.setFont(id, handle)

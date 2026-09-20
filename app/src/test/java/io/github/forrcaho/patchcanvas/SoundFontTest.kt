@@ -3,6 +3,7 @@ package io.github.forrcaho.patchcanvas
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -78,17 +79,21 @@ class SoundFontTest {
     }
 
     @Test
-    fun `a second font puts a strip of banks above the presets`() {
+    fun `the banks there are sit above the presets`() {
+        // One is still a choice to make: a new SF has no bank until one is picked, since
+        // none ship with the app.
+        val none = presetPage(panel, d, fontCount = 0)
         val one = presetPage(panel, d, fontCount = 1)
         val two = presetPage(panel, d, fontCount = 2)
-        assertTrue(one.fonts.isEmpty())
+        assertTrue("nothing to choose from, no strip", none.fonts.isEmpty())
+        assertEquals(1, one.fonts.size)
         assertEquals(2, two.fonts.size)
         two.fonts.forEach { strip -> assertTrue("above the tiles", strip.bottom <= two.area.top) }
         assertTrue("the chip clears the panel's title", panelPresetChip(panel, d).left > panel.center.x)
     }
 
     @Test
-    fun `the font round-trips through the file, and an SF without one plays the default`() {
+    fun `the font round-trips through the file, and an SF without one has none`() {
         val patch = Patch()
         val sf = patch.add(Types.Sf, Offset.Zero)!!
         sf.font = "My Bank"
@@ -98,13 +103,13 @@ class SoundFontTest {
         assertEquals("My Bank", again.font)
         assertEquals(presetCode(0, 81).toFloat(), again.params[SF_PRESET])
 
-        // A file that says nothing -- a hand-written one -- is the shipped bank, not silence.
+        // A file that names no bank leaves the module asking for one.
         val bare = org.json.JSONObject(patch.toJson()).apply {
             val modules = getJSONArray("modules")
             for (i in 0 until modules.length()) modules.getJSONObject(i).remove("font")
         }.toString()
         assertTrue("the edit found the field", !bare.contains("My Bank"))
-        assertEquals(DEFAULT_SOUNDFONT, patchFromJson(bare)!!.modules.first { it.type == Types.Sf }.font)
+        assertNull(patchFromJson(bare)!!.modules.first { it.type == Types.Sf }.font)
 
         // Nothing else carries one.
         assertTrue(back.modules.filter { it.type != Types.Sf }.all { it.font == null })

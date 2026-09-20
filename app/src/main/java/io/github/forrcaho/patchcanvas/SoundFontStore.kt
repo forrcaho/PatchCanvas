@@ -1,7 +1,6 @@
 package io.github.forrcaho.patchcanvas
 
 import android.content.Context
-import android.content.res.AssetManager
 import android.util.Log
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -10,19 +9,19 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /*
- * SoundFonts: the one the app ships, and any the user drops in beside the scales.
+ * SoundFonts: the ones the user puts in `soundfonts`, beside the scales and the groups.
  *
- * A font is loaded once, on a background thread -- parsing GeneralUser GS converts 32MB of
- * samples to float, which is seconds on a phone -- and kept for the life of the process.
- * Every SF module playing it gets its own synth over the one copy of the samples, built
- * natively when GraphSync hands the module its font.
+ * None ship with the app. GeneralUser GS was bundled for a day and taken out on 2026-09-19:
+ * it is 32MB of the download for a file anyone who wants an SF module can fetch themselves,
+ * and the README says where. So an SF module starts with no bank and asks for one.
+ *
+ * A font is loaded once, on a background thread -- parsing a bank converts every sample to
+ * float, which for a large one is seconds on a phone -- and kept for the life of the
+ * process. Every SF module playing it gets its own synth over the one copy of the samples,
+ * built natively when GraphSync hands the module its font.
  */
 
-/** The bank the app ships, and what a new SF module plays. */
-const val DEFAULT_SOUNDFONT = "GeneralUser GS"
-
 private const val TAG = "PatchSoundFonts"
-private const val ASSET_DIR = "soundfonts"
 private const val EXTENSION = ".sf2"
 
 /** One of a font's instruments, as the SF module's preset knob stores it. */
@@ -39,7 +38,7 @@ class LoadedFont(val handle: Long, val presets: List<SoundFontPreset>) {
 /** The preset parameter's value for [bank] and [program]. */
 fun presetCode(bank: Int, program: Int): Int = bank * 128 + program
 
-class SoundFontLibrary(private val assets: AssetManager?, val directory: File?) {
+class SoundFontLibrary(val directory: File?) {
 
     /**
      * Fonts loaded so far, by name. Compose state, because GraphSync's flow reads it: a
@@ -54,19 +53,15 @@ class SoundFontLibrary(private val assets: AssetManager?, val directory: File?) 
     private val failed = mutableStateListOf<String>()
     private val loading = mutableSetOf<String>()
 
-    /** Every font there is, the shipped one first and then the user's, by name. */
-    fun names(): List<String> {
-        val bundled = try {
-            assets?.list(ASSET_DIR).orEmpty().filter { it.endsWith(EXTENSION, true) }
-        } catch (e: Exception) {
-            emptyList()
-        }.map { it.dropLast(EXTENSION.length) }
-        val own = directory?.listFiles { f -> f.isFile && f.name.endsWith(EXTENSION, true) }
+    /** Every `.sf2` in the folder, by name. */
+    fun names(): List<String> =
+        directory?.listFiles { f -> f.isFile && f.name.endsWith(EXTENSION, true) }
             .orEmpty()
             .map { it.name.dropLast(EXTENSION.length) }
             .sortedBy { it.lowercase() }
-        return (bundled + own).distinct()
-    }
+
+    /** Where to put them, for a panel with none to show. */
+    fun folder(): String = directory?.absolutePath ?: "the soundfonts folder"
 
     /** Whether [name] was tried and could not be read. */
     fun failed(name: String): Boolean = name in failed
@@ -87,8 +82,7 @@ class SoundFontLibrary(private val assets: AssetManager?, val directory: File?) 
     }
 
     private fun read(name: String): ByteArray? = try {
-        val own = directory?.let { File(it, name + EXTENSION) }?.takeIf { it.isFile }
-        own?.readBytes() ?: assets?.open("$ASSET_DIR/$name$EXTENSION")?.use { it.readBytes() }
+        directory?.let { File(it, name + EXTENSION) }?.takeIf { it.isFile }?.readBytes()
     } catch (e: Exception) {
         Log.w(TAG, "could not read $name", e)
         null
@@ -110,12 +104,10 @@ class SoundFontLibrary(private val assets: AssetManager?, val directory: File?) 
 
     companion object {
         /**
-         * The user's folder is `soundfonts` beside `scales` and `groups`, made here so it is
-         * there to drop files into. The shipped bank is read from the APK rather than copied
-         * out: it is 32MB, and a copy would double what the app takes on the phone.
+         * The folder is `soundfonts` beside `scales` and `groups`, made here so it is there
+         * to drop files into over USB.
          */
         fun load(context: Context): SoundFontLibrary = SoundFontLibrary(
-            context.assets,
             try {
                 val base = context.getExternalFilesDir(null) ?: context.filesDir
                 File(base, "soundfonts").apply { mkdirs() }

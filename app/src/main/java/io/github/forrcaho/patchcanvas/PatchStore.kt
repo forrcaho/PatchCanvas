@@ -101,6 +101,9 @@ fun Patch.toJson(): String {
     // Older files carrying the field are simply ignored.
     return JSONObject()
         .put("version", FORMAT_VERSION)
+        // Absent until a patch is named, so a file written before names is byte for byte what
+        // it was.
+        .apply { name?.let { put("name", it) } }
         .put("modules", modules)
         .put("rails", rails)
         .put("connections", cables)
@@ -264,6 +267,7 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
         patch.scales = entries.ifEmpty { listOf(ScaleEntry(scales.default)) }
         // Clamped because the file is untrusted: the engine would clamp an absurd tempo
         // too, but then the chip and the sound would disagree about what it is.
+        patch.name = root.optString("name").takeIf { it.isNotBlank() }?.take(MAX_NAME)
         patch.tempo = root.optDouble("tempo", TEMPO.default.toDouble()).toFloat()
             .coerceIn(TEMPO.min, TEMPO.max)
         patch.beatsPerBar = root.optInt("beatsPerBar", BEATS_PER_BAR.default.toInt())
@@ -294,7 +298,6 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
             )
             module.name = m.optString("name").takeIf { it.isNotBlank() }?.take(MAX_NAME)
             module.font = m.optString("font").takeIf { it.isNotBlank() }
-                ?: DEFAULT_SOUNDFONT.takeIf { type == Types.Sf }
             module.parent = m.optLong("parent", TOP)
             if (shared != null) {
                 // The rails come back under the ids the cables inside were saved against.
@@ -367,6 +370,9 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
             }
         }
 
+        // A group port with nothing on either side goes here too, so a file written before
+        // that rule -- or by hand -- opens as clean as an edit leaves it.
+        patch.sweepUnusedGroupPorts()
         patch
     } catch (e: Exception) {
         Log.w(TAG, "could not read patch", e)

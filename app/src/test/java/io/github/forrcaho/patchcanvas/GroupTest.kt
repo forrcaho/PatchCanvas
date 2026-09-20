@@ -440,9 +440,11 @@ class GroupTest {
         val inner = f.patch.group(setOf(f.osc.id, f.filter.id))!!
         val outer = f.patch.group(setOf(inner.id, f.mix.id))!!
 
-        // Nothing to show at the top level: there is no breadcrumb there at all.
+        // One chip at the top level, the patch's own, which is where a patch is named.
         f.patch.scope = TOP
-        assertNull(f.patch.breadcrumbAt(frame, frame.breadcrumbChip(0).center))
+        assertEquals(listOf(TOP), f.patch.scopePath())
+        assertEquals(TOP, f.patch.breadcrumbAt(frame, frame.breadcrumbChip(0).center))
+        assertNull("and nothing beside it", f.patch.breadcrumbAt(frame, frame.breadcrumbChip(1).center))
 
         f.patch.enterScope(outer.id)
         f.patch.enterScope(inner.id)
@@ -686,5 +688,72 @@ class GroupTest {
         assertTrue("and it is drawn where it now lives", f.patch.shownFree.any { it.id == inner.id })
         assertTrue("its own contents came with it", f.patch.descendants(inner.id).contains(f.osc.id))
         assertNull("the group that held them is gone", f.patch.module(outer.id))
+    }
+
+    /**
+     * Found on the phone, 2026-09-19: a second output made by mistake, its cable moved to the
+     * port that was meant, and the empty one stayed with nothing to say it was unused.
+     */
+    @Test
+    fun `a group port with nothing on either side goes by itself`() {
+        val f = GroupFixture()
+        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+        f.patch.enterScope(group.id)
+        val rail = f.patch.groupRail(group.id, Types.GroupOut)!!
+        val before = group.ports(PortDirection.OUTPUT).size
+
+        // A second output, as dragging a jack to the rail's + slot makes.
+        assertTrue(f.patch.addGroupPort(group.id, PortRef(f.osc.id, PortDirection.OUTPUT, 0)))
+        assertEquals(before + 1, group.ports(PortDirection.OUTPUT).size)
+
+        // Taking its cable back leaves it empty on both sides, so it goes.
+        f.patch.disconnect(PortRef(rail.id, PortDirection.INPUT, before))
+        assertEquals(before, group.ports(PortDirection.OUTPUT).size)
+
+        // The port that is still in use is untouched, and so are its cables.
+        assertTrue("what was patched still is", f.patch.connections.any { it.to.moduleId == rail.id })
+        assertTrue(f.patch.engineConnections().isNotEmpty())
+    }
+
+    @Test
+    fun `a port patched on one side only stays, so it can be plugged back in`() {
+        val f = GroupFixture()
+        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+        val rail = f.patch.groupRail(group.id, Types.GroupOut)!!
+        val outside = f.patch.connections.first { it.from.moduleId == group.id }
+        assertEquals("the group feeds something outside", group.id, outside.from.moduleId)
+
+        // Unplug what feeds it from inside: the box's jack is still patched outward, so the
+        // port is one a cable is being moved on, not one nobody wants.
+        f.patch.disconnect(PortRef(rail.id, PortDirection.INPUT, outside.from.index))
+        assertTrue(
+            "the jack is still there to plug back into",
+            outside.from.index < group.ports(PortDirection.OUTPUT).size,
+        )
+    }
+
+    @Test
+    fun `a saved file's unused port is gone when it opens`() {
+        val f = GroupFixture()
+        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+        val before = group.ports(PortDirection.OUTPUT).size
+        assertTrue(f.patch.addGroupPort(group.id, PortRef(f.osc.id, PortDirection.OUTPUT, 0)))
+
+        // Written with the port and its cable, then the cable taken out by hand, which is
+        // what a file from before the sweep looks like.
+        val rail = f.patch.groupRail(group.id, Types.GroupOut)!!
+        val json = org.json.JSONObject(f.patch.toJson()).apply {
+            val cables = getJSONArray("connections")
+            for (i in cables.length() - 1 downTo 0) {
+                val c = cables.getJSONObject(i)
+                if (c.optLong("to") == rail.id && c.optInt("toPort") == before) cables.remove(i)
+            }
+        }.toString()
+
+        val opened = patchFromJson(json)!!
+        val reopened = opened.modules.first { it.type == Types.Group }
+        assertEquals(before, reopened.ports(PortDirection.OUTPUT).size)
+        assertEquals("and it stays gone", json.let { patchFromJson(opened.toJson())!! }
+            .modules.first { it.type == Types.Group }.ports(PortDirection.OUTPUT).size, before)
     }
 }
