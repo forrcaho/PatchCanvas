@@ -2,10 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-PatchCanvas is a touch-first modular synthesizer for Android: a Compose canvas for
-patching, and a C++/Oboe audio engine behind it. `ROADMAP.md` carries the plan, the
-phase-by-phase reasoning, and the decisions that were made and reversed — read it before
-proposing direction. This file is the operating manual.
+PatchMatryoshka is a touch-first modular synthesizer for Android: a Compose canvas for
+patching, and a C++/Oboe audio engine behind it. It was PatchCanvas until the redesign
+around subpatches; the `applicationId`, the package and `PatchCanvas.kt` still carry the
+old name, because changing the `applicationId` makes it a different app to Android and an
+installed copy cannot update into it. `ROADMAP.md` carries the plan, the phase-by-phase
+reasoning, and the decisions that were made and reversed — read it before proposing
+direction. This file is the operating manual.
 
 ## Commands
 
@@ -36,6 +39,7 @@ adb logcat -d -s PatchAudio:V      # engine: stream state, latency, xruns
 adb logcat -d -s PatchSync:V       # every command crossing to the graph (debug builds)
 adb shell run-as io.github.forrcaho.patchcanvas cat files/patch.json
 adb shell ls /sdcard/Android/data/io.github.forrcaho.patchcanvas/files/scales   # tunings
+adb shell ls /sdcard/Android/data/io.github.forrcaho.patchcanvas/files/subpatches
 adb logcat -d -s PatchScales:V     # which .scl files loaded, and which were skipped
 ```
 
