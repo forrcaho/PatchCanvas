@@ -2495,6 +2495,140 @@ the last clearly blue shade that `ModuleColorTest` passes. Five note processors 
 all fit in the greens at a 15-point border distance; that wants deciding when they land,
 not by picking whatever passes.
 
+## Phase 10 -- PatchMatryoshka: the poly subpatch
+
+**Begun 2026-09-20, on its own branch, because it may not turn out better.** Forrest tried
+to put an envelope on an FM's modulation index and found he could not, and the reason was
+structural rather than a missing feature. Everything below follows from that one attempt.
+
+### What was actually wrong
+
+Phase 6 moved polyphony *inside* the synths: an `Osc` holds eight voices, a chord arrives
+down one cable, and the module allocates. That was the right call against the thing it
+replaced -- "a three-voice patch is twelve nodes", which this file proposed in Phase 7 and
+then retracted -- and it bought a chord for the price of one module.
+
+What it cost was not visible until someone wanted it. A synth's envelope is *the same
+envelope for all eight voices*, and nothing outside the synth can reach a single note. So
+"one Env per voice, patched wherever you like" is not expressible, and FM's brightness --
+the thing most worth shaping on an FM, and the one its knobs make hardest to get right --
+could only ever follow the loudness envelope sitting beside it.
+
+The idea that answers it was raised when polyphony was first built and **rejected then**: a
+subpatch that is monophonic on the inside and clones itself for polyphony. It was rejected
+because voice-pool polyphony was cheaper and grouping was about screen space. Both were
+true. Neither addressed per-note patching, because nothing had tried to do it yet.
+
+### Everything is a subpatch now
+
+The name settles on **subpatch**, replacing "group" throughout -- "group" said what the
+feature did to a selection, and the thing itself is a patch inside a patch. **Superpatch**
+is the parent, for prose; it has nowhere to appear on screen yet. The app is
+**PatchMatryoshka**: a patch nests inside a patch nests inside a patch, and "canvas" named
+the surface at a time when the surface was the idea. The launcher label and the docs only --
+changing the `applicationId` makes it a different app to Android, with no update path from
+an installed copy.
+
+The goal behind the rename is that a subpatch should be **the first thing anyone reaches
+for**, not the thing you tidy up with afterwards. So both kinds can be made empty from the
+add menu, and you go inside and build there; the selection flow that collapses what is
+already on the canvas is the second way rather than the only one.
+
+### The synths lose their envelopes
+
+`Osc` keeps one knob and `FM` three. What is left is a 5ms smoothstepped gate ramp
+(`GateRamp`), enough that a note does not start or stop with a step in it -- measured at
+both edges, because a square is at full amplitude from its first sample and a note let go
+is at whatever phase it had reached.
+
+`FM` loses Chowning's brightness-follows-loudness with it, on purpose: with the envelope
+gone the amplitude is the ramp and nothing else, so keeping the coupling would have dimmed
+the first five milliseconds of every note and no more. Expose `index`, patch an `Env`, and
+the two envelopes no longer have to be the same envelope -- which is the thing that could
+not be done before and is strictly more than what was lost.
+
+**`Amp` un-retires the VCA**, at id 21; id 7 stays dead, because that module took a control
+voltage. The argument that retired it -- a `Mix` channel is `in * level` and a level with a
+modulation jack is the same module -- is still true and stopped being the point. Env and the
+thing Env opens is the pair you reach for inside a poly subpatch, and that should be one
+cable, not opening a Mix, exposing a knob, setting its brackets and then patching. Its
+modulation input is a **port**, not a jack on a knob: a port is read per sample where a
+parameter is applied once a block, and a millisecond attack through a 1500Hz control rate is
+a staircase.
+
+That port needed one new mechanism, `Node::unityInputs`. An unpatched input reads as
+silence, which is right for an input that is summed and wrong for one that multiplies: an
+Amp with nothing on its mod jack would be silent, and on a phone with no meter that reads
+as a broken module. Ports that multiply say so and the graph hands them ones -- including on
+the *previous* side of a crossfade, or patching a modulator would fade up from zero rather
+than down from unity. The test passed until it measured across the join.
+
+### How a poly subpatch reaches the engine
+
+`Patch.engineGraph()` is the flattening. A plain subpatch flattens to nothing, as it always
+did. A poly subpatch flattens by **copying**: `voices` of every module inside it, a `PolyIn`
+that shares the notes out one instance at a time, and a `PolySum` per signal output that
+adds them back up. Nothing about nesting crosses into C++; the engine is handed a flat
+graph, which is the invariant this phase was most careful not to break.
+
+- **Instance 0 keeps the module's own id.** Telemetry is asked for by module id -- by the
+  panel and the canvas both -- so numbering from the original means all of it reads the
+  first instance without knowing instances exist. Later instances carry their number in bits
+  48 and up, where a patch's ids cannot reach.
+- **Only notes are shared out.** Audio and modulation are broadcast to every instance: the
+  instances are copies of one voice, not separate patches, so one LFO outside sweeps all
+  four filters inside. A poly subpatch's note *output* merges at its destination rather than
+  through a node, which is what a note input already does.
+- **`PolyIn` keeps `PolySynth`'s allocation rules** -- idle, oldest released, then steal --
+  because every one of them was paid for by a bug on the phone. It adds one thing a synth
+  does not need: a stolen instance is sent an Off first, since what is inside it is an
+  ordinary `Env` holding an ordinary note and nothing else would ever end it.
+- **A poly subpatch may not contain another.** Instances would multiply and the id space is
+  one level deep by choice. Refused from every direction: added inside one, made from a
+  selection inside one, wrapped around one, duplicated or loaded into one.
+- `kMaxPorts` is 8, which makes 8 the voice limit, because a port is an instance at those
+  two edge nodes. `kMaxNodes` is 256, because eight copies of a six-module subpatch is
+  forty-eight nodes for one box on screen.
+
+On the canvas a poly subpatch draws as a stack, and so do its rails, which read **"Instance
+in"** and **"Instance out"**: what you are looking at in there is one copy of several, while
+its ports, its panel and its contents are all singular. Its `voices` knob is the only knob
+either box has of its own and heads the panel it opens.
+
+### Format 9 reads nothing older
+
+The run from 5 to 8 was additive every time, which is why the version check kept accepting
+the earlier ones. This one is not. A format 8 file names a "Group", which this build reads
+as a retired type and skips -- taking everything inside it, then autosaving the patch that
+way -- and its `Osc` and `FM` carry an envelope's four knobs where this build has none, so
+every index after the first would land on the wrong knob. `PatchStore.load` still moves a
+refused file to `patch.rejected.json` first, which is what makes refusing affordable.
+
+`Param.newColumn` went with FM's seven knobs: it existed so ADSR was not split across the
+panel's two columns, and no module has more than four knobs now. The only panel that
+reaches two columns is a subpatch's.
+
+**The audio family is now out of room**, as the note at the end of Phase 9 warned. `Amp`
+had to be colored by what it sends, which is audio, and a search over every shade that
+`ModuleColorTest` accepts at a 15-point border distance came back with nothing but the
+mauve-gray corner -- `A890A8`, at 16.1 from its nearest neighbor. A sixteenth module that
+sends audio will not fit, and the answer then is not a narrower margin: it is that a module
+should probably be told apart by its *shape* or its glyph rather than by one more shade,
+with color kept for the family alone.
+
+### What is not known yet
+
+**None of this has been heard.** Every defect that mattered in this project was found by a
+person playing it on hardware with a clean compile and a green suite, and the three things
+most likely to be wrong here are all of that kind: whether the 5ms ramp is audible on
+earbuds, where four voices summing sits against Out's limiter, and what stealing sounds like
+when an `Env` rather than a built-in envelope is holding the note.
+
+**The open question the whole branch is for:** does building an instrument inside a box, one
+voice deep, actually read better than turning eight knobs on a module that hides its
+polyphony? The argument says yes and the argument is why this exists. It is not the same as
+playing it.
+
 ---
 
 ## Testing
