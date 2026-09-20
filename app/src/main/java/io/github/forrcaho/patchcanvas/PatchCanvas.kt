@@ -3252,9 +3252,21 @@ internal class Frame(
      */
     val fontScale: Float = 1f,
 ) {
+    /**
+     * A rail's width, grown with the text size as a menu tile is.
+     *
+     * "Instance out" is the longest thing a rail's header says, and at font scale 1 it
+     * fills 64dp exactly; at 1.5, which is what the reference device runs, it would spill
+     * out of both sides of the box. Grow the box with the setting rather than shrinking the
+     * text back against it. A rail is screen space and its rect is worked out every frame,
+     * so nothing is stored against this width -- a change of text size moves the jacks and
+     * the cables follow, because both are resolved through portScreen either way.
+     */
+    val railWidth: Float get() = PatchModule.RAIL_WIDTH * density * maxOf(1f, fontScale)
+
     fun railRect(module: PatchModule): Rect {
         val d = density
-        val w = PatchModule.RAIL_WIDTH * d
+        val w = railWidth
         val h = module.height * d
         val top = insetTop + (canvas.height - insetTop - insetBottom - h) / 2f
         val left = when (module.type.pinned) {
@@ -3371,7 +3383,7 @@ internal class Frame(
      */
     fun railRectWith(module: PatchModule, ports: Int): Rect {
         val d = density
-        val w = PatchModule.RAIL_WIDTH * d
+        val w = railWidth
         val body = maxOf(PatchModule.MIN_BODY, maxOf(ports, 1) * PatchModule.PORT_PITCH)
         val h = (PatchModule.HEADER + body) * d
         val top = insetTop + (canvas.height - insetTop - insetBottom - h) / 2f
@@ -4458,6 +4470,7 @@ fun PatchCanvas(
                     title = patch.module(rail.parent)
                         ?.let { Types.railName(it.type, rail.type) } ?: rail.title,
                     stacked = patch.module(rail.parent)?.type == Types.Poly,
+                    stackToward = if (rail.type.pinned == Edge.RIGHT) -1f else 1f,
                 )
                 // After the box, not before: drawModuleBox fills opaquely, so a highlight
                 // drawn underneath is painted straight over and never appears.
@@ -6703,6 +6716,12 @@ private fun DrawScope.drawModuleBox(
     title: String = module.title,
     /** Drawn as a pile of boxes: a poly subpatch, and the rails inside one. */
     stacked: Boolean = false,
+    /**
+     * Which way the pile leans. Up and to the right for a box on the canvas, which has room
+     * in every direction; inward for the right-hand rail, which is against the screen edge
+     * and would otherwise stack off it.
+     */
+    stackToward: Float = 1f,
 ) {
     val corner = CornerRadius(PatchModule.CORNER * unit, PatchModule.CORNER * unit)
 
@@ -6714,7 +6733,7 @@ private fun DrawScope.drawModuleBox(
             val step = STACK_STEP * unit * layer
             drawRoundRect(
                 color = ModuleFill.copy(alpha = alpha),
-                topLeft = rect.topLeft + Offset(step, -step),
+                topLeft = rect.topLeft + Offset(step * stackToward, -step),
                 size = rect.size,
                 cornerRadius = corner,
             )
@@ -6722,7 +6741,7 @@ private fun DrawScope.drawModuleBox(
                 color = module.type.accent.copy(
                     alpha = MODULE_BORDER_ALPHA * alpha / (layer + 1f),
                 ),
-                topLeft = rect.topLeft + Offset(step, -step),
+                topLeft = rect.topLeft + Offset(step * stackToward, -step),
                 size = rect.size,
                 cornerRadius = corner,
                 style = Stroke(width = strokeWidth),
