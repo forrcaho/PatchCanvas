@@ -1538,18 +1538,21 @@ private fun DrawScope.drawPresetPage(panel: Rect, d: Float, sf: SfView, code: In
     }
     val presets = sf.font?.presets.orEmpty()
     if (presets.isEmpty()) {
-        val note = measurer.measure(
-            when {
-                // Nothing ships with the app, so this is the first thing an SF panel says
-                // until a `.sf2` is put where it can find one.
-                sf.fonts.isEmpty() -> "No SoundFonts. Put .sf2 files in ${sf.folder}"
-                sf.fontName == null -> "Choose a bank above"
-                sf.failed -> "${sf.fontName} is not a SoundFont this can read"
-                else -> "Loading ${sf.fontName}\u2026"
-            },
-            PanelParamStyle,
-        )
-        drawText(note, topLeft = page.area.center - Offset(note.size.width / 2f, note.size.height / 2f))
+        // A heading, and under it the part that is long: a folder path is not a sentence and
+        // has to wrap. Drawn as one line it ran off both edges of the phone -- the first
+        // thing an SF panel said, and unreadable.
+        val heading = when {
+            sf.fonts.isEmpty() -> "No SoundFonts yet"
+            sf.fontName == null -> "Choose a bank above"
+            sf.failed -> "Not a SoundFont this can read"
+            else -> "Loading ${sf.fontName}\u2026"
+        }
+        val detail = when {
+            sf.fonts.isEmpty() -> "Put .sf2 files in ${sf.folder}"
+            sf.failed -> sf.fontName
+            else -> null
+        }
+        drawPageNote(page.area, d, heading, detail, measurer)
         return
     }
     val scroll = page.resolve(sf.scroll, presets, code)
@@ -1567,6 +1570,39 @@ private fun DrawScope.drawPresetPage(panel: Rect, d: Float, sf: SfView, code: In
         drawRoundRect(ChipEdge, track.topLeft, track.size, CornerRadius(2f * d, 2f * d))
         drawRoundRect(scaleAccent, Offset(track.left, top), Size(track.width, thumbH), CornerRadius(2f * d, 2f * d))
     }
+}
+
+/**
+ * What a page says when it has no tiles: a heading, and under it a line that may be long
+ * enough to wrap -- a folder path, or the name of a file that would not load. Centered in
+ * [area] and wrapped inside it, since neither is a sentence anyone can shorten.
+ */
+private fun DrawScope.drawPageNote(
+    area: Rect, d: Float, heading: String, detail: String?, measurer: TextMeasurer,
+) {
+    val box = Constraints(maxWidth = (area.width - 24f * d).toInt().coerceAtLeast(1))
+    val title = measurer.measure(
+        heading,
+        PanelParamStyle.copy(textAlign = TextAlign.Center),
+        overflow = TextOverflow.Ellipsis,
+        maxLines = 2,
+        constraints = box,
+    )
+    val under = detail?.let {
+        measurer.measure(
+            it,
+            GridLabelStyle.copy(textAlign = TextAlign.Center),
+            overflow = TextOverflow.Ellipsis,
+            maxLines = 3,
+            constraints = box,
+        )
+    }
+    val gap = if (under == null) 0f else 8f * d
+    val height = title.size.height + gap + (under?.size?.height ?: 0)
+    var y = area.center.y - height / 2f
+    drawText(title, topLeft = Offset(area.center.x - title.size.width / 2f, y))
+    y += title.size.height + gap
+    under?.let { drawText(it, topLeft = Offset(area.center.x - it.size.width / 2f, y)) }
 }
 
 /** A tile in a chooser: a name, and a quieter line of detail beneath it. */
