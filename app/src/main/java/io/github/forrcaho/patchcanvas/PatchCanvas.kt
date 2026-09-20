@@ -1230,27 +1230,63 @@ internal fun panelPort(panel: Rect, d: Float, dir: PortDirection, index: Int, co
 internal fun panelGrid(panel: Rect, d: Float, type: ModuleType? = null): Rect {
     val body = panelBody(panel, d)
     val side = PatchModule.PANEL_SIDE * d
-    return Rect(panel.left + side, body.top, panel.right - side, body.top + body.height * gridShare(type))
+    // The complement of the knobs, so the two can never overlap or leave a gap between
+    // them however the split is decided. See controlsHeight.
+    val controls = if (type == null) body.height * (1f - GRID_SHARE) else controlsHeight(type, body.height, d)
+    return Rect(panel.left + side, body.top, panel.right - side, body.bottom - controls)
 }
 
-/**
- * How much of the body the grid takes. A pattern is one row of marks and is only looked at,
- * so it takes a fifth and leaves the knobs that change it most of the room.
- */
-private fun gridShare(type: ModuleType?): Float = when {
-    type == null -> 0.66f
-    type.grid == GridKind.PATTERN -> 0.2f
-    type.rowParams.isEmpty() -> 1f
-    else -> 0.66f
-}
+/** What a grid took of the body before the knobs' own height decided it, and their floor now. */
+private const val GRID_SHARE = 0.66f
+
+/** A pattern's share, which is fixed: it is one row of marks and is only looked at. */
+private const val PATTERN_GRID_SHARE = 0.2f
 
 private fun panelControls(panel: Rect, d: Float, type: ModuleType): Rect {
     val body = panelBody(panel, d)
-    return if (type.grid != GridKind.NONE) {
-        Rect(body.left, body.top + body.height * gridShare(type), body.right, body.bottom)
-    } else {
-        body
-    }
+    if (type.grid == GridKind.NONE) return body
+    return Rect(body.left, body.bottom - controlsHeight(type, body.height, d), body.right, body.bottom)
+}
+
+/**
+ * The least a knob's row can be and still hold what it draws.
+ *
+ * A row is a label and a value on one line, then the bar: 2dp above the text, the text
+ * itself, the 16dp bar and 10dp under it. The text is 12sp, which is 18dp at the reference
+ * device's font scale of 1.5, so 46 is what the largest setting needs.
+ *
+ * A constant rather than read from `Frame.fontScale`, which is what a menu tile does,
+ * because a panel cannot grow: it already has the whole screen. What it owes its knobs is
+ * not to squeeze them below the worst case, which is a floor and not a scale.
+ */
+internal const val PANEL_ROW_MIN = 46f
+
+/**
+ * How much of the panel's body the knobs take, leaving the rest to the grid.
+ *
+ * It was a flat third, decided when a sequencer had two knobs and they were legible at
+ * that. `Seq` arrived with three -- length, transpose and gate -- and a third of the body
+ * split three ways is 35dp a row on the reference device, where the label, the value and
+ * the bar all have to fit and 46 is what they need. So the knobs ask for what they need
+ * and the grid keeps the rest.
+ *
+ * Bounded at both ends. Never less than the third it always had, so a module with one knob
+ * still draws it at a comfortable height rather than shrinking to its minimum; and never
+ * more than half, because the grid is the thing being edited and a panel that cannot show
+ * the sequence is not a panel. Past that the knobs are better served by the second column
+ * the panel already goes to, which is why this counts the deepest column rather than the
+ * rows.
+ */
+private fun controlsHeight(type: ModuleType, body: Float, d: Float): Float {
+    val rows = type.rowParams.size
+    // A grid with no knobs under it takes the whole body rather than leaving a third of the
+    // panel empty -- a drone had no parameters at all until 2026-09-19.
+    if (rows == 0) return 0f
+    // A pattern is one row of marks that is only looked at, so it keeps its thin strip and
+    // the knobs that change it get the rest. Euclid is the only one.
+    if (type.grid == GridKind.PATTERN) return body * (1f - PATTERN_GRID_SHARE)
+    val deepest = if (rows > PANEL_ONE_COLUMN) (rows + 1) / 2 else rows
+    return (deepest * PANEL_ROW_MIN * d).coerceIn(body * (1f - GRID_SHARE), body * 0.5f)
 }
 
 /** A knob's row: label, value and the bar beneath them. */

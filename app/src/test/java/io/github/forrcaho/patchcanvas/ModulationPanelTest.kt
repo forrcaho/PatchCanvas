@@ -2,6 +2,7 @@ package io.github.forrcaho.patchcanvas
 
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Rect
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -313,6 +314,54 @@ class ModulationPanelTest {
             assertEquals("slot $slot at its left", 0f, panelKnobPosition(bar, bar.left), 0.001f)
             assertEquals("slot $slot at its right", 1f, panelKnobPosition(bar, bar.right), 0.001f)
             assertEquals("slot $slot halfway", 0.5f, panelKnobPosition(bar, bar.center.x), 0.001f)
+        }
+    }
+
+    /**
+     * Every knob row is tall enough to hold what it draws, on every module that has a grid.
+     *
+     * Found on the phone: `Seq` took over from `Steps` with a third knob, and a flat third
+     * of the body split three ways is 35dp a row, where the label, the value and the bar
+     * need 46. The panel drew all three on top of each other. The split now follows the row
+     * count, so this is the assertion that keeps it following.
+     */
+    @Test
+    fun `a knob row is never shorter than what it has to draw`() {
+        Types.palette.filter { it.rowParams.isNotEmpty() }.forEach { type ->
+            val rows = type.rowParams.size
+            val deepest = if (rows > PANEL_ONE_COLUMN) (rows + 1) / 2 else rows
+            (0 until deepest).forEach { slot ->
+                val row = panelRowAt(panel, d, type, rows, slot)
+                assertTrue(
+                    "${type.name} row $slot is ${row.height / d}dp",
+                    row.height >= PANEL_ROW_MIN * d - 0.5f,
+                )
+            }
+        }
+    }
+
+    /**
+     * And the grid keeps at least half of the body, whatever the knobs asked for: the grid
+     * is the thing being edited, and a panel that cannot show the sequence is not a panel.
+     */
+    @Test
+    fun `the grid and the knobs divide the body between them and nothing else`() {
+        Types.palette.filter { it.grid != GridKind.NONE }.forEach { type ->
+            val grid = panelGrid(panel, d, type)
+            val controls = panelRowAt(panel, d, type, maxOf(type.rowParams.size, 1), 0)
+            val body = panelRect(frame).let { Rect(it.left, it.top + PatchModule.PANEL_HEADER * d, it.right, it.bottom) }
+            assertEquals("${type.name}'s grid starts at the body's top", body.top, grid.top, 0.5f)
+            // A pattern is the exception and is meant to be: one row of marks, only looked
+            // at, so it keeps its thin strip and the knobs that change it get the rest.
+            val floor = if (type.grid == GridKind.PATTERN) 0.15f else 0.5f
+            assertTrue(
+                "${type.name}'s grid is ${grid.height / body.height} of the body",
+                grid.height >= body.height * floor - 0.5f,
+            )
+            assertTrue(
+                "${type.name}'s first row is below the grid",
+                type.rowParams.isEmpty() || controls.top >= grid.bottom - 0.5f,
+            )
         }
     }
 
