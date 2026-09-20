@@ -236,26 +236,26 @@ class ModulationPanelTest {
     }
 
     /**
-     * A group's panel draws knobs that belong to modules inside it, so its rows are counted
+     * A subpatch's panel draws knobs that belong to modules inside it, so its rows are counted
      * rather than looked up by parameter. One row must land where one row lands.
      */
     @Test
-    fun `a group's rows sit where a module's rows would`() {
+    fun `a subpatch's rows sit where a module's rows would`() {
         val patch = Patch()
         val filter = patch.add(Types.Filter, Offset.Zero)!!
-        val group = patch.group(setOf(filter.id))!!
-        patch.enterScope(group.id)
+        val subpatch = patch.makeSubpatch(setOf(filter.id))!!
+        patch.enterScope(subpatch.id)
         patch.promote(filter, 0)
 
-        val rows = patch.panelRows(group)
+        val rows = patch.panelRows(subpatch)
         assertEquals(1, rows.size)
         assertEquals(
-            panelRowAt(panel, d, Types.Group, 1, 0),
-            panelRowAt(panel, d, Types.Group, rows.size, 0),
+            panelRowAt(panel, d, Types.Subpatch, 1, 0),
+            panelRowAt(panel, d, Types.Subpatch, rows.size, 0),
         )
-        // And the knob under it is the filter's, reached through the group's panel.
-        val at = panelRowAt(panel, d, Types.Group, rows.size, 0).center
-        assertEquals(ParamRow(filter, 0), panelKnobAt(panel, d, group, rows, at))
+        // And the knob under it is the filter's, reached through the subpatch's panel.
+        val at = panelRowAt(panel, d, Types.Subpatch, rows.size, 0).center
+        assertEquals(ParamRow(filter, 0), panelKnobAt(panel, d, subpatch, rows, at))
     }
 
     /**

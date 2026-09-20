@@ -224,8 +224,8 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
      * lands hands it over.
      */
     fun sync(patch: Patch, fonts: Map<String, Long> = emptyMap()) {
-        // The patch flattened: groups and their rails are not nodes, and a cable through a
-        // group's ports arrives as the one cable it stands for. So grouping modules that are
+        // The patch flattened: subpatches and their rails are not nodes, and a cable through a
+        // subpatch's ports arrives as the one cable it stands for. So subpatching modules that are
         // already playing sends the engine nothing at all.
         val sounding = patch.engineModules
         val nodes = sounding.associate { it.id to NodeType.of(it.type) }

@@ -235,7 +235,7 @@ data class Param(
     /**
      * Starts the panel's second column, where it would otherwise fall wherever half the rows
      * do. FM's A: without it the columns split ratio/index/fall/A and D/S/R, which cuts ADSR
-     * in two -- said on the phone, and true of any module whose knobs come in groups.
+     * in two -- said on the phone, and true of any module whose knobs come in subpatches.
      */
     val newColumn: Boolean = false,
     /**
@@ -425,7 +425,7 @@ data class ModuleType(
     /** What those cells mean, and so which grid the panel draws. */
     val grid: GridKind = GridKind.NONE,
     /**
-     * Part of how a patch is organized rather than something that sounds: a group and the
+     * Part of how a patch is organized rather than something that sounds: a subpatch and the
      * two rails inside it. Never a node in the engine, which only ever sees the patch
      * flattened -- see [Patch.engineConnections].
      */
@@ -746,30 +746,30 @@ object Types {
     /**
      * Modules collapsed into one box. Its ports are its own rather than its type's -- they
      * come from the cables that crossed the selection's edge when it was made -- so the type
-     * declares none. Opening one shows what is inside, with [GroupIn] and [GroupOut] as its
+     * declares none. Opening one shows what is inside, with [SubpatchIn] and [SubpatchOut] as its
      * rails.
      */
-    val Group = ModuleType(
-        "Group", emptyList(), emptyList(), Color(0xFFB9C2CE), structural = true,
+    val Subpatch = ModuleType(
+        "Subpatch", emptyList(), emptyList(), Color(0xFFB9C2CE), structural = true,
     )
 
     /**
-     * Inside a group, the left rail: each of the group's inputs, as a source for what is
+     * Inside a subpatch, the left rail: each of the subpatch's inputs, as a source for what is
      * inside. Pinned like In, so the rails' drawing, hit testing and cables all apply.
      */
-    val GroupIn = ModuleType(
-        "Group in", emptyList(), emptyList(), Color(0xFFB9C2CE), pinned = Edge.LEFT, structural = true,
+    val SubpatchIn = ModuleType(
+        "Subpatch in", emptyList(), emptyList(), Color(0xFFB9C2CE), pinned = Edge.LEFT, structural = true,
     )
 
-    /** Inside a group, the right rail: each of the group's outputs, as a sink for what is inside. */
-    val GroupOut = ModuleType(
-        "Group out", emptyList(), emptyList(), Color(0xFFB9C2CE), pinned = Edge.RIGHT, structural = true,
+    /** Inside a subpatch, the right rail: each of the subpatch's outputs, as a sink for what is inside. */
+    val SubpatchOut = ModuleType(
+        "Subpatch out", emptyList(), emptyList(), Color(0xFFB9C2CE), pinned = Edge.RIGHT, structural = true,
     )
 
     /**
      * Every type a file can name. Steps is here and not in the palette: Seq took its place in
      * the Add menu on 2026-09-19, and a patch that has one still loads and plays it -- retiring
-     * it outright would have meant refusing every patch and saved group made with it.
+     * it outright would have meant refusing every patch and saved subpatch made with it.
      */
     val byName: Map<String, ModuleType> =
         (palette + listOf(Steps, Out, In)).associateBy { it.name } +
@@ -784,7 +784,7 @@ object Types {
 const val OUT_ID = 1L
 const val IN_ID = 2L
 
-/** The patch itself, as a module's parent: not inside any group. */
+/** The patch itself, as a module's parent: not inside any subpatch. */
 const val TOP = 0L
 
 /** What a patch is called until it is named. */
@@ -793,7 +793,7 @@ private const val FIRST_FREE_ID = 100L
 
 /** Free modules live in world units, and one world unit is one dp. */
 /**
- * A group's ports, shared by the group's box and the two rails inside it, so the box's
+ * A subpatch's ports, shared by the subpatch's box and the two rails inside it, so the box's
  * inputs are the left rail's outputs and the box's outputs the right rail's inputs by
  * construction rather than by keeping two lists in step.
  *
@@ -801,20 +801,20 @@ private const val FIRST_FREE_ID = 100L
  * would vanish the moment that cable was unplugged, leaving nothing to plug back into --
  * and ports must never move, which a derived list re-sorting itself would break.
  */
-class GroupPorts(
+class SubpatchPorts(
     val inputs: SnapshotStateList<Port> = mutableStateListOf(),
     val outputs: SnapshotStateList<Port> = mutableStateListOf(),
     /**
-     * The knobs sent out to this group's edge, in the order they were promoted.
+     * The knobs sent out to this subpatch's edge, in the order they were promoted.
      *
-     * References, not copies: the value stays on the module inside, and the group's panel
+     * References, not copies: the value stays on the module inside, and the subpatch's panel
      * turns that one. A copy would be a second place for the cutoff to live, which is two
      * numbers to keep in step and one of them wrong whenever they are not -- and the
      * engine already reads the module inside.
      */
     val promoted: SnapshotStateList<ParamRef> = mutableStateListOf(),
 ) {
-    fun copy(): GroupPorts = GroupPorts(
+    fun copy(): SubpatchPorts = SubpatchPorts(
         mutableStateListOf<Port>().apply { addAll(inputs) },
         mutableStateListOf<Port>().apply { addAll(outputs) },
         mutableStateListOf<ParamRef>().apply { addAll(promoted) },
@@ -827,7 +827,7 @@ data class ParamRef(val moduleId: Long, val index: Int)
 /**
  * One row of an open panel: whose parameter it is, and which.
  *
- * A module's own rows name the module itself. A group's rows name the modules inside it,
+ * A module's own rows name the module itself. A subpatch's rows name the modules inside it,
  * which is what lets one panel drawing serve both.
  */
 data class ParamRow(val owner: PatchModule, val index: Int) {
@@ -839,25 +839,25 @@ class PatchModule(
     val id: Long,
     val type: ModuleType,
     position: Offset,
-    /** Non-null for a group and its two rails, which share one set of ports. */
-    val groupPorts: GroupPorts? = null,
+    /** Non-null for a subpatch and its two rails, which share one set of ports. */
+    val subpatchPorts: SubpatchPorts? = null,
 ) {
     var position by mutableStateOf(position)
 
     /**
-     * The group this module sits inside, or [TOP] for the patch itself.
+     * The subpatch this module sits inside, or [TOP] for the patch itself.
      *
-     * Every module lives in one flat list and says where it belongs, rather than groups
+     * Every module lives in one flat list and says where it belongs, rather than subpatches
      * owning lists of their own. The engine's view, undo, saving and every loop over the
-     * patch stay one level deep, and entering a group is a filter on this.
+     * patch stay one level deep, and entering a subpatch is a filter on this.
      */
     var parent by mutableLongStateOf(TOP)
 
     /**
      * What this module is called, or null to go by its type's name.
      *
-     * Groups need one most: every group is the same type, so without a name the boxes,
-     * the panel and the breadcrumb all say "Group" and nothing tells two of them apart.
+     * Subpatches need one most: every subpatch is the same type, so without a name the boxes,
+     * the panel and the breadcrumb all say "Subpatch" and nothing tells two of them apart.
      * Any module can take one for the same reason -- a type says what a module is, a
      * name says what it is doing in this patch.
      */
@@ -974,7 +974,7 @@ class PatchModule(
 
     /**
      * The ports' band. Equal to the body, now that opening a module leaves the canvas.
-     * Counted from this module's own ports, so a group grows with the ports it was given.
+     * Counted from this module's own ports, so a subpatch grows with the ports it was given.
      */
     val portsBody: Float
         get() = maxOf(MIN_BODY, maxOf(ports(PortDirection.INPUT).size, ports(PortDirection.OUTPUT).size, 1) * PORT_PITCH)
@@ -987,17 +987,17 @@ class PatchModule(
     /**
      * The side jacks. Empty for [PortDirection.MOD], whose ports are [modRanges].
      *
-     * A group's come from [groupPorts]: the box takes inputs and gives outputs, and inside,
-     * the left rail gives the group's inputs to what is there and the right rail takes its
+     * A subpatch's come from [subpatchPorts]: the box takes inputs and gives outputs, and inside,
+     * the left rail gives the subpatch's inputs to what is there and the right rail takes its
      * outputs -- which is why the rails' directions are the box's turned around.
      */
     fun ports(dir: PortDirection): List<Port> {
-        val shared = groupPorts
+        val shared = subpatchPorts
         return when {
             dir == PortDirection.MOD -> emptyList()
             shared == null -> if (dir == PortDirection.INPUT) type.inputs else type.outputs
-            type == Types.GroupIn -> if (dir == PortDirection.OUTPUT) shared.inputs else emptyList()
-            type == Types.GroupOut -> if (dir == PortDirection.INPUT) shared.outputs else emptyList()
+            type == Types.SubpatchIn -> if (dir == PortDirection.OUTPUT) shared.inputs else emptyList()
+            type == Types.SubpatchOut -> if (dir == PortDirection.INPUT) shared.outputs else emptyList()
             else -> if (dir == PortDirection.INPUT) shared.inputs else shared.outputs
         }
     }
@@ -1197,9 +1197,9 @@ internal fun panelRow(panel: Rect, d: Float, type: ModuleType, index: Int): Rect
 /**
  * The [slot]th of [count] rows.
  *
- * What a row's geometry actually depends on, and the form a group's panel needs: its rows
+ * What a row's geometry actually depends on, and the form a subpatch's panel needs: its rows
  * are knobs promoted from the modules inside it, which have no place in any list of the
- * group type's own parameters.
+ * subpatch type's own parameters.
  */
 internal fun panelRowAt(panel: Rect, d: Float, type: ModuleType, count: Int, slot: Int): Rect {
     val area = panelControls(panel, d, type)
@@ -1208,7 +1208,7 @@ internal fun panelRowAt(panel: Rect, d: Float, type: ModuleType, count: Int, slo
     // so reading order is still top to bottom and the parameters' order is kept.
     val columns = if (count > PANEL_ONE_COLUMN) 2 else 1
     // Where the second column starts: the module's own break when it has one and all its rows
-    // are here -- a group's panel shows other modules' knobs and has none -- or half of them.
+    // are here -- a subpatch's panel shows other modules' knobs and has none -- or half of them.
     val declared = type.columnBreak
     val first = if (columns == 1) count
         else if (declared in 1 until count && count == type.rowParams.size) declared
@@ -1249,7 +1249,7 @@ internal fun panelModChipOn(row: Rect, d: Float): Rect {
 }
 
 /**
- * The chip that sends a row's knob out to the group's edge: the left gutter's mirror of the
+ * The chip that sends a row's knob out to the subpatch's edge: the left gutter's mirror of the
  * [ ] chip, level with it.
  *
  * Stacking the two in the right-hand gutter was the first drawing and it failed on a
@@ -1976,8 +1976,8 @@ data class PortRef(val moduleId: Long, val dir: PortDirection, val index: Int)
 
 data class Connection(val from: PortRef, val to: PortRef)
 
-/** A default group name, which is what a new group is numbered against. */
-private val GROUP_NUMBER = Regex("""Group (\d+)""")
+/** A default subpatch name, which is what a new subpatch is numbered against. */
+private val SUBPATCH_NUMBER = Regex("""Subpatch (\d+)""")
 
 /** How long a name may be, in characters: enough to be a label, short enough to fit a box. */
 internal const val MAX_NAME = 16
@@ -2021,7 +2021,7 @@ class Patch {
     /**
      * What this patch is called, or null for the default. Shown on the breadcrumb's first
      * chip -- which is there at the top level now, so the patch has somewhere to be named --
-     * and renamed by holding it, as a group is.
+     * and renamed by holding it, as a subpatch is.
      */
     var name by mutableStateOf<String?>(null)
 
@@ -2097,17 +2097,17 @@ class Patch {
     fun kindOf(ref: PortRef): SignalKind = port(ref)?.kind ?: SignalKind.AUDIO
 
     /**
-     * The group being looked at, or [TOP].
+     * The subpatch being looked at, or [TOP].
      *
      * View state, like the camera and the open panel: where you are, not what the patch
-     * is, so it is neither saved nor undone. Anything that removes the group falls back to
+     * is, so it is neither saved nor undone. Anything that removes the subpatch falls back to
      * the top level through [scopeOrTop].
      */
     var scope by mutableLongStateOf(TOP)
 
-    /** [scope], or [TOP] if the group it names has gone -- undone, deleted or ungrouped. */
+    /** [scope], or [TOP] if the subpatch it names has gone -- undone, deleted or unpacked. */
     val scopeOrTop: Long
-        get() = scope.takeIf { it == TOP || module(it)?.type == Types.Group } ?: TOP
+        get() = scope.takeIf { it == TOP || module(it)?.type == Types.Subpatch } ?: TOP
 
     /** The modules and rails on screen in [scopeOrTop]. */
     val shownFree: List<PatchModule> get() = scopeOrTop.let { at -> modules.filter { !it.isPinned && it.parent == at } }
@@ -2131,28 +2131,28 @@ class Patch {
      * that makes nextId derived state rather than another field to keep in the file.
      */
     internal fun adopt(module: PatchModule) {
-        if (module.isPinned && module.type != Types.GroupIn && module.type != Types.GroupOut) return
+        if (module.isPinned && module.type != Types.SubpatchIn && module.type != Types.SubpatchOut) return
         modules.add(module)
         if (module.id >= nextId) nextId = module.id + 1
     }
 
-    /** Removes a module, and a group together with everything inside it. */
+    /** Removes a module, and a subpatch together with everything inside it. */
     fun remove(module: PatchModule) {
         if (module.isPinned) return
         val gone = setOf(module.id) + descendants(module.id)
-        // Every jack these modules had, so the group around them can drop the ports that
+        // Every jack these modules had, so the subpatch around them can drop the ports that
         // reached only those -- worked out before the cables naming them are cleared.
         val jacks = connections.flatMap { listOf(it.from, it.to) }.filter { it.moduleId in gone }.toSet()
-        val ports = groupPortsOn(module.parent, jacks)
+        val ports = subpatchPortsOn(module.parent, jacks)
         connections.removeAll { it.from.moduleId in gone || it.to.moduleId in gone }
-        // A knob promoted to a group's edge outlives the module it belongs to otherwise:
+        // A knob promoted to a subpatch's edge outlives the module it belongs to otherwise:
         // the panel would not draw it, but the file would keep carrying it.
-        modules.forEach { it.groupPorts?.promoted?.removeAll { ref -> ref.moduleId in gone } }
+        modules.forEach { it.subpatchPorts?.promoted?.removeAll { ref -> ref.moduleId in gone } }
         modules.removeAll { it.id in gone }
-        dropOrphanedGroupPorts(module.parent, ports)
+        dropOrphanedSubpatchPorts(module.parent, ports)
     }
 
-    /** Everything inside group [id], at any depth, its rails included. */
+    /** Everything inside subpatch [id], at any depth, its rails included. */
     fun descendants(id: Long): Set<Long> {
         val found = mutableSetOf<Long>()
         var frontier = setOf(id)
@@ -2164,24 +2164,24 @@ class Patch {
         return found
     }
 
-    /** A group's left rail or right rail. */
-    fun groupRail(group: Long, type: ModuleType): PatchModule? =
-        modules.firstOrNull { it.parent == group && it.type == type }
+    /** A subpatch's left rail or right rail. */
+    fun subpatchRail(subpatch: Long, type: ModuleType): PatchModule? =
+        modules.firstOrNull { it.parent == subpatch && it.type == type }
 
     /**
-     * Sends a knob inside this group out to its edge, or takes it back.
+     * Sends a knob inside this subpatch out to its edge, or takes it back.
      *
-     * Only from inside, and only a module directly in this group: the chip that calls this
-     * is on that module's panel, and a knob two levels down promotes to the group it is in
-     * and then, once a group's own panel offers the chip, onward. A promoted knob is a
+     * Only from inside, and only a module directly in this subpatch: the chip that calls this
+     * is on that module's panel, and a knob two levels down promotes to the subpatch it is in
+     * and then, once a subpatch's own panel offers the chip, onward. A promoted knob is a
      * reference, so the value never moves and the engine is not told anything -- which is
-     * why grouping's promise holds here too: promoting changes no sound.
+     * why subpatching's promise holds here too: promoting changes no sound.
      */
     fun promote(module: PatchModule, index: Int): Boolean {
-        val group = module(scopeOrTop)?.takeIf { it.type == Types.Group } ?: return false
-        if (module.parent != group.id || module.isPinned) return false
+        val subpatch = module(scopeOrTop)?.takeIf { it.type == Types.Subpatch } ?: return false
+        if (module.parent != subpatch.id || module.isPinned) return false
         if (index !in module.type.rowParams) return false
-        val ports = group.groupPorts ?: return false
+        val ports = subpatch.subpatchPorts ?: return false
         val ref = ParamRef(module.id, index)
         if (ref in ports.promoted || ports.promoted.size >= MAX_PROMOTED) return false
         ports.promoted.add(ref)
@@ -2189,38 +2189,38 @@ class Patch {
     }
 
     fun unpromote(module: PatchModule, index: Int): Boolean {
-        val ports = module(scopeOrTop)?.groupPorts ?: return false
+        val ports = module(scopeOrTop)?.subpatchPorts ?: return false
         return ports.promoted.remove(ParamRef(module.id, index))
     }
 
     /**
-     * Whether this knob could be sent out to the edge of the group being looked at.
+     * Whether this knob could be sent out to the edge of the subpatch being looked at.
      *
      * The chip that does it is drawn only where this holds, so the panel says where
      * promotion is possible rather than offering it everywhere and refusing most taps.
      */
     fun canPromote(module: PatchModule, index: Int): Boolean {
-        val group = module(scopeOrTop)?.takeIf { it.type == Types.Group } ?: return false
-        if (module.parent != group.id || module.isPinned) return false
+        val subpatch = module(scopeOrTop)?.takeIf { it.type == Types.Subpatch } ?: return false
+        if (module.parent != subpatch.id || module.isPinned) return false
         if (index !in module.type.rowParams) return false
-        val ports = group.groupPorts ?: return false
+        val ports = subpatch.subpatchPorts ?: return false
         return ParamRef(module.id, index) in ports.promoted || ports.promoted.size < MAX_PROMOTED
     }
 
-    /** Whether this knob is already out at the edge of the group being looked at. */
+    /** Whether this knob is already out at the edge of the subpatch being looked at. */
     fun isPromoted(module: PatchModule, index: Int): Boolean =
-        module(scopeOrTop)?.groupPorts?.promoted?.contains(ParamRef(module.id, index)) == true
+        module(scopeOrTop)?.subpatchPorts?.promoted?.contains(ParamRef(module.id, index)) == true
 
     /**
      * The rows an open panel shows for [module].
      *
-     * Its own row parameters, or -- for a group, which has no knobs of its own -- the ones
+     * Its own row parameters, or -- for a subpatch, which has no knobs of its own -- the ones
      * promoted to its edge, resolved to the modules inside that really hold them. A
      * reference to a module that has since gone is dropped rather than drawn empty.
      */
     fun panelRows(module: PatchModule): List<ParamRow> =
-        if (module.type == Types.Group) {
-            module.groupPorts?.promoted.orEmpty().mapNotNull { ref ->
+        if (module.type == Types.Subpatch) {
+            module.subpatchPorts?.promoted.orEmpty().mapNotNull { ref ->
                 module(ref.moduleId)?.takeIf { ref.index in it.type.params.indices }
                     ?.let { ParamRow(it, ref.index) }
             }
@@ -2229,23 +2229,23 @@ class Patch {
         }
 
     /**
-     * "Group 1", "Group 2", ... -- one past the highest number in use.
+     * "Subpatch 1", "Subpatch 2", ... -- one past the highest number in use.
      *
-     * Counted over every module in the patch rather than the scope being grouped, since a
-     * breadcrumb shows groups from several scopes side by side and two "Group 2"s there
-     * would be a worse answer than a gap in the numbering. A renamed group simply drops
+     * Counted over every module in the patch rather than the scope being subpatched, since a
+     * breadcrumb shows subpatches from several scopes side by side and two "Subpatch 2"s there
+     * would be a worse answer than a gap in the numbering. A renamed subpatch simply drops
      * out of the count, and the number it held can come round again.
      */
-    internal fun nextGroupName(): String {
+    internal fun nextSubpatchName(): String {
         val taken = modules.mapNotNull { m ->
-            GROUP_NUMBER.matchEntire(m.name.orEmpty())?.groupValues?.get(1)?.toIntOrNull()
+            SUBPATCH_NUMBER.matchEntire(m.name.orEmpty())?.groupValues?.get(1)?.toIntOrNull()
         }
-        return "Group ${(taken.maxOrNull() ?: 0) + 1}"
+        return "Subpatch ${(taken.maxOrNull() ?: 0) + 1}"
     }
 
     fun duplicate(module: PatchModule): PatchModule? = when {
         module.isPinned -> null
-        module.type == Types.Group -> duplicateGroup(module)
+        module.type == Types.Subpatch -> duplicateSubpatch(module)
         else -> add(module.type, module.position + Offset(28f, 28f))?.also {
             it.parent = module.parent
             it.name = module.name
@@ -2255,59 +2255,59 @@ class Patch {
     }
 
     /**
-     * A group copied whole: every module inside it at any depth, with its knobs, sequence
+     * A subpatch copied whole: every module inside it at any depth, with its knobs, sequence
      * and exposed parameters, and every cable between them -- the rails' wiring included.
      * Cables to the outside are not copied, as duplicating a single module copies none.
      */
-    private fun duplicateGroup(group: PatchModule): PatchModule =
-        // The copy is a new group and takes the next free number; the groups nested inside
+    private fun duplicateSubpatch(subpatch: PatchModule): PatchModule =
+        // The copy is a new subpatch and takes the next free number; the subpatches nested inside
         // it keep their names, since those are only ever read from within it.
-        adoptGroup(this, group, group.position + Offset(28f, 28f), group.parent, nextGroupName())
+        adoptSubpatch(this, subpatch, subpatch.position + Offset(28f, 28f), subpatch.parent, nextSubpatchName())
 
     /**
-     * Copies [group] and everything inside it out of [source] and into this patch, under
+     * Copies [makeSubpatch] and everything inside it out of [source] and into this patch, under
      * fresh ids, at [at] and inside [parent].
      *
-     * One routine for duplicating a group and for loading a saved one, because they are the
-     * same operation: the only thing a saved group adds is that [source] is a patch parsed
-     * from a file rather than this one. Ids are allocated here, so a group loaded twice is
-     * two independent groups and a saved file can never collide with what is already in the
+     * One routine for duplicating a subpatch and for loading a saved one, because they are the
+     * same operation: the only thing a saved subpatch adds is that [source] is a patch parsed
+     * from a file rather than this one. Ids are allocated here, so a subpatch loaded twice is
+     * two independent subpatches and a saved file can never collide with what is already in the
      * patch. Cables to the outside are not copied, exactly as duplicating copies none.
      */
-    internal fun adoptGroup(
+    internal fun adoptSubpatch(
         source: Patch,
-        group: PatchModule,
+        subpatch: PatchModule,
         at: Offset,
         parent: Long,
-        name: String? = group.name,
+        name: String? = subpatch.name,
     ): PatchModule {
-        val inside = source.descendants(group.id)
+        val inside = source.descendants(subpatch.id)
         // A snapshot before anything is added, since source may be this patch.
-        val originals = source.modules.filter { it.id == group.id || it.id in inside }.toList()
+        val originals = source.modules.filter { it.id == subpatch.id || it.id in inside }.toList()
         val newId = originals.associate { it.id to nextId++ }
-        val sharedCopies = originals.filter { it.type == Types.Group }
-            .associate { it.id to (it.groupPorts ?: GroupPorts()).copy() }
+        val sharedCopies = originals.filter { it.type == Types.Subpatch }
+            .associate { it.id to (it.subpatchPorts ?: SubpatchPorts()).copy() }
         originals.forEach { from ->
             val ports = when (from.type) {
-                Types.Group -> sharedCopies.getValue(from.id)
-                Types.GroupIn, Types.GroupOut -> sharedCopies[from.parent]
+                Types.Subpatch -> sharedCopies.getValue(from.id)
+                Types.SubpatchIn, Types.SubpatchOut -> sharedCopies[from.parent]
                 else -> null
             }
-            val where = if (from.id == group.id) at else from.position
+            val where = if (from.id == subpatch.id) at else from.position
             val copy = PatchModule(newId.getValue(from.id), from.type, where, ports)
-            copy.name = if (from.id == group.id) name else from.name
+            copy.name = if (from.id == subpatch.id) name else from.name
             copy.font = from.font
             copy.dots.addAll(from.dots)
             from.params.forEachIndexed { i, v -> copy.setParam(i, v) }
             from.steps.forEachIndexed { i, step -> copy.setStep(i, step) }
             copy.modRanges = from.modRanges
-            copy.parent = if (from.id == group.id) parent else newId.getValue(from.parent)
+            copy.parent = if (from.id == subpatch.id) parent else newId.getValue(from.parent)
             modules.add(copy)
         }
         // The copies' promoted knobs must name the copies, not the originals they were
-        // taken from -- otherwise a duplicated group's panel turns the first group's knobs.
+        // taken from -- otherwise a duplicated subpatch's panel turns the first subpatch's knobs.
         sharedCopies.forEach { (from, ports) ->
-            val taken = originals.first { it.id == from }.groupPorts ?: return@forEach
+            val taken = originals.first { it.id == from }.subpatchPorts ?: return@forEach
             ports.promoted.clear()
             taken.promoted.forEach { ref ->
                 newId[ref.moduleId]?.let { ports.promoted.add(ref.copy(moduleId = it)) }
@@ -2322,33 +2322,33 @@ class Patch {
                 ),
             )
         }
-        return modules.first { it.id == newId.getValue(group.id) }
+        return modules.first { it.id == newId.getValue(subpatch.id) }
     }
 
     /**
-     * Collapses [ids] into one group, and returns it -- or null if they cannot be grouped:
+     * Collapses [ids] into one subpatch, and returns it -- or null if they cannot be subpatched:
      * none, a rail among them, or not all in the same scope.
      *
-     * The group's ports come from the cables that crossed the selection's edge, so the
+     * The subpatch's ports come from the cables that crossed the selection's edge, so the
      * patch sounds exactly as it did: [engineConnections] is the same before and after, and
      * a synced engine is sent nothing at all. A cable coming in becomes an input port, one
      * per outside source, feeding every module inside it used to reach; a cable going out
      * becomes an output port, one per inside source, feeding everything outside it did.
      */
-    fun group(ids: Set<Long>): PatchModule? {
+    fun makeSubpatch(ids: Set<Long>): PatchModule? {
         val chosen = modules.filter { it.id in ids }
         if (chosen.isEmpty() || chosen.size != ids.size || chosen.any { it.isPinned }) return null
         val at = chosen.first().parent
         if (chosen.any { it.parent != at }) return null
 
-        val ports = GroupPorts()
-        val group = PatchModule(
-            nextId++, Types.Group,
+        val ports = SubpatchPorts()
+        val subpatch = PatchModule(
+            nextId++, Types.Subpatch,
             Offset(chosen.minOf { it.position.x }, chosen.minOf { it.position.y }),
             ports,
-        ).also { it.parent = at; it.name = nextGroupName() }
-        val railIn = PatchModule(nextId++, Types.GroupIn, Offset.Zero, ports).also { it.parent = group.id }
-        val railOut = PatchModule(nextId++, Types.GroupOut, Offset.Zero, ports).also { it.parent = group.id }
+        ).also { it.parent = at; it.name = nextSubpatchName() }
+        val railIn = PatchModule(nextId++, Types.SubpatchIn, Offset.Zero, ports).also { it.parent = subpatch.id }
+        val railOut = PatchModule(nextId++, Types.SubpatchOut, Offset.Zero, ports).also { it.parent = subpatch.id }
 
         val inside = ids
         val coming = connections.filter { it.from.moduleId !in inside && it.to.moduleId in inside }
@@ -2358,90 +2358,90 @@ class Patch {
         coming.groupBy { it.from }.forEach { (source, cables) ->
             val index = ports.inputs.size
             // Named for what it feeds when that is one thing, since "cutoff" says more
-            // about a group's input than "out" does; otherwise for what feeds it.
+            // about a subpatch's input than "out" does; otherwise for what feeds it.
             val name = if (cables.size == 1) port(cables.single().to)?.name else port(source)?.name
             ports.inputs += Port(name ?: "in", kindOf(source))
-            rewired += Connection(source, PortRef(group.id, PortDirection.INPUT, index))
+            rewired += Connection(source, PortRef(subpatch.id, PortDirection.INPUT, index))
             cables.forEach { rewired += Connection(PortRef(railIn.id, PortDirection.OUTPUT, index), it.to) }
         }
         going.groupBy { it.from }.forEach { (source, cables) ->
             val index = ports.outputs.size
             ports.outputs += Port(port(source)?.name ?: "out", kindOf(source))
             rewired += Connection(source, PortRef(railOut.id, PortDirection.INPUT, index))
-            cables.forEach { rewired += Connection(PortRef(group.id, PortDirection.OUTPUT, index), it.to) }
+            cables.forEach { rewired += Connection(PortRef(subpatch.id, PortDirection.OUTPUT, index), it.to) }
         }
 
         Snapshot.withMutableSnapshot {
             connections.removeAll(coming + going)
-            modules.add(group)
+            modules.add(subpatch)
             modules.add(railIn)
             modules.add(railOut)
-            chosen.forEach { it.parent = group.id }
+            chosen.forEach { it.parent = subpatch.id }
             connections.addAll(rewired)
         }
-        return group
+        return subpatch
     }
 
     /**
-     * Puts a group's contents back where the group was, wiring every cable straight
-     * through its ports again. The inverse of [group]: ungrouping what was just grouped
+     * Puts a subpatch's contents back where the subpatch was, wiring every cable straight
+     * through its ports again. The inverse of [makeSubpatch]: unpacking what was just subpatched
      * gives back the same cables.
      */
-    fun ungroup(group: PatchModule) {
-        if (group.type != Types.Group) return
-        val railIn = groupRail(group.id, Types.GroupIn)
-        val railOut = groupRail(group.id, Types.GroupOut)
+    fun unpack(subpatch: PatchModule) {
+        if (subpatch.type != Types.Subpatch) return
+        val railIn = subpatchRail(subpatch.id, Types.SubpatchIn)
+        val railOut = subpatchRail(subpatch.id, Types.SubpatchOut)
         val through = mutableListOf<Connection>()
-        group.ports(PortDirection.INPUT).indices.forEach { i ->
-            val sources = connections.filter { it.to == PortRef(group.id, PortDirection.INPUT, i) }.map { it.from }
+        subpatch.ports(PortDirection.INPUT).indices.forEach { i ->
+            val sources = connections.filter { it.to == PortRef(subpatch.id, PortDirection.INPUT, i) }.map { it.from }
             val sinks = connections.filter { railIn != null && it.from == PortRef(railIn.id, PortDirection.OUTPUT, i) }.map { it.to }
             sources.forEach { from -> sinks.forEach { to -> through += Connection(from, to) } }
         }
-        group.ports(PortDirection.OUTPUT).indices.forEach { i ->
+        subpatch.ports(PortDirection.OUTPUT).indices.forEach { i ->
             val sources = connections.filter { railOut != null && it.to == PortRef(railOut.id, PortDirection.INPUT, i) }.map { it.from }
-            val sinks = connections.filter { it.from == PortRef(group.id, PortDirection.OUTPUT, i) }.map { it.to }
+            val sinks = connections.filter { it.from == PortRef(subpatch.id, PortDirection.OUTPUT, i) }.map { it.to }
             sources.forEach { from -> sinks.forEach { to -> through += Connection(from, to) } }
         }
-        val structure = setOfNotNull(group.id, railIn?.id, railOut?.id)
+        val structure = setOfNotNull(subpatch.id, railIn?.id, railOut?.id)
         Snapshot.withMutableSnapshot {
             connections.removeAll { it.from.moduleId in structure || it.to.moduleId in structure }
-            // Everything inside except this group's own two rails, which go with it. The
-            // test used to be "not structural", which skipped nested groups as well and
+            // Everything inside except this subpatch's own two rails, which go with it. The
+            // test used to be "not structural", which skipped nested subpatches as well and
             // left them pointing at a parent that no longer existed: still playing, drawn
             // in no scope at all, and only rescued by a reload.
-            modules.filter { it.parent == group.id && it.id !in structure }
-                .forEach { it.parent = group.parent }
+            modules.filter { it.parent == subpatch.id && it.id !in structure }
+                .forEach { it.parent = subpatch.parent }
             modules.removeAll { it.id in structure }
             through.forEach { if (it !in connections) connections.add(it) }
         }
     }
 
     /**
-     * Gives group [groupId] a new port, wired to [inside] -- a jack on a module inside it --
+     * Gives subpatch [subpatchId] a new port, wired to [inside] -- a jack on a module inside it --
      * and says whether it did. An input jack, or a parameter's, gets a new input fed from the
      * left rail; an output gets a new output feeding the right rail. The port takes the jack's
      * name and kind, and is added after the others, so no port already there moves.
      *
-     * This is the way a port is added after grouping: patch to the rail's edge.
+     * This is the way a port is added after subpatching: patch to the rail's edge.
      */
     /**
-     * Drops one of a group's ports, closing the gap behind it.
+     * Drops one of a subpatch's ports, closing the gap behind it.
      *
      * Ports are positional -- a cable names one by its index -- so every cable that pointed
      * past this one has to be renumbered, on the box outside and on the rail inside alike.
      * Cables on the port itself go, which costs the patch no sound: a port whose inside end
      * is gone already carried nothing, and [engineConnections] never saw it.
      */
-    fun removeGroupPort(group: PatchModule, dir: PortDirection, index: Int): Boolean {
-        val ports = group.groupPorts ?: return false
+    fun removeSubpatchPort(subpatch: PatchModule, dir: PortDirection, index: Int): Boolean {
+        val ports = subpatch.subpatchPorts ?: return false
         val list = if (dir == PortDirection.INPUT) ports.inputs else ports.outputs
         if (index !in list.indices) return false
-        val railType = if (dir == PortDirection.INPUT) Types.GroupIn else Types.GroupOut
+        val railType = if (dir == PortDirection.INPUT) Types.SubpatchIn else Types.SubpatchOut
         val railDir = if (dir == PortDirection.INPUT) PortDirection.OUTPUT else PortDirection.INPUT
-        val rail = groupRail(group.id, railType)
+        val rail = subpatchRail(subpatch.id, railType)
 
         fun names(ref: PortRef): Boolean =
-            (ref.moduleId == group.id && ref.dir == dir) ||
+            (ref.moduleId == subpatch.id && ref.dir == dir) ||
                 (rail != null && ref.moduleId == rail.id && ref.dir == railDir)
 
         fun shifted(ref: PortRef): PortRef =
@@ -2460,15 +2460,15 @@ class Patch {
     }
 
     /**
-     * Which of [groupId]'s ports reach one of [gone] inside it.
+     * Which of [subpatchId]'s ports reach one of [gone] inside it.
      *
      * Read *before* those jacks' cables are removed, since the cable is what says which
-     * port reached them; [dropOrphanedGroupPorts] then decides, after the removal, which
+     * port reached them; [dropOrphanedSubpatchPorts] then decides, after the removal, which
      * of these are left reaching nothing.
      */
-    private fun groupPortsOn(groupId: Long, gone: Set<PortRef>): List<Pair<PortDirection, Int>> {
+    private fun subpatchPortsOn(subpatchId: Long, gone: Set<PortRef>): List<Pair<PortDirection, Int>> {
         val found = mutableListOf<Pair<PortDirection, Int>>()
-        forEachGroupRail(groupId) { dir, rail, railDir ->
+        forEachSubpatchRail(subpatchId) { dir, rail, railDir ->
             connections.forEach { c ->
                 val railEnd = if (dir == PortDirection.INPUT) c.from else c.to
                 val other = if (dir == PortDirection.INPUT) c.to else c.from
@@ -2481,7 +2481,7 @@ class Patch {
     }
 
     /**
-     * Drops those [candidates] that no longer reach anything inside the group.
+     * Drops those [candidates] that no longer reach anything inside the subpatch.
      *
      * Only ports an edit orphaned, never every port that happens to be unpatched: a port is
      * stored rather than derived precisely so that unplugging a cable to move it leaves the
@@ -2490,25 +2490,25 @@ class Patch {
      * one nothing could reach again, and a jack on the box that goes nowhere is exactly the
      * kind of thing this project refuses to draw.
      */
-    private fun dropOrphanedGroupPorts(groupId: Long, candidates: List<Pair<PortDirection, Int>>) {
-        val group = module(groupId)?.takeIf { it.type == Types.Group } ?: return
+    private fun dropOrphanedSubpatchPorts(subpatchId: Long, candidates: List<Pair<PortDirection, Int>>) {
+        val subpatch = module(subpatchId)?.takeIf { it.type == Types.Subpatch } ?: return
         // Highest index first: removing a port renumbers the ones after it.
         candidates.sortedByDescending { it.second }.forEach { (dir, index) ->
-            val rail = groupRail(groupId, if (dir == PortDirection.INPUT) Types.GroupIn else Types.GroupOut)
+            val rail = subpatchRail(subpatchId, if (dir == PortDirection.INPUT) Types.SubpatchIn else Types.SubpatchOut)
                 ?: return@forEach
             val railDir = if (dir == PortDirection.INPUT) PortDirection.OUTPUT else PortDirection.INPUT
             val stillReaches = connections.any { c ->
                 val railEnd = if (dir == PortDirection.INPUT) c.from else c.to
                 railEnd.moduleId == rail.id && railEnd.dir == railDir && railEnd.index == index
             }
-            if (!stillReaches) removeGroupPort(group, dir, index)
+            if (!stillReaches) removeSubpatchPort(subpatch, dir, index)
         }
     }
 
 /**
-     * Drops every group port that nothing is plugged into on either side.
+     * Drops every subpatch port that nothing is plugged into on either side.
      *
-     * A group's ports are stored rather than derived so that unplugging one leaves the jack
+     * A subpatch's ports are stored rather than derived so that unplugging one leaves the jack
      * to plug back into. That is right for a port with a cable on its other side and wrong
      * for one with none: Forrest made a second output by mistake on 2026-09-19, dragged the
      * cable to the port he meant, and the empty one stayed -- nothing about it said it was
@@ -2518,10 +2518,10 @@ class Patch {
      * Swept after a cable is removed rather than checked when one is: a port is made and
      * then patched, and a sweep between those two would take it away again.
      */
-    fun sweepUnusedGroupPorts() {
-        modules.filter { it.type == Types.Group }.forEach { group ->
-            val ports = group.groupPorts ?: return@forEach
-            forEachGroupRail(group.id) { dir, rail, railDir ->
+    fun sweepUnusedSubpatchPorts() {
+        modules.filter { it.type == Types.Subpatch }.forEach { subpatch ->
+            val ports = subpatch.subpatchPorts ?: return@forEach
+            forEachSubpatchRail(subpatch.id) { dir, rail, railDir ->
                 val list = if (dir == PortDirection.INPUT) ports.inputs else ports.outputs
                 // Highest first: removing one renumbers those after it.
                 for (index in list.indices.reversed()) {
@@ -2531,37 +2531,37 @@ class Patch {
                     }
                     val outside = connections.any { c ->
                         val end = if (dir == PortDirection.INPUT) c.to else c.from
-                        end.moduleId == group.id && end.dir == dir && end.index == index
+                        end.moduleId == subpatch.id && end.dir == dir && end.index == index
                     }
-                    if (!inside && !outside) removeGroupPort(group, dir, index)
+                    if (!inside && !outside) removeSubpatchPort(subpatch, dir, index)
                 }
             }
         }
     }
 
-    /** Each of a group's two rails, with the direction of the box's ports it stands for. */
-    private inline fun forEachGroupRail(
-        groupId: Long,
+    /** Each of a subpatch's two rails, with the direction of the box's ports it stands for. */
+    private inline fun forEachSubpatchRail(
+        subpatchId: Long,
         body: (dir: PortDirection, rail: PatchModule, railDir: PortDirection) -> Unit,
     ) {
-        groupRail(groupId, Types.GroupIn)?.let { body(PortDirection.INPUT, it, PortDirection.OUTPUT) }
-        groupRail(groupId, Types.GroupOut)?.let { body(PortDirection.OUTPUT, it, PortDirection.INPUT) }
+        subpatchRail(subpatchId, Types.SubpatchIn)?.let { body(PortDirection.INPUT, it, PortDirection.OUTPUT) }
+        subpatchRail(subpatchId, Types.SubpatchOut)?.let { body(PortDirection.OUTPUT, it, PortDirection.INPUT) }
     }
 
-    fun addGroupPort(groupId: Long, inside: PortRef): Boolean {
-        val group = module(groupId)?.takeIf { it.type == Types.Group } ?: return false
-        val ports = group.groupPorts ?: return false
+    fun addSubpatchPort(subpatchId: Long, inside: PortRef): Boolean {
+        val subpatch = module(subpatchId)?.takeIf { it.type == Types.Subpatch } ?: return false
+        val ports = subpatch.subpatchPorts ?: return false
         val owner = module(inside.moduleId) ?: return false
-        if (owner.parent != groupId || owner.isPinned) return false
+        if (owner.parent != subpatchId || owner.isPinned) return false
         val jack = port(inside) ?: return false
         return if (inside.dir == PortDirection.OUTPUT) {
-            val railOut = groupRail(groupId, Types.GroupOut) ?: return false
+            val railOut = subpatchRail(subpatchId, Types.SubpatchOut) ?: return false
             val index = ports.outputs.size
             ports.outputs += Port(jack.name, jack.kind)
             connect(inside, PortRef(railOut.id, PortDirection.INPUT, index))
                 .also { if (!it) ports.outputs.removeAt(index) }
         } else {
-            val railIn = groupRail(groupId, Types.GroupIn) ?: return false
+            val railIn = subpatchRail(subpatchId, Types.SubpatchIn) ?: return false
             val index = ports.inputs.size
             ports.inputs += Port(jack.name, jack.kind)
             connect(PortRef(railIn.id, PortDirection.OUTPUT, index), inside)
@@ -2573,11 +2573,11 @@ class Patch {
     val engineModules: List<PatchModule> get() = modules.filter { !it.type.structural }
 
     /**
-     * Every cable the engine should have, with groups flattened away: each one runs from a
-     * real output to a real input, following any chain of group ports in between.
+     * Every cable the engine should have, with subpatches flattened away: each one runs from a
+     * real output to a real input, following any chain of subpatch ports in between.
      *
-     * The engine never learns that groups exist. That is the whole of the design -- a
-     * group is how a patch is shown and organized, and the sound is the same flat graph
+     * The engine never learns that subpatches exist. That is the whole of the design -- a
+     * subpatch is how a patch is shown and organized, and the sound is the same flat graph
      * whether the modules are loose or nested three deep.
      */
     fun engineConnections(): Set<Connection> {
@@ -2587,12 +2587,12 @@ class Patch {
             if (depth > 64) return emptyList() // only a corrupt file could nest this deep
             val module = byId[ref.moduleId] ?: return emptyList()
             return when (module.type) {
-                // A group's input, seen from inside: whatever feeds the box's input.
-                Types.GroupIn -> into[PortRef(module.parent, PortDirection.INPUT, ref.index)].orEmpty()
+                // A subpatch's input, seen from inside: whatever feeds the box's input.
+                Types.SubpatchIn -> into[PortRef(module.parent, PortDirection.INPUT, ref.index)].orEmpty()
                     .flatMap { sources(it.from, depth + 1) }
-                // A group's output, seen from outside: whatever feeds its right rail.
-                Types.Group -> {
-                    val railOut = modules.firstOrNull { it.parent == module.id && it.type == Types.GroupOut }
+                // A subpatch's output, seen from outside: whatever feeds its right rail.
+                Types.Subpatch -> {
+                    val railOut = modules.firstOrNull { it.parent == module.id && it.type == Types.SubpatchOut }
                         ?: return emptyList()
                     into[PortRef(railOut.id, PortDirection.INPUT, ref.index)].orEmpty()
                         .flatMap { sources(it.from, depth + 1) }
@@ -2624,12 +2624,12 @@ class Patch {
         if (index !in module.modRanges) return
         val jack = PortRef(module.id, PortDirection.MOD, index)
         // Before the cable goes, since the cable is what says which port reached this jack.
-        val ports = groupPortsOn(module.parent, setOf(jack))
+        val ports = subpatchPortsOn(module.parent, setOf(jack))
         disconnect(jack)
         module.modRanges = module.modRanges - index
-        // The jack is not coming back, so a group port that reached only it has nothing
+        // The jack is not coming back, so a subpatch port that reached only it has nothing
         // left to reach: it would be a jack on the box that quietly went nowhere.
-        dropOrphanedGroupPorts(module.parent, ports)
+        dropOrphanedSubpatchPorts(module.parent, ports)
     }
 
     /** A disabled input rail cannot be patched from, so it reads as present but inert. */
@@ -2672,9 +2672,9 @@ class Patch {
 
         if (kindOf(inp) == SignalKind.NOTE) {
             val cable = Connection(out, inp)
-            // Patching a pair already patched takes that cable back, which can leave a group
+            // Patching a pair already patched takes that cable back, which can leave a subpatch
             // port with nothing on either side.
-            if (connections.remove(cable)) sweepUnusedGroupPorts() else connections.add(cable)
+            if (connections.remove(cable)) sweepUnusedSubpatchPorts() else connections.add(cable)
             return true
         }
         connections.removeAll { it.to == inp }
@@ -2684,7 +2684,7 @@ class Patch {
 
     fun disconnect(ref: PortRef) {
         connections.removeAll { it.from == ref || it.to == ref }
-        sweepUnusedGroupPorts()
+        sweepUnusedSubpatchPorts()
     }
 }
 
@@ -2701,14 +2701,14 @@ sealed interface Interaction {
     data class Menu(
         val anchor: Offset,
         val targetId: Long?,
-        /** Set when the press landed on a group's port, which has its own one-item menu. */
+        /** Set when the press landed on a subpatch's port, which has its own one-item menu. */
         val port: PortRef? = null,
-        /** The library's own menu, whose tiles are the saved groups. */
+        /** The library's own menu, whose tiles are the saved subpatches. */
         val library: Boolean = false,
     ) : Interaction
 
     /**
-     * Choosing modules to group. A tap on a module adds or removes it; the Group and Cancel
+     * Choosing modules to subpatch. A tap on a module adds or removes it; the Subpatch and Cancel
      * buttons at the bottom end it. A mode rather than a gesture, because every gesture the
      * canvas has is already spoken for -- and a lasso would be one more outcome for the
      * gesture loop to tell apart on the first move.
@@ -2734,7 +2734,7 @@ sealed interface Interaction {
     data class Typing(val target: NumberTarget) : Interaction
 
     /**
-     * Naming something on its way into the library: a group, or the whole patch when
+     * Naming something on its way into the library: a subpatch, or the whole patch when
      * [moduleId] is null. Over the canvas like [Renaming], and for the same reason.
      */
     data class Saving(val moduleId: Long?) : Interaction
@@ -2753,26 +2753,26 @@ sealed interface MenuItem {
     data class Add(val type: ModuleType) : MenuItem
     data class Duplicate(val moduleId: Long) : MenuItem
     data class Delete(val moduleId: Long) : MenuItem
-    data object StartGroup : MenuItem
-    data class Ungroup(val moduleId: Long) : MenuItem
+    data object StartSubpatch : MenuItem
+    data class Unpack(val moduleId: Long) : MenuItem
     data class Rename(val moduleId: Long) : MenuItem
 
-    /** A group's promoted knobs, which is the only way its panel opens: a tap goes inside. */
+    /** A subpatch's promoted knobs, which is the only way its panel opens: a tap goes inside. */
     data class Knobs(val moduleId: Long) : MenuItem
 
-    /** Takes a port off a group, from the box outside or the rail inside. */
-    data class RemovePort(val groupId: Long, val dir: PortDirection, val index: Int) : MenuItem
+    /** Takes a port off a subpatch, from the box outside or the rail inside. */
+    data class RemovePort(val subpatchId: Long, val dir: PortDirection, val index: Int) : MenuItem
 
     /** Everything away, back to an empty patch. Undo puts it back, like any other edit. */
     data object NewPatch : MenuItem
 
-    /** Writes a group to the library. Null is the whole patch, saved as one group. */
+    /** Writes a subpatch to the library. Null is the whole patch, saved as one subpatch. */
     data class Save(val moduleId: Long?) : MenuItem
 
-    /** Opens the library, whose own tiles are the saved groups. */
+    /** Opens the library, whose own tiles are the saved subpatches. */
     data object OpenLibrary : MenuItem
 
-    /** One saved group, placed where the menu that offered it was opened. */
+    /** One saved subpatch, placed where the menu that offered it was opened. */
     data class Load(val name: String) : MenuItem
 
     /** The library with nothing in it yet: a tile that says so and dismisses. */
@@ -2780,20 +2780,20 @@ sealed interface MenuItem {
 }
 
 /**
- * Which group's port a jack belongs to, from either side of the boundary.
+ * Which subpatch's port a jack belongs to, from either side of the boundary.
  *
- * The box's own jacks name the group directly; a rail's name it the other way round, since
- * a group's input is the left rail's output. Null for anything else -- the patch's own
- * rails are pinned too, and their ports are the audio device's, not a group's.
+ * The box's own jacks name the subpatch directly; a rail's name it the other way round, since
+ * a subpatch's input is the left rail's output. Null for anything else -- the patch's own
+ * rails are pinned too, and their ports are the audio device's, not a subpatch's.
  */
-internal fun Patch.groupPortAt(ref: PortRef): Triple<PatchModule, PortDirection, Int>? {
+internal fun Patch.subpatchPortAt(ref: PortRef): Triple<PatchModule, PortDirection, Int>? {
     val module = module(ref.moduleId) ?: return null
     return when {
-        module.type == Types.Group && ref.dir != PortDirection.MOD ->
+        module.type == Types.Subpatch && ref.dir != PortDirection.MOD ->
             Triple(module, ref.dir, ref.index)
-        module.type == Types.GroupIn && ref.dir == PortDirection.OUTPUT ->
+        module.type == Types.SubpatchIn && ref.dir == PortDirection.OUTPUT ->
             module(module.parent)?.let { Triple(it, PortDirection.INPUT, ref.index) }
-        module.type == Types.GroupOut && ref.dir == PortDirection.INPUT ->
+        module.type == Types.SubpatchOut && ref.dir == PortDirection.INPUT ->
             module(module.parent)?.let { Triple(it, PortDirection.OUTPUT, ref.index) }
         else -> null
     }
@@ -2808,11 +2808,11 @@ private fun menuItems(
 ): List<MenuItem> = when {
     saved != null ->
         saved.take(MAX_SAVED_TILES).map { MenuItem.Load(it) }.ifEmpty { listOf(MenuItem.LibraryEmpty) }
-    port != null -> patch.groupPortAt(port)
-        ?.let { (group, dir, index) -> listOf(MenuItem.RemovePort(group.id, dir, index)) }
+    port != null -> patch.subpatchPortAt(port)
+        ?.let { (subpatch, dir, index) -> listOf(MenuItem.RemovePort(subpatch.id, dir, index)) }
         .orEmpty()
     targetId == null -> Types.palette.map { MenuItem.Add(it) } +
-        MenuItem.StartGroup + MenuItem.OpenLibrary +
+        MenuItem.StartSubpatch + MenuItem.OpenLibrary +
         // Saving the patch belongs here rather than on a module: it is about all of them,
         // and the empty canvas is the only thing that stands for the patch as a whole.
         listOfNotNull(
@@ -2820,20 +2820,20 @@ private fun menuItems(
             // Next to Save, and only when there is something to clear.
             MenuItem.NewPatch.takeIf { patch.free.isNotEmpty() },
         )
-    patch.module(targetId)?.type == Types.Group -> listOfNotNull(
+    patch.module(targetId)?.type == Types.Subpatch -> listOfNotNull(
         MenuItem.Duplicate(targetId),
         // Only when it has any: an empty panel would be a door onto nothing, and the way
-        // to put knobs there is inside the group, where the chip is.
+        // to put knobs there is inside the subpatch, where the chip is.
         MenuItem.Knobs(targetId).takeIf { patch.panelRows(patch.module(targetId)!!).isNotEmpty() },
         MenuItem.Rename(targetId),
         MenuItem.Save(targetId),
-        MenuItem.Delete(targetId), MenuItem.Ungroup(targetId),
+        MenuItem.Delete(targetId), MenuItem.Unpack(targetId),
     )
     else -> listOf(MenuItem.Duplicate(targetId), MenuItem.Rename(targetId), MenuItem.Delete(targetId))
 }
 
 /**
- * How many saved groups the library's menu shows.
+ * How many saved subpatches the library's menu shows.
  *
  * The menu wraps its tiles into rows and would run off the screen before it ran out of
  * names. A library bigger than this wants a list that scrolls, which is the next thing to
@@ -2841,7 +2841,7 @@ private fun menuItems(
  */
 internal const val MAX_SAVED_TILES = 12
 
-/** The groups from the top down to the one being looked at, [TOP] first. */
+/** The subpatches from the top down to the one being looked at, [TOP] first. */
 internal fun Patch.scopePath(): List<Long> {
     val path = mutableListOf<Long>()
     var at = scopeOrTop
@@ -2854,16 +2854,16 @@ internal fun Patch.scopePath(): List<Long> {
 }
 
 /** Whether [screen] lands on the slot that would add a port for [source]. */
-internal fun Patch.groupPortSlotHit(frame: Frame, source: PortRef, screen: Offset, touchPx: Float): Boolean {
+internal fun Patch.subpatchPortSlotHit(frame: Frame, source: PortRef, screen: Offset, touchPx: Float): Boolean {
     val at = scopeOrTop
     if (at == TOP) return false
     if (module(source.moduleId)?.parent != at) return false
-    val rail = groupRail(at, railTypeFor(source)) ?: return false
-    return (groupPortSlot(frame, rail, railDirFor(source)) - screen).getDistance() <= touchPx
+    val rail = subpatchRail(at, railTypeFor(source)) ?: return false
+    return (subpatchPortSlot(frame, rail, railDirFor(source)) - screen).getDistance() <= touchPx
 }
 
 /**
- * Which group's crumb [screen] landed on, [TOP] for the patch itself, or null for none.
+ * Which subpatch's crumb [screen] landed on, [TOP] for the patch itself, or null for none.
  *
  * One definition for the tap that goes there and the long press that renames it, so the
  * two cannot disagree about where a chip is. Null while a panel is open, since the
@@ -2881,7 +2881,7 @@ internal fun Patch.breadcrumbAt(frame: Frame, screen: Offset): Long? {
     return null
 }
 
-/** Looks inside a group, or back out: closing any panel, which belongs to where you were. */
+/** Looks inside a subpatch, or back out: closing any panel, which belongs to where you were. */
 internal fun Patch.enterScope(id: Long) {
     modules.forEach { it.expanded = false }
     scope = id
@@ -3088,7 +3088,7 @@ internal class Frame(
      * One step of the breadcrumb, [level] 0 being the patch itself.
      *
      * In the top row beside the scale chip, because that row is where the patch-wide
-     * controls already live and "where am I" is one of them. Shown only inside a group:
+     * controls already live and "where am I" is one of them. Shown only inside a subpatch:
      * at the top level there is nowhere else to be.
      */
     fun breadcrumbChip(level: Int): Rect {
@@ -3100,7 +3100,7 @@ internal class Frame(
         )
     }
 
-    /** Group (done) and Cancel, centered along the bottom while modules are being chosen. */
+    /** Subpatch (done) and Cancel, centered along the bottom while modules are being chosen. */
     fun selectionButton(done: Boolean): Rect {
         val d = density
         val w = SELECT_BUTTON_W * d
@@ -3148,10 +3148,10 @@ internal class CanvasControls(
     val onUndo: () -> Unit = {},
     val onRedo: () -> Unit = {},
     val onResetTransport: () -> Unit = {},
-    /** The saved groups, newest listing first read when the picker opens. */
+    /** The saved subpatches, newest listing first read when the picker opens. */
     val saved: List<String> = emptyList(),
-    /** Loads a saved group into [Patch] at a world position. The file read is the caller's. */
-    val onLoadGroup: (String, Offset) -> Unit = { _, _ -> },
+    /** Loads a saved subpatch into [Patch] at a world position. The file read is the caller's. */
+    val onLoadSubpatch: (String, Offset) -> Unit = { _, _ -> },
 )
 
 /**
@@ -3385,23 +3385,23 @@ internal class ScaleCardView {
     val onPage: Boolean get() = pickingFor >= 0 || rootFor >= 0
 }
 
-/** Which of a group's rails a jack inside it would get its port on. */
+/** Which of a subpatch's rails a jack inside it would get its port on. */
 internal fun railTypeFor(source: PortRef): ModuleType =
-    if (source.dir == PortDirection.OUTPUT) Types.GroupOut else Types.GroupIn
+    if (source.dir == PortDirection.OUTPUT) Types.SubpatchOut else Types.SubpatchIn
 
-/** The side of the rail that jack's port appears on: the rails mirror the group's box. */
+/** The side of the rail that jack's port appears on: the rails mirror the subpatch's box. */
 internal fun railDirFor(source: PortRef): PortDirection =
     if (source.dir == PortDirection.OUTPUT) PortDirection.INPUT else PortDirection.OUTPUT
 
 /**
- * Where a group's next port would land on [rail], and so where the slot for it is drawn.
+ * Where a subpatch's next port would land on [rail], and so where the slot for it is drawn.
  *
  * A rail is 64dp wide and its jacks answer to a 22dp touch radius, so nearly every tap on a
  * rail lands on a jack already there -- which is why "tap the rail to add a port" could not
  * be made to happen at all on the phone. The slot is a target of its own, a whole port pitch
  * from the last jack, so it can be hit.
  */
-internal fun groupPortSlot(frame: Frame, rail: PatchModule, dir: PortDirection): Offset {
+internal fun subpatchPortSlot(frame: Frame, rail: PatchModule, dir: PortDirection): Offset {
     val count = rail.ports(dir).size
     val body = maxOf(PatchModule.MIN_BODY, (count + 1) * PatchModule.PORT_PITCH)
     return portIn(frame.railRectWith(rail, count + 1), frame.density, dir, count, count + 1, body * frame.density)
@@ -3451,9 +3451,9 @@ fun PatchCanvas(
     onResetTransport: () -> Unit = {},
     /** Whatever `.scl` files were found. Never empty; at worst just the fallback. */
     scales: List<Scale> = listOf(Scale.Chromatic),
-    /** Saved groups on disk. Null in previews and tests, where nothing is saved or loaded. */
-    library: GroupLibrary? = null,
-    /** The tuning a loaded group's scale names are resolved against. */
+    /** Saved subpatches on disk. Null in previews and tests, where nothing is saved or loaded. */
+    library: SubpatchLibrary? = null,
+    /** The tuning a loaded subpatch's scale names are resolved against. */
     scaleLibrary: ScaleLibrary = ScaleLibrary.of(null),
     /** The SoundFonts an SF panel chooses from. Null in previews and tests. */
     soundFonts: SoundFontLibrary? = null,
@@ -3489,24 +3489,24 @@ fun PatchCanvas(
     // The library's names, read when its menu opens rather than kept live: a file dropped
     // into the folder over USB should be there the next time you look, and nothing needs
     // the list before then.
-    var savedGroups by remember { mutableStateOf(emptyList<String>()) }
+    var savedSubpatches by remember { mutableStateOf(emptyList<String>()) }
     val libraryOpen = (interaction as? Interaction.Menu)?.library == true
     LaunchedEffect(libraryOpen, library) {
-        if (libraryOpen) savedGroups = withContext(Dispatchers.IO) { library?.names().orEmpty() }
+        if (libraryOpen) savedSubpatches = withContext(Dispatchers.IO) { library?.names().orEmpty() }
     }
     val io = rememberCoroutineScope()
 
     val controls by rememberUpdatedState(
         CanvasControls(
             canUndo, canRedo, onToggleOutput, onToggleInput, onUndo, onRedo, onResetTransport,
-            saved = savedGroups,
-            onLoadGroup = { name, at ->
+            saved = savedSubpatches,
+            onLoadSubpatch = { name, at ->
                 io.launch {
                     val text = withContext(Dispatchers.IO) { library?.read(name) }
                     // Silently nothing if the file went away or will not parse: the refusal
-                    // is logged where it happened, and a half-loaded group is not a thing
-                    // this can leave behind -- loadGroup either adopts all of it or none.
-                    if (text != null) patch.loadGroup(text, at, scaleLibrary)
+                    // is logged where it happened, and a half-loaded subpatch is not a thing
+                    // this can leave behind -- loadSubpatch either adopts all of it or none.
+                    if (text != null) patch.loadSubpatch(text, at, scaleLibrary)
                 }
             },
         ),
@@ -3528,7 +3528,7 @@ fun PatchCanvas(
     LaunchedEffect(openModule?.id) { intervalMenu = false }
 
     // An SF panel's page of instruments: whether it is open, how far it is scrolled in rows,
-    // and the fonts there are to switch between -- read when the page opens, like the group
+    // and the fonts there are to switch between -- read when the page opens, like the subpatch
     // library's names, so a file dropped in over USB is there the next time you look.
     var presetMenu by remember { mutableStateOf(false) }
     var presetScroll by remember { mutableIntStateOf(0) }
@@ -3766,7 +3766,7 @@ fun PatchCanvas(
                             // The reading before anything under it. It is a tap-only target,
                             // like the chips: a number is typed, never dragged, and the bar
                             // for dragging is in the same row a finger's width below.
-                            // The rows this panel shows: its own knobs, or -- for a group --
+                            // The rows this panel shows: its own knobs, or -- for a subpatch --
                             // the ones promoted to its edge, which belong to modules inside it.
                             val rows = patch.panelRows(open)
                             val typed = if (onHistory) null else panelValueAt(
@@ -4017,13 +4017,13 @@ fun PatchCanvas(
                                 } else if (interaction is Interaction.Selecting) {
                                     // Choosing is taps; a finger that rests does not end it.
                                     interaction
-                                } else if (heldPort != null && patch.groupPortAt(heldPort) != null) {
-                                    // A group's jack, from either side. Precise rather than
+                                } else if (heldPort != null && patch.subpatchPortAt(heldPort) != null) {
+                                    // A subpatch's jack, from either side. Precise rather than
                                     // anywhere on the box, since the box's own menu is what
                                     // a press anywhere else on it means.
                                     Interaction.Menu(down.position, hitModule?.id, heldPort)
                                 } else if (crumb != null) {
-                                    // Holding a crumb renames what it names -- the group you are
+                                    // Holding a crumb renames what it names -- the subpatch you are
                                     // inside, whose box is a level up and not on screen, or at
                                     // the top of the path the patch itself.
                                     Interaction.Renaming(crumb)
@@ -4140,7 +4140,7 @@ fun PatchCanvas(
                     OUT_ID -> outputActive
                     else -> true
                 }
-                // A group's rails are not switches, so they get neither the dimming nor the
+                // A subpatch's rails are not switches, so they get neither the dimming nor the
                 // switched-on outline -- the outline would say "this is live, tap to turn it
                 // off" about something with no off.
                 val switch = rail.id == IN_ID || rail.id == OUT_ID
@@ -4187,8 +4187,8 @@ fun PatchCanvas(
             // In screen space, because a cable can run from a world module to a rail and so have
             // one endpoint in each space. Resolving both through portScreen() keeps that a non-case.
             patch.connections.forEach { conn ->
-                // Only a cable with both ends in this scope. A cable into a group ends at the
-                // group's box out here and starts again at its rail inside; either half alone is
+                // Only a cable with both ends in this scope. A cable into a subpatch ends at the
+                // subpatch's box out here and starts again at its rail inside; either half alone is
                 // the whole of what can be seen from where you are.
                 if (!patch.shown(conn.from.moduleId) || !patch.shown(conn.to.moduleId)) return@forEach
                 val a = portScreen(patch, conn.from, camera, frame) ?: return@forEach
@@ -4218,12 +4218,12 @@ fun PatchCanvas(
                         center = at,
                     )
                 }
-                // The empty slot after a group rail's last jack: where a port for the armed
+                // The empty slot after a subpatch rail's last jack: where a port for the armed
                 // jack would go, and the only way to ask for one. Drawn only while something is
                 // armed, so a rail at rest is what it has and no more.
                 if (patch.scopeOrTop != TOP && patch.module(state.source.moduleId)?.parent == patch.scopeOrTop) {
-                    patch.groupRail(patch.scopeOrTop, railTypeFor(state.source))?.let { rail ->
-                        val slot = groupPortSlot(frame, rail, railDirFor(state.source))
+                    patch.subpatchRail(patch.scopeOrTop, railTypeFor(state.source))?.let { rail ->
+                        val slot = subpatchPortSlot(frame, rail, railDirFor(state.source))
                         val kind = patch.kindOf(state.source)
                         drawCircle(kind.cable.copy(alpha = 0.22f), touchPx, slot)
                         drawCircle(
@@ -4282,9 +4282,9 @@ fun PatchCanvas(
                 path.forEachIndexed { level, id ->
                     drawChip(
                         frame.breadcrumbChip(level), d,
-                        if (id == TOP) patch.title else patch.module(id)?.title ?: "Group",
+                        if (id == TOP) patch.title else patch.module(id)?.title ?: "Subpatch",
                         open = id == path.last(),
-                        accent = Types.Group.accent,
+                        accent = Types.Subpatch.accent,
                         measurer = screenMeasurer,
                     )
                 }
@@ -4293,15 +4293,15 @@ fun PatchCanvas(
                 val count = choosing.ids.size
                 drawChip(
                     frame.selectionButton(done = true), d,
-                    // "Group \u00d73", not "Group 3": groups are named "Group 1", "Group 2" now,
-                    // and a button reading "Group 1" over a selection of one looked like the
-                    // name of the group it was about to make.
-                    if (count == 0) "Tap modules" else "Group \u00d7$count",
+                    // "Subpatch \u00d73", not "Subpatch 3": subpatches are named "Subpatch 1", "Subpatch 2" now,
+                    // and a button reading "Subpatch 1" over a selection of one looked like the
+                    // name of the subpatch it was about to make.
+                    if (count == 0) "Tap modules" else "Subpatch \u00d7$count",
                     open = count > 0,
-                    accent = Types.Group.accent,
+                    accent = Types.Subpatch.accent,
                     measurer = screenMeasurer,
                 )
-                drawChip(frame.selectionButton(done = false), d, "Cancel", false, Types.Group.accent, screenMeasurer)
+                drawChip(frame.selectionButton(done = false), d, "Cancel", false, Types.Subpatch.accent, screenMeasurer)
             }
             drawScales(
                 frame, d, patch, scales, playingEntry, card == FloatingCard.Scales, scaleView,
@@ -4311,7 +4311,7 @@ fun PatchCanvas(
             (interaction as? Interaction.Menu)?.let { menu ->
                 drawMenu(
                 menuLayout(
-                    menuItems(patch, menu.targetId, menu.port, savedGroups.takeIf { menu.library }),
+                    menuItems(patch, menu.targetId, menu.port, savedSubpatches.takeIf { menu.library }),
                     menu.anchor, d, size, frame.fontScale,
                 ),
                 d, screenMeasurer,
@@ -4327,7 +4327,7 @@ fun PatchCanvas(
             if (renaming.moduleId == TOP) {
                 // The patch itself, from the first crumb. A name equal to the default is no
                 // name, as a module's own type name is no name.
-                RenameOverlay(TOP, patch.title, Types.Group.accent, {
+                RenameOverlay(TOP, patch.title, Types.Subpatch.accent, {
                     patch.name = it?.takeIf { name -> name != DEFAULT_PATCH_NAME }
                 }) { interaction = Interaction.Idle }
             } else if (module != null) {
@@ -4340,15 +4340,15 @@ fun PatchCanvas(
             NumberKeypad(patch, typing.target) { interaction = Interaction.Idle }
         }
         (interaction as? Interaction.Saving)?.let { saving ->
-            val group = saving.moduleId?.let { patch.module(it) }
+            val subpatch = saving.moduleId?.let { patch.module(it) }
             SaveOverlay(
-                initial = group?.title ?: patch.title,
+                initial = subpatch?.title ?: patch.title,
                 library = library,
-                // Built when the name is known, since saving the whole patch names the group
+                // Built when the name is known, since saving the whole patch names the subpatch
                 // it makes on the way out.
                 json = { name ->
-                    if (group != null) patch.groupToJson(group, name)
-                    else patch.patchToGroupJson(name)
+                    if (subpatch != null) patch.subpatchToJson(subpatch, name)
+                    else patch.patchToSubpatchJson(name)
                 },
             ) { interaction = Interaction.Idle }
         }
@@ -4358,7 +4358,7 @@ fun PatchCanvas(
 /**
  * Naming a module, with the system keyboard.
  *
- * The text starts selected, so the default "Group 3" is replaced by typing and kept by
+ * The text starts selected, so the default "Subpatch 3" is replaced by typing and kept by
  * tapping past it -- the same bargain a file manager's rename makes. An empty name is not
  * an error but the way back: it clears the name and the module goes by its type again.
  * Committing writes to the model like any other edit, so autosave and undo carry it
@@ -4448,7 +4448,7 @@ private fun RenameOverlay(
 @Composable
 private fun SaveOverlay(
     initial: String,
-    library: GroupLibrary?,
+    library: SubpatchLibrary?,
     json: (String) -> String?,
     onDone: () -> Unit,
 ) {
@@ -4459,7 +4459,7 @@ private fun SaveOverlay(
     val focus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
     val io = rememberCoroutineScope()
-    val accent = Types.Group.accent
+    val accent = Types.Subpatch.accent
 
     fun write(name: String) {
         val body = json(name)
@@ -4470,7 +4470,7 @@ private fun SaveOverlay(
 
     fun commit() {
         val name = text.text.trim().take(MAX_NAME)
-        if (name.isEmpty() || GroupLibrary.safeName(name).isEmpty()) return
+        if (name.isEmpty() || SubpatchLibrary.safeName(name).isEmpty()) return
         keyboard?.hide()
         if (library?.exists(name) == true) clash = name else write(name)
     }
@@ -4842,7 +4842,7 @@ private const val FLASH_MS = 450
 /** Warm white rather than the module's accent: this means "changed", not "is a filter". */
 private val FlashColor = Color(0xFFE8EEF5)
 
-/** A module chosen for a group. Bright and steady, where the flash fades. */
+/** A module chosen for a subpatch. Bright and steady, where the flash fades. */
 private val SelectedColor = Color(0xFFF2F5F9)
 
 private fun DrawScope.drawFlash(rect: Rect, unit: Float, alpha: Float, strokeWidth: Float) {
@@ -5882,8 +5882,8 @@ private fun handleTap(
             }
             is MenuItem.Duplicate -> patch.module(chosen.moduleId)?.let { patch.duplicate(it) }
             is MenuItem.Delete -> patch.module(chosen.moduleId)?.let { patch.remove(it) }
-            is MenuItem.StartGroup -> return Interaction.Selecting(emptySet())
-            is MenuItem.Ungroup -> patch.module(chosen.moduleId)?.let { patch.ungroup(it) }
+            is MenuItem.StartSubpatch -> return Interaction.Selecting(emptySet())
+            is MenuItem.Unpack -> patch.module(chosen.moduleId)?.let { patch.unpack(it) }
             is MenuItem.Rename ->
                 return if (patch.module(chosen.moduleId) == null) Interaction.Idle
                 else Interaction.Renaming(chosen.moduleId)
@@ -5893,19 +5893,19 @@ private fun handleTap(
             is MenuItem.Load -> {
                 // Centered on the press that opened the menu, as a new module is.
                 val world = camera.toWorld(current.anchor)
-                controls.onLoadGroup(
+                controls.onLoadSubpatch(
                     chosen.name,
-                    world - Offset(PatchModule.WIDTH / 2f, PatchModule.heightFor(Types.Group) / 2f),
+                    world - Offset(PatchModule.WIDTH / 2f, PatchModule.heightFor(Types.Subpatch) / 2f),
                 )
             }
             is MenuItem.NewPatch -> patch.reset()
             is MenuItem.LibraryEmpty -> Unit
-            is MenuItem.RemovePort -> patch.module(chosen.groupId)?.let {
-                patch.removeGroupPort(it, chosen.dir, chosen.index)
+            is MenuItem.RemovePort -> patch.module(chosen.subpatchId)?.let {
+                patch.removeSubpatchPort(it, chosen.dir, chosen.index)
             }
-            is MenuItem.Knobs -> patch.module(chosen.moduleId)?.let { group ->
+            is MenuItem.Knobs -> patch.module(chosen.moduleId)?.let { subpatch ->
                 patch.modules.forEach { it.expanded = false }
-                group.expanded = true
+                subpatch.expanded = true
             }
         }
         return Interaction.Idle
@@ -5928,7 +5928,7 @@ private fun handleTap(
             // Nothing chosen is not an error to announce; the mode simply stays until it is
             // given something or cancelled.
             if (current.ids.isEmpty()) return current
-            patch.group(current.ids)
+            patch.makeSubpatch(current.ids)
             return Interaction.Idle
         }
         if (frame.selectionButton(done = false).contains(screen)) return Interaction.Idle
@@ -5960,9 +5960,9 @@ private fun handleTap(
 
     if (port == null && current is Interaction.Idle) {
         patch.hitModule(camera, frame, screen)?.let { module ->
-            // A group's body is its way in. Opening a composite is going inside it, as
+            // A subpatch's body is its way in. Opening a composite is going inside it, as
             // opening a primitive shows its controls.
-            if (module.type == Types.Group) {
+            if (module.type == Types.Subpatch) {
                 patch.enterScope(module.id)
                 return Interaction.Idle
             }
@@ -5981,11 +5981,11 @@ private fun handleTap(
             if (port != null) Interaction.Connecting(port) else Interaction.Idle
         }
         is Interaction.Connecting -> when {
-            // Inside a group, an armed jack taken to the slot at the end of the matching
+            // Inside a subpatch, an armed jack taken to the slot at the end of the matching
             // rail makes a new port for it: an output to the right rail, an input or a
             // knob's jack to the left.
-            patch.groupPortSlotHit(frame, current.source, screen, touchPx) ->
-                if (patch.addGroupPort(patch.scopeOrTop, current.source)) Interaction.Idle else current
+            patch.subpatchPortSlotHit(frame, current.source, screen, touchPx) ->
+                if (patch.addSubpatchPort(patch.scopeOrTop, current.source)) Interaction.Idle else current
             // The rest of that rail, or the other one, keeps the jack armed rather than
             // disarming: a tap that did nothing and dropped the jack reads as a missed tap.
             port == null && patch.scopeOrTop != TOP &&
@@ -6030,7 +6030,7 @@ internal const val MAX_PARAMS = 8
 internal const val PANEL_ONE_COLUMN = 5
 
 /**
- * The most knobs a group can carry out to its edge.
+ * The most knobs a subpatch can carry out to its edge.
  *
  * The same as [MAX_PARAMS], for the same reason a module stops there: the panel lays out at
  * most two columns of four, and a ninth row is thinner than a finger. Nothing in the engine cares
@@ -6183,20 +6183,20 @@ private fun MenuItem.label(): String = when (this) {
     is MenuItem.Load -> name
     is MenuItem.LibraryEmpty -> "Nothing saved"
     is MenuItem.Delete -> "Delete"
-    is MenuItem.StartGroup -> "Group\u2026"
-    is MenuItem.Ungroup -> "Ungroup"
+    is MenuItem.StartSubpatch -> "Subpatch\u2026"
+    is MenuItem.Unpack -> "Unpack"
 }
 
 private fun MenuItem.tint(): Color = when (this) {
     is MenuItem.Add -> type.accent
     is MenuItem.Duplicate, is MenuItem.Rename -> Color(0xFF8A93A3)
-    is MenuItem.Knobs -> Types.Group.accent
+    is MenuItem.Knobs -> Types.Subpatch.accent
     is MenuItem.RemovePort -> Color(0xFFE07A6B)
     is MenuItem.NewPatch -> Color(0xFFE07A6B)
-    is MenuItem.Save, is MenuItem.OpenLibrary, is MenuItem.Load -> Types.Group.accent
+    is MenuItem.Save, is MenuItem.OpenLibrary, is MenuItem.Load -> Types.Subpatch.accent
     is MenuItem.LibraryEmpty -> Color(0xFF6C7482)
     is MenuItem.Delete -> Color(0xFFE07A6B)
-    is MenuItem.StartGroup, is MenuItem.Ungroup -> Types.Group.accent
+    is MenuItem.StartSubpatch, is MenuItem.Unpack -> Types.Subpatch.accent
 }
 
 private fun DrawScope.drawMenu(layout: MenuLayout, d: Float, measurer: TextMeasurer) {
@@ -6256,7 +6256,7 @@ private const val MIN_LABEL_SCALE = 0.72f
  * spilled out of its tile and ran into "Load..." beside it. A tile's size is in dp and its
  * label in sp, so how they compare is up to a setting the app does not control -- which is
  * why this measures rather than assumes. Shrinking alone was tried first and read "Save
- * pat..." at the smallest size worth reading; wrapping keeps the words, and a saved group's
+ * pat..." at the smallest size worth reading; wrapping keeps the words, and a saved subpatch's
  * name in the library is where it matters most, since those are names people type.
  */
 private fun TextMeasurer.fitting(
@@ -6656,7 +6656,7 @@ private fun DrawScope.drawPanel(
         val owner = entry.owner
         val index = entry.index
         val param = entry.param
-        // A group's rows are other modules' knobs, which is the only reason any of this is
+        // A subpatch's rows are other modules' knobs, which is the only reason any of this is
         // written against a row rather than against this module's own parameters.
         val own = owner.id == module.id
         val accent = if (own) module.type.accent else owner.type.accent
@@ -6669,16 +6669,16 @@ private fun DrawScope.drawPanel(
         if (own && module.canExpose(index)) {
             drawChip(panelModChipOn(row, d), d, "[ ]", range != null, ModulationColor, measurer)
         }
-        // Only inside the group it would promote to, which is where the chip means anything.
+        // Only inside the subpatch it would promote to, which is where the chip means anything.
         if (patch.canPromote(owner, index)) {
             drawChip(
                 panelPromoteChipOn(row, d), d, "\u2191",
-                patch.isPromoted(owner, index), Types.Group.accent, measurer,
+                patch.isPromoted(owner, index), Types.Subpatch.accent, measurer,
             )
         }
 
-        // On a group's panel the module is named too: "cutoff" alone says which knob but
-        // not whose, and a group is exactly where two of them can be side by side.
+        // On a subpatch's panel the module is named too: "cutoff" alone says which knob but
+        // not whose, and a subpatch is exactly where two of them can be side by side.
         val label = if (own) param.name else "${owner.title}  \u00b7  ${param.name}"
         val name = measurer.measure(label, PanelParamStyle)
         drawText(name, topLeft = Offset(row.left, row.top + 4f * d))

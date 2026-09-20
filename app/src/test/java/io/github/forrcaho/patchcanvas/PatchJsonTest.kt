@@ -186,10 +186,14 @@ class PatchJsonTest {
      * and 3 ladders ended at 4, so they could never complete either. What makes refusing
      * affordable is that PatchStore.load sets the file aside rather than letting the demo
      * patch overwrite it.
+     *
+     * 5 to 8 joined them at format 9, which is the first change since 5 that takes something
+     * away: a "Group" is a type this build does not have, and Osc's and FM's knob lists lost
+     * an envelope from the middle, so every index after the first moved.
      */
     @Test
     fun `every format older than this one is refused`() {
-        (1..4).forEach { version ->
+        (1..8).forEach { version ->
             val root = JSONObject(sample().toJson()).put("version", version)
             assertNull("format $version must not load", patchFromJson(root.toString()))
         }

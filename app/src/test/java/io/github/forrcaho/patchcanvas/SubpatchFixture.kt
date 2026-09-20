@@ -3,11 +3,11 @@ package io.github.forrcaho.patchcanvas
 import androidx.compose.ui.geometry.Offset
 
 /**
- * A patch with every kind of cable a group has to carry across its edge: two note sources
+ * A patch with every kind of cable a subpatch has to carry across its edge: two note sources
  * merging into one input, audio, a modulator landing on an exposed parameter, and an output
- * fanning out to both rails and a mix. Grouping {osc, filter} out of it cuts all of them.
+ * fanning out to both rails and a mix. Subpatching {osc, filter} out of it cuts all of them.
  */
-internal class GroupFixture {
+internal class SubpatchFixture {
     val patch = Patch()
     val steps = patch.add(Types.Steps, Offset(0f, 0f))!!
     val drone = patch.add(Types.Drone, Offset(0f, 200f))!!

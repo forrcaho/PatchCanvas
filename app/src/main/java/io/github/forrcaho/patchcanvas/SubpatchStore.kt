@@ -6,13 +6,13 @@ import androidx.compose.ui.geometry.Offset
 import java.io.File
 
 /*
- * The group library: groups saved to files, and loaded back into any patch.
+ * The subpatch library: subpatches saved to files, and loaded back into any patch.
  *
- * A saved group *is a patch file* -- one holding a single top-level group and whatever is
+ * A saved subpatch *is a patch file* -- one holding a single top-level subpatch and whatever is
  * inside it. That is the whole design. The alternative was a format of its own, and it
  * would have had its own module serialization, its own validation and its own refusal
  * rules, all of them a copy of the ones next door that a format change would then have to
- * be made in twice. Reading one back goes through `patchFromJson`, so a group file gets the
+ * be made in twice. Reading one back goes through `patchFromJson`, so a subpatch file gets the
  * same treatment a patch does: a type that no longer exists is skipped, a cable whose kinds
  * disagree refuses the whole file, and a version this build cannot read is refused rather
  * than migrated.
@@ -22,84 +22,84 @@ import java.io.File
  * the more confusing one, and nothing here can yet show you where a definition is used.
  */
 
-/** The file extension for a saved group. Plain JSON, and a patch file if you rename it. */
-private const val GROUP_EXTENSION = ".json"
-private const val TAG = "PatchGroups"
+/** The file extension for a saved subpatch. Plain JSON, and a patch file if you rename it. */
+private const val SUBPATCH_EXTENSION = ".json"
+private const val TAG = "PatchSubpatches"
 
 /**
- * This group and everything inside it, as a patch holding nothing else.
+ * This subpatch and everything inside it, as a patch holding nothing else.
  *
  * The copy is made into a throwaway patch first rather than written straight out, so that
- * exactly one routine knows how a group is copied -- the same one that duplicates it.
+ * exactly one routine knows how a subpatch is copied -- the same one that duplicates it.
  */
-fun Patch.groupToJson(group: PatchModule, name: String? = group.name): String? {
-    if (group.type != Types.Group) return null
+fun Patch.subpatchToJson(subpatch: PatchModule, name: String? = subpatch.name): String? {
+    if (subpatch.type != Types.Subpatch) return null
     val lone = Patch()
-    // [name] is what the saved copy is called, which is not always what the group in the
+    // [name] is what the saved copy is called, which is not always what the subpatch in the
     // patch is called: saving "Filt Osc" to the library as "Bass voice" must not rename
     // the one you are still playing.
-    lone.adoptGroup(this, group, Offset.Zero, TOP, name)
+    lone.adoptSubpatch(this, subpatch, Offset.Zero, TOP, name)
     return lone.toJson()
 }
 
 /**
- * The whole patch as one saved group, without touching the patch.
+ * The whole patch as one saved subpatch, without touching the patch.
  *
- * Grouping everything is what this means -- the cables into Out become the group's outputs
- * and the ones out of In its inputs, which is exactly what [Patch.group] does with any
+ * Subpatching everything is what this means -- the cables into Out become the subpatch's outputs
+ * and the ones out of In its inputs, which is exactly what [Patch.subpatch] does with any
  * selection -- and it is done to a *copy* read back from this patch's own file.
  *
- * The first version grouped the live patch, serialized, and ungrouped again inside one
+ * The first version subpatched the live patch, serialized, and unpacked again inside one
  * snapshot, on the reasoning that every step was silent to the engine. The engine agreed.
- * The file did not: ungrouping re-adds the boundary's cables at the end of the list, so a
- * patch with a group at its top level came back with its cables reordered, the autosave saw
+ * The file did not: unpacking re-adds the boundary's cables at the end of the list, so a
+ * patch with a subpatch at its top level came back with its cables reordered, the autosave saw
  * a new file, and saving became an undo step that did nothing. Found on the phone; the demo
  * patch the test used happened to re-add its cables in the order they started in. Working
  * on a copy makes "the patch is untouched" true by construction rather than by care.
  */
-fun Patch.patchToGroupJson(name: String): String? {
+fun Patch.patchToSubpatchJson(name: String): String? {
     val copy = patchFromJson(toJson()) ?: return null
     val ids = copy.modules.filter { !it.isPinned && it.parent == TOP }.map { it.id }.toSet()
     if (ids.isEmpty()) return null
-    val group = copy.group(ids) ?: return null
-    return copy.groupToJson(group, name)
+    val subpatch = copy.makeSubpatch(ids) ?: return null
+    return copy.subpatchToJson(subpatch, name)
 }
 
 /**
- * The group in a saved file, copied into this patch at [at], or null if the file does not
- * hold exactly one group.
+ * The subpatch in a saved file, copied into this patch at [at], or null if the file does not
+ * hold exactly one subpatch.
  *
- * The ids in the file are the ones it was saved with and are never reused here: [adoptGroup]
- * allocates fresh ones, so loading the same group twice gives two independent groups.
+ * The ids in the file are the ones it was saved with and are never reused here: [adoptSubpatch]
+ * allocates fresh ones, so loading the same subpatch twice gives two independent subpatches.
  */
-fun Patch.loadGroup(
+fun Patch.loadSubpatch(
     text: String,
     at: Offset,
     scales: ScaleLibrary = ScaleLibrary.of(null),
 ): PatchModule? {
     val source = patchFromJson(text, scales) ?: return null
     val loose = source.modules.filter { !it.isPinned && it.parent == TOP }
-    val group = loose.singleOrNull()?.takeIf { it.type == Types.Group } ?: run {
-        Log.w(TAG, "not a saved group: ${loose.size} modules at the top level")
+    val subpatch = loose.singleOrNull()?.takeIf { it.type == Types.Subpatch } ?: run {
+        Log.w(TAG, "not a saved subpatch: ${loose.size} modules at the top level")
         return null
     }
-    return adoptGroup(source, group, at, scopeOrTop)
+    return adoptSubpatch(source, subpatch, at, scopeOrTop)
 }
 
 /**
- * The saved groups on disk, beside the scales.
+ * The saved subpatches on disk, beside the scales.
  *
- * In `getExternalFilesDir/groups` at Forrest's choice, where the `.scl` files already live:
- * a saved group is something to copy off the phone, mail to someone, or drop in by hand,
+ * In `getExternalFilesDir/subpatches` at Forrest's choice, where the `.scl` files already live:
+ * a saved subpatch is something to copy off the phone, mail to someone, or drop in by hand,
  * and none of that is possible in app-private storage.
  */
-class GroupLibrary(val directory: File?) {
+class SubpatchLibrary(val directory: File?) {
 
     /** What is saved, by name, in the order a list should show them. */
     fun names(): List<String> =
-        directory?.listFiles { f -> f.isFile && f.name.endsWith(GROUP_EXTENSION, true) }
+        directory?.listFiles { f -> f.isFile && f.name.endsWith(SUBPATCH_EXTENSION, true) }
             .orEmpty()
-            .map { it.name.dropLast(GROUP_EXTENSION.length) }
+            .map { it.name.dropLast(SUBPATCH_EXTENSION.length) }
             .sortedBy { it.lowercase() }
 
     fun exists(name: String): Boolean = fileFor(name)?.exists() == true
@@ -107,7 +107,7 @@ class GroupLibrary(val directory: File?) {
     fun read(name: String): String? = try {
         fileFor(name)?.takeIf { it.isFile }?.readText()
     } catch (e: Exception) {
-        Log.w(TAG, "could not read group $name", e)
+        Log.w(TAG, "could not read subpatch $name", e)
         null
     }
 
@@ -122,7 +122,7 @@ class GroupLibrary(val directory: File?) {
             true
         }
     } catch (e: Exception) {
-        Log.w(TAG, "could not save group $name", e)
+        Log.w(TAG, "could not save subpatch $name", e)
         false
     }
 
@@ -142,14 +142,14 @@ class GroupLibrary(val directory: File?) {
 
     private fun fileFor(name: String): File? {
         val safe = safeName(name)
-        return if (safe.isEmpty() || directory == null) null else File(directory, safe + GROUP_EXTENSION)
+        return if (safe.isEmpty() || directory == null) null else File(directory, safe + SUBPATCH_EXTENSION)
     }
 
     companion object {
         /**
          * A file name that cannot escape the folder or upset a file manager.
          *
-         * The display name lives inside the file, on the group itself, so this only has to
+         * The display name lives inside the file, on the subpatch itself, so this only has to
          * be a stable handle -- "Bass/Lead" saving as "Bass_Lead" loses nothing you can see.
          */
         fun safeName(name: String): String =
@@ -158,12 +158,12 @@ class GroupLibrary(val directory: File?) {
                 .trim()
                 .take(MAX_NAME)
 
-        fun load(context: Context): GroupLibrary = GroupLibrary(
+        fun load(context: Context): SubpatchLibrary = SubpatchLibrary(
             try {
                 val base = context.getExternalFilesDir(null) ?: context.filesDir
-                File(base, "groups").apply { mkdirs() }
+                File(base, "subpatches").apply { mkdirs() }
             } catch (e: Exception) {
-                Log.w(TAG, "no group directory", e)
+                Log.w(TAG, "no subpatch directory", e)
                 null
             },
         )

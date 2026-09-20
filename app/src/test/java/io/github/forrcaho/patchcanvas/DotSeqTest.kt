@@ -74,7 +74,7 @@ class DotSeqTest {
         seq.addDot(Dot(0, 0, 4))
         seq.addDot(Dot(31, -3, 1))
         val json = patch.toJson()
-        assertTrue(json.contains("\"version\":8"))
+        assertTrue(json.contains("\"version\":9"))
         assertEquals(seq.dots.toList(), patchFromJson(json)!!.modules.first { it.type == Types.Seq }.dots.toList())
 
         val wild = json.replace("[31,-3,1]", "[99,-3,500]")
@@ -82,12 +82,9 @@ class DotSeqTest {
     }
 
     @Test
-    fun `a version 7 file still reads, and a duplicate and an undo keep the dots`() {
+    fun `a duplicate and an undo keep the dots`() {
         val (patch, seq) = seq()
         seq.addDot(Dot(1, 2, 3))
-        val seven = patch.toJson().replace("\"version\":8", "\"version\":7")
-        assertEquals(listOf(Dot(1, 2, 3)), patchFromJson(seven)!!.modules.first { it.type == Types.Seq }.dots.toList())
-
         assertEquals(listOf(Dot(1, 2, 3)), patch.duplicate(seq)!!.dots.toList())
 
         val before = patch.toJson()

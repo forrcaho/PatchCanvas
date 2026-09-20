@@ -494,10 +494,10 @@ class PortGeometryTest {
     }
 
     @Test
-    fun `the port group is centered in the body at any count`() {
+    fun `the port subpatch is centered in the body at any count`() {
         // Spacing and centering are separate terms in portIn: index * pitch places the
-        // ports, span only decides where the group starts. A pitch test alone leaves
-        // the centering unpinned, so assert the group's midpoint lands on the body's.
+        // ports, span only decides where the subpatch starts. A pitch test alone leaves
+        // the centering unpinned, so assert the subpatch's midpoint lands on the body's.
         (1..5).forEach { n ->
             val h = PatchModule.HEADER + maxOf(PatchModule.MIN_BODY, n * PatchModule.PORT_PITCH)
             val rect = Rect(Offset.Zero, Size(PatchModule.WIDTH, h))
@@ -601,13 +601,13 @@ class MenuLayoutTest {
     /**
      * The reference device runs at font scale 1.5, where 12sp labels are 18dp tall in
      * tiles sized for 12: "Save patch..." spilled into the tile beside it. Tiles grow with
-     * the setting, and the biggest menu there is -- every module, Group, Load and Save patch
+     * the setting, and the biggest menu there is -- every module, Subpatch, Load and Save patch
      * -- still has to fit the screen at that size, wherever it is opened.
      */
     @Test
     fun `at a large text size the tiles grow and the whole menu still fits`() {
         val everything = Types.palette.map { MenuItem.Add(it) } +
-            listOf(MenuItem.StartGroup, MenuItem.OpenLibrary, MenuItem.Save(null))
+            listOf(MenuItem.StartSubpatch, MenuItem.OpenLibrary, MenuItem.Save(null))
         val normal = menuLayout(everything, Offset(1200f, 540f), d, screen)
         val large = menuLayout(everything, Offset(1200f, 540f), d, screen, textScale = 1.5f)
 

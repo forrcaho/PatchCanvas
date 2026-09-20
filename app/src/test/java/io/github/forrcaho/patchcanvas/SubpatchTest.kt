@@ -11,59 +11,59 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Groups are how a patch is organized, never how it sounds. The one property that matters
- * most is therefore checkable on the desk: whatever is grouped, ungrouped, nested or
+ * Subpatches are how a patch is organized, never how it sounds. The one property that matters
+ * most is therefore checkable on the desk: whatever is subpatched, unpacked, nested or
  * rewired, [Patch.engineConnections] -- the cables the engine actually gets -- says exactly
  * what the same patch said loose.
  */
-class GroupTest {
+class SubpatchTest {
 
     @Test
-    fun `grouping leaves the cables the engine has exactly as they were`() {
-        val f = GroupFixture()
+    fun `subpatching leaves the cables the engine has exactly as they were`() {
+        val f = SubpatchFixture()
         val before = f.patch.engineConnections()
         assertEquals("the fixture has nine real cables", 9, before.size)
 
-        val group = f.patch.group(setOf(f.osc.id, f.filter.id))
-        assertNotNull(group)
+        val subpatch = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))
+        assertNotNull(subpatch)
         assertEquals(before, f.patch.engineConnections())
         assertTrue("nothing structural reaches the engine", f.patch.engineModules.none { it.type.structural })
     }
 
     @Test
-    fun `a group's ports come from the cables that crossed its edge`() {
-        val f = GroupFixture()
-        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+    fun `a subpatch's ports come from the cables that crossed its edge`() {
+        val f = SubpatchFixture()
+        val subpatch = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))!!
 
         // In: the two note sources stay separate ports, since each is its own source, and the
         // modulator onto cutoff is a third. Out: the filter's one output, however many
         // places it went.
-        val inputs = group.ports(PortDirection.INPUT)
-        val outputs = group.ports(PortDirection.OUTPUT)
+        val inputs = subpatch.ports(PortDirection.INPUT)
+        val outputs = subpatch.ports(PortDirection.OUTPUT)
         assertEquals(listOf(SignalKind.NOTE, SignalKind.NOTE, SignalKind.MODULATION), inputs.map { it.kind })
         assertEquals(listOf(SignalKind.AUDIO), outputs.map { it.kind })
 
         // The rails inside turn the box's ports around.
-        val railIn = f.patch.groupRail(group.id, Types.GroupIn)!!
-        val railOut = f.patch.groupRail(group.id, Types.GroupOut)!!
-        // toList() on both sides: a group's ports are a snapshot list, which compares by
+        val railIn = f.patch.subpatchRail(subpatch.id, Types.SubpatchIn)!!
+        val railOut = f.patch.subpatchRail(subpatch.id, Types.SubpatchOut)!!
+        // toList() on both sides: a subpatch's ports are a snapshot list, which compares by
         // identity -- these two would pass only because they happen to be one list.
         assertEquals(inputs.toList(), railIn.ports(PortDirection.OUTPUT).toList())
         assertEquals(outputs.toList(), railOut.ports(PortDirection.INPUT).toList())
         assertTrue(railIn.ports(PortDirection.INPUT).isEmpty())
         assertTrue(railOut.ports(PortDirection.OUTPUT).isEmpty())
 
-        assertEquals(group.id, f.osc.parent)
-        assertEquals(group.id, f.filter.parent)
-        assertEquals(TOP, group.parent)
+        assertEquals(subpatch.id, f.osc.parent)
+        assertEquals(subpatch.id, f.filter.parent)
+        assertEquals(TOP, subpatch.parent)
     }
 
     @Test
-    fun `ungrouping gives back the same cables and the same scope`() {
-        val f = GroupFixture()
+    fun `unpacking gives back the same cables and the same scope`() {
+        val f = SubpatchFixture()
         val cables = f.patch.connections.toSet()
-        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
-        f.patch.ungroup(group)
+        val subpatch = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))!!
+        f.patch.unpack(subpatch)
 
         assertEquals(cables, f.patch.connections.toSet())
         assertTrue(f.patch.modules.none { it.type.structural })
@@ -72,32 +72,32 @@ class GroupTest {
     }
 
     @Test
-    fun `groups nest, and still sound the same`() {
-        val f = GroupFixture()
+    fun `subpatches nest, and still sound the same`() {
+        val f = SubpatchFixture()
         val cables = f.patch.connections.toSet()
         val flat = f.patch.engineConnections()
 
-        val inner = f.patch.group(setOf(f.osc.id, f.filter.id))!!
-        val outer = f.patch.group(setOf(inner.id, f.lfo.id, f.mix.id))!!
+        val inner = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))!!
+        val outer = f.patch.makeSubpatch(setOf(inner.id, f.lfo.id, f.mix.id))!!
         assertEquals(outer.id, inner.parent)
         assertEquals(flat, f.patch.engineConnections())
 
-        f.patch.ungroup(outer)
-        f.patch.ungroup(inner)
+        f.patch.unpack(outer)
+        f.patch.unpack(inner)
         assertEquals(cables, f.patch.connections.toSet())
     }
 
     @Test
-    fun `patching a new source into a group's input replaces it for everything inside`() {
-        val f = GroupFixture()
-        val group = f.patch.group(setOf(f.filter.id))!!
-        val audioIn = group.ports(PortDirection.INPUT).indexOfFirst { it.kind == SignalKind.AUDIO }
+    fun `patching a new source into a subpatch's input replaces it for everything inside`() {
+        val f = SubpatchFixture()
+        val subpatch = f.patch.makeSubpatch(setOf(f.filter.id))!!
+        val audioIn = subpatch.ports(PortDirection.INPUT).indexOfFirst { it.kind == SignalKind.AUDIO }
         val other = f.patch.add(Types.Osc, Offset(0f, 400f))!!
 
         assertTrue(
             f.patch.connect(
                 PortRef(other.id, PortDirection.OUTPUT, 0),
-                PortRef(group.id, PortDirection.INPUT, audioIn),
+                PortRef(subpatch.id, PortDirection.INPUT, audioIn),
             ),
         )
         val flat = f.patch.engineConnections()
@@ -106,34 +106,34 @@ class GroupTest {
     }
 
     @Test
-    fun `an unplugged group port stays, and can be plugged back into`() {
-        val f = GroupFixture()
-        val group = f.patch.group(setOf(f.filter.id))!!
-        val count = group.ports(PortDirection.OUTPUT).size
-        f.patch.disconnect(PortRef(group.id, PortDirection.OUTPUT, 0))
-        assertEquals("the port outlives its cables", count, group.ports(PortDirection.OUTPUT).size)
+    fun `an unplugged subpatch port stays, and can be plugged back into`() {
+        val f = SubpatchFixture()
+        val subpatch = f.patch.makeSubpatch(setOf(f.filter.id))!!
+        val count = subpatch.ports(PortDirection.OUTPUT).size
+        f.patch.disconnect(PortRef(subpatch.id, PortDirection.OUTPUT, 0))
+        assertEquals("the port outlives its cables", count, subpatch.ports(PortDirection.OUTPUT).size)
         assertTrue(
-            f.patch.connect(PortRef(group.id, PortDirection.OUTPUT, 0), PortRef(OUT_ID, PortDirection.INPUT, 0)),
+            f.patch.connect(PortRef(subpatch.id, PortDirection.OUTPUT, 0), PortRef(OUT_ID, PortDirection.INPUT, 0)),
         )
         assertTrue(Connection(PortRef(f.filter.id, PortDirection.OUTPUT, 0), PortRef(OUT_ID, PortDirection.INPUT, 0)) in f.patch.engineConnections())
     }
 
     @Test
-    fun `nothing is grouped that cannot be`() {
-        val f = GroupFixture()
-        assertNull("nothing chosen", f.patch.group(emptySet()))
-        assertNull("a rail", f.patch.group(setOf(f.osc.id, OUT_ID)))
-        assertNull("an id that is not there", f.patch.group(setOf(f.osc.id, 9999L)))
-        val group = f.patch.group(setOf(f.osc.id))!!
-        assertNull("modules from two scopes", f.patch.group(setOf(f.filter.id, f.osc.id)))
-        assertEquals(group.id, f.osc.parent)
+    fun `nothing is subpatched that cannot be`() {
+        val f = SubpatchFixture()
+        assertNull("nothing chosen", f.patch.makeSubpatch(emptySet()))
+        assertNull("a rail", f.patch.makeSubpatch(setOf(f.osc.id, OUT_ID)))
+        assertNull("an id that is not there", f.patch.makeSubpatch(setOf(f.osc.id, 9999L)))
+        val subpatch = f.patch.makeSubpatch(setOf(f.osc.id))!!
+        assertNull("modules from two scopes", f.patch.makeSubpatch(setOf(f.filter.id, f.osc.id)))
+        assertEquals(subpatch.id, f.osc.parent)
     }
 
     @Test
-    fun `deleting a group takes everything inside it`() {
-        val f = GroupFixture()
-        val inner = f.patch.group(setOf(f.osc.id, f.filter.id))!!
-        val outer = f.patch.group(setOf(inner.id, f.lfo.id))!!
+    fun `deleting a subpatch takes everything inside it`() {
+        val f = SubpatchFixture()
+        val inner = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))!!
+        val outer = f.patch.makeSubpatch(setOf(inner.id, f.lfo.id))!!
         f.patch.remove(outer)
 
         listOf(outer.id, inner.id, f.osc.id, f.filter.id, f.lfo.id).forEach {
@@ -145,49 +145,49 @@ class GroupTest {
     }
 
     @Test
-    fun `a duplicated group copies what is inside and nothing outside`() {
-        val f = GroupFixture()
-        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+    fun `a duplicated subpatch copies what is inside and nothing outside`() {
+        val f = SubpatchFixture()
+        val subpatch = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))!!
         val before = f.patch.engineConnections().size
-        val copy = f.patch.duplicate(group)!!
+        val copy = f.patch.duplicate(subpatch)!!
 
-        assertEquals(Types.Group, copy.type)
-        assertEquals(group.ports(PortDirection.INPUT).toList(), copy.ports(PortDirection.INPUT).toList())
+        assertEquals(Types.Subpatch, copy.type)
+        assertEquals(subpatch.ports(PortDirection.INPUT).toList(), copy.ports(PortDirection.INPUT).toList())
         val insideCopy = f.patch.descendants(copy.id).mapNotNull { f.patch.module(it) }
         assertEquals(listOf("Filter", "Osc"), insideCopy.filter { !it.type.structural }.map { it.type.name }.sorted())
         // Its inside is wired (osc into filter, and the filter's output onto its right rail),
         // but it is patched to nothing outside, so the engine gains exactly one real cable.
         assertEquals(before + 1, f.patch.engineConnections().size)
-        // A separate set of ports: changing one group's does not change the other's.
-        assertFalse(group.groupPorts === copy.groupPorts)
+        // A separate set of ports: changing one subpatch's does not change the other's.
+        assertFalse(subpatch.subpatchPorts === copy.subpatchPorts)
     }
 
     @Test
-    fun `a group's contents are shown only when it is entered`() {
-        val f = GroupFixture()
-        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
-        assertTrue(group in f.patch.shownFree)
+    fun `a subpatch's contents are shown only when it is entered`() {
+        val f = SubpatchFixture()
+        val subpatch = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))!!
+        assertTrue(subpatch in f.patch.shownFree)
         assertFalse(f.osc in f.patch.shownFree)
         assertEquals(setOf(OUT_ID, IN_ID), f.patch.shownRails.map { it.id }.toSet())
 
-        f.patch.scope = group.id
+        f.patch.scope = subpatch.id
         assertEquals(setOf(f.osc.id, f.filter.id), f.patch.shownFree.map { it.id }.toSet())
         assertEquals(
-            setOf(Types.GroupIn, Types.GroupOut),
+            setOf(Types.SubpatchIn, Types.SubpatchOut),
             f.patch.shownRails.map { it.type }.toSet(),
         )
         val added = f.patch.add(Types.Lfo, Offset.Zero)!!
-        assertEquals("a module added inside goes inside", group.id, added.parent)
+        assertEquals("a module added inside goes inside", subpatch.id, added.parent)
 
-        f.patch.remove(group)
+        f.patch.remove(subpatch)
         assertEquals("a scope that has gone falls back to the top", TOP, f.patch.scopeOrTop)
     }
 
     @Test
-    fun `groups survive saving and loading, byte for byte`() {
-        val f = GroupFixture()
-        val inner = f.patch.group(setOf(f.osc.id, f.filter.id))!!
-        f.patch.group(setOf(inner.id, f.lfo.id))
+    fun `subpatches survive saving and loading, byte for byte`() {
+        val f = SubpatchFixture()
+        val inner = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))!!
+        f.patch.makeSubpatch(setOf(inner.id, f.lfo.id))
         val json = f.patch.toJson()
 
         val restored = patchFromJson(json)
@@ -203,29 +203,32 @@ class GroupTest {
         )
     }
 
+    /**
+     * The additive run from 5 to 8 ended at 9. A format 8 file calls this module a "Group",
+     * which is not a type this build has, so it would be skipped as retired and everything
+     * inside it would go with it -- silently, and then autosaved that way.
+     */
     @Test
-    fun `a format 5 file still loads, as a patch with no groups`() {
-        val f = GroupFixture()
-        val json = org.json.JSONObject(f.patch.toJson()).put("version", 5).toString()
-        val restored = patchFromJson(json)
-        assertNotNull(restored)
-        assertEquals(f.patch.engineConnections(), restored!!.engineConnections())
+    fun `a format 8 file is refused rather than read as a patch with no subpatches`() {
+        val f = SubpatchFixture()
+        val json = org.json.JSONObject(f.patch.toJson()).put("version", 8).toString()
+        assertNull(patchFromJson(json))
     }
 
     @Test
-    fun `a parent that is not a group puts the module at the top`() {
-        val f = GroupFixture()
+    fun `a parent that is not a subpatch puts the module at the top`() {
+        val f = SubpatchFixture()
         val root = org.json.JSONObject(f.patch.toJson())
-        root.getJSONArray("modules").getJSONObject(0).put("parent", f.osc.id) // not a group
+        root.getJSONArray("modules").getJSONObject(0).put("parent", f.osc.id) // not a subpatch
         val restored = patchFromJson(root.toString())!!
         assertTrue(restored.modules.filter { !it.isPinned }.all { it.parent == TOP })
     }
 
     @Test
     fun `the breadcrumb runs from the patch down to where you are`() {
-        val f = GroupFixture()
-        val inner = f.patch.group(setOf(f.osc.id, f.filter.id))!!
-        val outer = f.patch.group(setOf(inner.id, f.lfo.id))!!
+        val f = SubpatchFixture()
+        val inner = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))!!
+        val outer = f.patch.makeSubpatch(setOf(inner.id, f.lfo.id))!!
         assertEquals(listOf(TOP), f.patch.scopePath())
         f.patch.enterScope(inner.id)
         assertEquals(listOf(TOP, outer.id, inner.id), f.patch.scopePath())
@@ -247,7 +250,7 @@ class GroupTest {
     )
 
     @Test
-    fun `the breadcrumb and the group buttons clear the controls already on screen`() {
+    fun `the breadcrumb and the subpatch buttons clear the controls already on screen`() {
         (0 until 3).forEach { level ->
             val chip = frame.breadcrumbChip(level)
             assertFalse("crumb $level over the scale chip", chip.overlaps(frame.scaleChip()))
@@ -256,7 +259,7 @@ class GroupTest {
         }
         val done = frame.selectionButton(done = true)
         val cancel = frame.selectionButton(done = false)
-        assertFalse("group and cancel apart", done.overlaps(cancel))
+        assertFalse("subpatch and cancel apart", done.overlaps(cancel))
         for (button in listOf(done, cancel)) {
             assertFalse(button.overlaps(frame.historyRect(redo = false)))
             assertFalse(button.overlaps(frame.historyRect(redo = true)))
@@ -265,42 +268,42 @@ class GroupTest {
     }
 
     @Test
-    fun `a port can be added after grouping, by patching to a rail`() {
-        val f = GroupFixture()
-        val group = f.patch.group(setOf(f.lfo.id, f.env.id))!!
-        val outputsBefore = group.ports(PortDirection.OUTPUT).map { it }
+    fun `a port can be added after subpatching, by patching to a rail`() {
+        val f = SubpatchFixture()
+        val subpatch = f.patch.makeSubpatch(setOf(f.lfo.id, f.env.id))!!
+        val outputsBefore = subpatch.ports(PortDirection.OUTPUT).map { it }
 
-        // The envelope's output already leaves the group (to the mix's level); give the LFO
+        // The envelope's output already leaves the subpatch (to the mix's level); give the LFO
         // an output of its own, and patch that outside to the mix's level as well.
-        assertTrue(f.patch.addGroupPort(group.id, PortRef(f.lfo.id, PortDirection.OUTPUT, 0)))
-        val added = group.ports(PortDirection.OUTPUT)
+        assertTrue(f.patch.addSubpatchPort(subpatch.id, PortRef(f.lfo.id, PortDirection.OUTPUT, 0)))
+        val added = subpatch.ports(PortDirection.OUTPUT)
         assertEquals("existing ports stay where they were", outputsBefore, added.take(outputsBefore.size))
         assertEquals(Port("out", SignalKind.MODULATION), added.last())
 
         val index = added.size - 1
-        assertTrue(f.patch.connect(PortRef(group.id, PortDirection.OUTPUT, index), PortRef(f.mix.id, PortDirection.MOD, 1)))
+        assertTrue(f.patch.connect(PortRef(subpatch.id, PortDirection.OUTPUT, index), PortRef(f.mix.id, PortDirection.MOD, 1)))
         assertTrue(
             "the new port carries the LFO all the way out",
             Connection(PortRef(f.lfo.id, PortDirection.OUTPUT, 0), PortRef(f.mix.id, PortDirection.MOD, 1)) in f.patch.engineConnections(),
         )
 
         // And an input: the envelope's notes, fed from a second new port on the left rail.
-        val inputs = group.ports(PortDirection.INPUT).size
+        val inputs = subpatch.ports(PortDirection.INPUT).size
         f.patch.disconnect(PortRef(f.env.id, PortDirection.INPUT, 0))
-        assertTrue(f.patch.addGroupPort(group.id, PortRef(f.env.id, PortDirection.INPUT, 0)))
-        assertEquals(inputs + 1, group.ports(PortDirection.INPUT).size)
-        assertEquals(SignalKind.NOTE, group.ports(PortDirection.INPUT).last().kind)
+        assertTrue(f.patch.addSubpatchPort(subpatch.id, PortRef(f.env.id, PortDirection.INPUT, 0)))
+        assertEquals(inputs + 1, subpatch.ports(PortDirection.INPUT).size)
+        assertEquals(SignalKind.NOTE, subpatch.ports(PortDirection.INPUT).last().kind)
     }
 
     @Test
-    fun `a port is not added for a jack outside the group or on its rails`() {
-        val f = GroupFixture()
-        val group = f.patch.group(setOf(f.osc.id))!!
-        val count = group.ports(PortDirection.OUTPUT).size
-        assertFalse(f.patch.addGroupPort(group.id, PortRef(f.filter.id, PortDirection.OUTPUT, 0)))
-        val railIn = f.patch.groupRail(group.id, Types.GroupIn)!!
-        assertFalse(f.patch.addGroupPort(group.id, PortRef(railIn.id, PortDirection.OUTPUT, 0)))
-        assertEquals(count, group.ports(PortDirection.OUTPUT).size)
+    fun `a port is not added for a jack outside the subpatch or on its rails`() {
+        val f = SubpatchFixture()
+        val subpatch = f.patch.makeSubpatch(setOf(f.osc.id))!!
+        val count = subpatch.ports(PortDirection.OUTPUT).size
+        assertFalse(f.patch.addSubpatchPort(subpatch.id, PortRef(f.filter.id, PortDirection.OUTPUT, 0)))
+        val railIn = f.patch.subpatchRail(subpatch.id, Types.SubpatchIn)!!
+        assertFalse(f.patch.addSubpatchPort(subpatch.id, PortRef(railIn.id, PortDirection.OUTPUT, 0)))
+        assertEquals(count, subpatch.ports(PortDirection.OUTPUT).size)
     }
 
     /**
@@ -310,14 +313,14 @@ class GroupTest {
      */
     @Test
     fun `the slot marks where the next port will land`() {
-        val f = GroupFixture()
-        val group = f.patch.group(setOf(f.lfo.id, f.env.id))!!
-        f.patch.enterScope(group.id)
-        val railOut = f.patch.groupRail(group.id, Types.GroupOut)!!
+        val f = SubpatchFixture()
+        val subpatch = f.patch.makeSubpatch(setOf(f.lfo.id, f.env.id))!!
+        f.patch.enterScope(subpatch.id)
+        val railOut = f.patch.subpatchRail(subpatch.id, Types.SubpatchOut)!!
         val source = PortRef(f.lfo.id, PortDirection.OUTPUT, 0)
 
-        val slot = groupPortSlot(frame, railOut, PortDirection.INPUT)
-        assertTrue(f.patch.addGroupPort(group.id, source))
+        val slot = subpatchPortSlot(frame, railOut, PortDirection.INPUT)
+        assertTrue(f.patch.addSubpatchPort(subpatch.id, source))
 
         val index = railOut.ports(PortDirection.INPUT).size - 1
         val landed = portIn(
@@ -329,74 +332,74 @@ class GroupTest {
     }
 
     @Test
-    fun `the slot answers only for a jack inside the group being looked at`() {
-        val f = GroupFixture()
-        val group = f.patch.group(setOf(f.lfo.id, f.env.id))!!
-        val railOut = f.patch.groupRail(group.id, Types.GroupOut)!!
+    fun `the slot answers only for a jack inside the subpatch being looked at`() {
+        val f = SubpatchFixture()
+        val subpatch = f.patch.makeSubpatch(setOf(f.lfo.id, f.env.id))!!
+        val railOut = f.patch.subpatchRail(subpatch.id, Types.SubpatchOut)!!
         val inside = PortRef(f.lfo.id, PortDirection.OUTPUT, 0)
-        val slot = groupPortSlot(frame, railOut, PortDirection.INPUT)
+        val slot = subpatchPortSlot(frame, railOut, PortDirection.INPUT)
         val touch = 24f * frame.density
 
-        assertFalse("at the top level there is no rail to add to", f.patch.groupPortSlotHit(frame, inside, slot, touch))
-        f.patch.enterScope(group.id)
-        assertTrue(f.patch.groupPortSlotHit(frame, inside, slot, touch))
+        assertFalse("at the top level there is no rail to add to", f.patch.subpatchPortSlotHit(frame, inside, slot, touch))
+        f.patch.enterScope(subpatch.id)
+        assertTrue(f.patch.subpatchPortSlotHit(frame, inside, slot, touch))
         assertFalse(
-            "a jack outside this group asks for nothing",
-            f.patch.groupPortSlotHit(frame, PortRef(f.filter.id, PortDirection.OUTPUT, 0), slot, touch),
+            "a jack outside this subpatch asks for nothing",
+            f.patch.subpatchPortSlotHit(frame, PortRef(f.filter.id, PortDirection.OUTPUT, 0), slot, touch),
         )
         assertFalse(
             "and an output's slot is on the right rail, not the left",
-            f.patch.groupPortSlotHit(
+            f.patch.subpatchPortSlotHit(
                 frame, inside,
-                groupPortSlot(frame, f.patch.groupRail(group.id, Types.GroupIn)!!, PortDirection.OUTPUT), touch,
+                subpatchPortSlot(frame, f.patch.subpatchRail(subpatch.id, Types.SubpatchIn)!!, PortDirection.OUTPUT), touch,
             ),
         )
     }
 
     @Test
-    fun `a group's rails are centered, like the patch's own`() {
-        val f = GroupFixture()
-        val group = f.patch.group(setOf(f.lfo.id, f.env.id))!!
-        val railOut = f.patch.groupRail(group.id, Types.GroupOut)!!
+    fun `a subpatch's rails are centered, like the patch's own`() {
+        val f = SubpatchFixture()
+        val subpatch = f.patch.makeSubpatch(setOf(f.lfo.id, f.env.id))!!
+        val railOut = f.patch.subpatchRail(subpatch.id, Types.SubpatchOut)!!
         val out = f.patch.module(OUT_ID)!!
         val middle = { r: androidx.compose.ui.geometry.Rect -> (r.top + r.bottom) / 2f }
         assertEquals(middle(frame.railRect(out)), middle(frame.railRect(railOut)), 0.01f)
     }
 
     @Test
-    fun `undo through a group restores it exactly`() {
-        val f = GroupFixture()
+    fun `undo through a subpatch restores it exactly`() {
+        val f = SubpatchFixture()
         val loose = f.patch.toJson()
-        f.patch.group(setOf(f.osc.id, f.filter.id))
-        val grouped = f.patch.toJson()
+        f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))
+        val subpatched = f.patch.toJson()
 
         f.patch.replaceWith(patchFromJson(loose)!!)
         assertEquals(loose, f.patch.toJson())
-        f.patch.replaceWith(patchFromJson(grouped)!!)
-        assertEquals(grouped, f.patch.toJson())
-        assertEquals(1, f.patch.modules.count { it.type == Types.Group })
+        f.patch.replaceWith(patchFromJson(subpatched)!!)
+        assertEquals(subpatched, f.patch.toJson())
+        assertEquals(1, f.patch.modules.count { it.type == Types.Subpatch })
     }
 
     @Test
-    fun `groups are numbered, and a number comes round again when its name is taken off`() {
-        val f = GroupFixture()
-        val first = f.patch.group(setOf(f.osc.id, f.filter.id))!!
-        val second = f.patch.group(setOf(f.lfo.id, f.env.id))!!
-        assertEquals("Group 1", first.name)
-        assertEquals("Group 2", second.name)
-        assertEquals("the box and the breadcrumb both read this", "Group 2", second.title)
+    fun `subpatches are numbered, and a number comes round again when its name is taken off`() {
+        val f = SubpatchFixture()
+        val first = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))!!
+        val second = f.patch.makeSubpatch(setOf(f.lfo.id, f.env.id))!!
+        assertEquals("Subpatch 1", first.name)
+        assertEquals("Subpatch 2", second.name)
+        assertEquals("the box and the breadcrumb both read this", "Subpatch 2", second.title)
 
-        // Naming one for what it does takes its number out of use, and the next group
-        // gets the lowest one free rather than counting groups.
+        // Naming one for what it does takes its number out of use, and the next subpatch
+        // gets the lowest one free rather than counting subpatches.
         second.name = "Reverb"
-        assertEquals("Group 2", f.patch.nextGroupName())
+        assertEquals("Subpatch 2", f.patch.nextSubpatchName())
         first.name = "Bass"
-        assertEquals("Group 1", f.patch.nextGroupName())
+        assertEquals("Subpatch 1", f.patch.nextSubpatchName())
     }
 
     @Test
     fun `a module with no name of its own goes by its type`() {
-        val f = GroupFixture()
+        val f = SubpatchFixture()
         assertNull(f.osc.name)
         assertEquals("Osc", f.osc.title)
         f.osc.name = "Bass"
@@ -404,41 +407,41 @@ class GroupTest {
     }
 
     @Test
-    fun `a duplicated group is numbered afresh, and the groups inside it keep their names`() {
-        val f = GroupFixture()
-        val inner = f.patch.group(setOf(f.osc.id, f.filter.id))!!
-        val outer = f.patch.group(setOf(inner.id, f.mix.id))!!
+    fun `a duplicated subpatch is numbered afresh, and the subpatches inside it keep their names`() {
+        val f = SubpatchFixture()
+        val inner = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))!!
+        val outer = f.patch.makeSubpatch(setOf(inner.id, f.mix.id))!!
         inner.name = "Tone"
 
         val copy = f.patch.duplicate(outer)!!
-        assertEquals("Group 3", copy.name)
-        val copiedInner = f.patch.modules.first { it.parent == copy.id && it.type == Types.Group }
+        assertEquals("Subpatch 3", copy.name)
+        val copiedInner = f.patch.modules.first { it.parent == copy.id && it.type == Types.Subpatch }
         assertEquals("Tone", copiedInner.name)
     }
 
     @Test
     fun `a name is saved, reloaded and undone`() {
-        val f = GroupFixture()
-        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+        val f = SubpatchFixture()
+        val subpatch = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))!!
         f.osc.name = "Bass"
         val named = f.patch.toJson()
 
         val reloaded = patchFromJson(named)!!
-        assertEquals("Group 1", reloaded.module(group.id)?.name)
+        assertEquals("Subpatch 1", reloaded.module(subpatch.id)?.name)
         assertEquals("Bass", reloaded.module(f.osc.id)?.name)
         assertEquals("a reload has to serialize back to the same bytes", named, reloaded.toJson())
 
-        group.name = "Reverb"
+        subpatch.name = "Reverb"
         f.patch.replaceWith(patchFromJson(named)!!)
-        assertEquals("Group 1", f.patch.module(group.id)?.name)
+        assertEquals("Subpatch 1", f.patch.module(subpatch.id)?.name)
         assertEquals(named, f.patch.toJson())
     }
 
     @Test
-    fun `a crumb says which group it is, so holding it can rename that one`() {
-        val f = GroupFixture()
-        val inner = f.patch.group(setOf(f.osc.id, f.filter.id))!!
-        val outer = f.patch.group(setOf(inner.id, f.mix.id))!!
+    fun `a crumb says which subpatch it is, so holding it can rename that one`() {
+        val f = SubpatchFixture()
+        val inner = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))!!
+        val outer = f.patch.makeSubpatch(setOf(inner.id, f.mix.id))!!
 
         // One chip at the top level, the patch's own, which is where a patch is named.
         f.patch.scope = TOP
@@ -448,7 +451,7 @@ class GroupTest {
 
         f.patch.enterScope(outer.id)
         f.patch.enterScope(inner.id)
-        // "Patch > Group 2 > Group 1", and each chip answers for its own level.
+        // "Patch > Subpatch 2 > Subpatch 1", and each chip answers for its own level.
         assertEquals(listOf(TOP, outer.id, inner.id), f.patch.scopePath())
         assertEquals(TOP, f.patch.breadcrumbAt(frame, frame.breadcrumbChip(0).center))
         assertEquals(outer.id, f.patch.breadcrumbAt(frame, frame.breadcrumbChip(1).center))
@@ -464,48 +467,48 @@ class GroupTest {
     }
 
     @Test
-    fun `a knob promoted to a group's edge is the one inside, not a copy of it`() {
-        val f = GroupFixture()
-        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+    fun `a knob promoted to a subpatch's edge is the one inside, not a copy of it`() {
+        val f = SubpatchFixture()
+        val subpatch = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))!!
         val cutoff = f.filter.type.rowParams.first()
 
         // Only from inside: the chip that promotes is on a panel opened in this scope.
         assertFalse("not from the top level", f.patch.promote(f.filter, cutoff))
-        f.patch.enterScope(group.id)
+        f.patch.enterScope(subpatch.id)
         assertTrue(f.patch.promote(f.filter, cutoff))
         assertTrue(f.patch.isPromoted(f.filter, cutoff))
         assertFalse("twice is once", f.patch.promote(f.filter, cutoff))
-        assertFalse("a module in another scope is not this group's to promote", f.patch.promote(f.mix, 0))
+        assertFalse("a module in another scope is not this subpatch's to promote", f.patch.promote(f.mix, 0))
 
-        // The group's panel shows the row, and it is the filter's own.
-        val rows = f.patch.panelRows(group)
+        // The subpatch's panel shows the row, and it is the filter's own.
+        val rows = f.patch.panelRows(subpatch)
         assertEquals(listOf(ParamRow(f.filter, cutoff)), rows)
         rows.first().owner.setParam(cutoff, 777f)
         assertEquals("turning it turns the filter", 777f, f.filter.params[cutoff], 0.001f)
 
         assertTrue(f.patch.unpromote(f.filter, cutoff))
-        assertTrue(f.patch.panelRows(group).isEmpty())
+        assertTrue(f.patch.panelRows(subpatch).isEmpty())
     }
 
     @Test
-    fun `a group carries no more knobs than a module does`() {
-        val f = GroupFixture()
-        val group = f.patch.group(setOf(f.osc.id, f.filter.id, f.lfo.id))!!
-        f.patch.enterScope(group.id)
+    fun `a subpatch carries no more knobs than a module does`() {
+        val f = SubpatchFixture()
+        val subpatch = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id, f.lfo.id))!!
+        f.patch.enterScope(subpatch.id)
 
         val every = listOf(f.osc, f.filter, f.lfo).flatMap { m -> m.type.rowParams.map { m to it } }
-        assertTrue("the fixture has more knobs than a group may take", every.size > MAX_PROMOTED)
+        assertTrue("the fixture has more knobs than a subpatch may take", every.size > MAX_PROMOTED)
         val taken = every.count { (m, i) -> f.patch.promote(m, i) }
         assertEquals(MAX_PROMOTED, taken)
-        assertEquals(MAX_PROMOTED, f.patch.panelRows(group).size)
+        assertEquals(MAX_PROMOTED, f.patch.panelRows(subpatch).size)
     }
 
     @Test
     fun `promoted knobs survive a save and an undo, and follow a duplicate`() {
-        val f = GroupFixture()
-        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+        val f = SubpatchFixture()
+        val subpatch = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))!!
         val cutoff = f.filter.type.rowParams.first()
-        f.patch.enterScope(group.id)
+        f.patch.enterScope(subpatch.id)
         f.patch.promote(f.filter, cutoff)
         f.patch.scope = TOP
         val saved = f.patch.toJson()
@@ -513,55 +516,55 @@ class GroupTest {
         val reloaded = patchFromJson(saved)!!
         assertEquals(
             listOf(ParamRef(f.filter.id, cutoff)),
-            reloaded.module(group.id)?.groupPorts?.promoted?.toList(),
+            reloaded.module(subpatch.id)?.subpatchPorts?.promoted?.toList(),
         )
         assertEquals("a reload has to serialize back to the same bytes", saved, reloaded.toJson())
 
         // A duplicate's knobs are its own copies' knobs, not the original's.
-        val copy = f.patch.duplicate(group)!!
-        val copied = copy.groupPorts!!.promoted.single()
+        val copy = f.patch.duplicate(subpatch)!!
+        val copied = copy.subpatchPorts!!.promoted.single()
         assertNotEquals(f.filter.id, copied.moduleId)
         assertEquals(copy.id, f.patch.module(copied.moduleId)?.parent)
 
         // And a knob whose module is deleted goes with it, rather than riding along in the file.
         f.patch.remove(f.filter)
-        assertTrue(group.groupPorts!!.promoted.isEmpty())
+        assertTrue(subpatch.subpatchPorts!!.promoted.isEmpty())
         f.patch.replaceWith(patchFromJson(saved)!!)
         assertEquals(saved, f.patch.toJson())
     }
 
     /**
-     * Forrest's report, 2026-09-17: expose a knob inside a group, give the group a port for
+     * Forrest's report, 2026-09-17: expose a knob inside a subpatch, give the subpatch a port for
      * it, then unexpose. The jack the port reached stops existing, and the port was left on
-     * the rail and on the group's box -- a jack you could patch into that went nowhere.
+     * the rail and on the subpatch's box -- a jack you could patch into that went nowhere.
      */
     @Test
-    fun `a group port goes when the jack it reached inside stops existing`() {
-        val f = GroupFixture()
-        val group = f.patch.group(setOf(f.lfo.id, f.env.id))!!
-        f.patch.enterScope(group.id)
+    fun `a subpatch port goes when the jack it reached inside stops existing`() {
+        val f = SubpatchFixture()
+        val subpatch = f.patch.makeSubpatch(setOf(f.lfo.id, f.env.id))!!
+        f.patch.enterScope(subpatch.id)
 
         val rate = 0
         f.patch.expose(f.lfo, rate, initialModRange(f.lfo.type.params[rate], f.lfo.params[rate]))
-        val before = group.ports(PortDirection.INPUT).size
-        assertTrue(f.patch.addGroupPort(group.id, PortRef(f.lfo.id, PortDirection.MOD, rate)))
-        assertEquals(before + 1, group.ports(PortDirection.INPUT).size)
+        val before = subpatch.ports(PortDirection.INPUT).size
+        assertTrue(f.patch.addSubpatchPort(subpatch.id, PortRef(f.lfo.id, PortDirection.MOD, rate)))
+        assertEquals(before + 1, subpatch.ports(PortDirection.INPUT).size)
 
         f.patch.unexpose(f.lfo, rate)
-        assertEquals("the port goes with the jack", before, group.ports(PortDirection.INPUT).size)
-        val rail = f.patch.groupRail(group.id, Types.GroupIn)!!
+        assertEquals("the port goes with the jack", before, subpatch.ports(PortDirection.INPUT).size)
+        val rail = f.patch.subpatchRail(subpatch.id, Types.SubpatchIn)!!
         assertEquals(before, rail.ports(PortDirection.OUTPUT).size)
     }
 
     /**
-     * The same for a module deleted inside a group, and with a second port after the one
+     * The same for a module deleted inside a subpatch, and with a second port after the one
      * that goes -- removing a port renumbers every cable that named a later one.
      */
     @Test
-    fun `removing a module inside takes its group ports with it, and the rest still reach`() {
-        val f = GroupFixture()
-        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
-        val inputs = group.ports(PortDirection.INPUT).toList()
+    fun `removing a module inside takes its subpatch ports with it, and the rest still reach`() {
+        val f = SubpatchFixture()
+        val subpatch = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))!!
+        val inputs = subpatch.ports(PortDirection.INPUT).toList()
         assertEquals("steps, drone, and the lfo onto cutoff", 3, inputs.size)
 
         // What the last port carries, and where it goes, has to survive losing an earlier one.
@@ -572,7 +575,7 @@ class GroupTest {
         // The Osc takes the two note ports; deleting it leaves them reaching nothing.
         f.patch.remove(f.osc)
 
-        assertEquals(listOf(SignalKind.MODULATION), group.ports(PortDirection.INPUT).map { it.kind })
+        assertEquals(listOf(SignalKind.MODULATION), subpatch.ports(PortDirection.INPUT).map { it.kind })
         assertEquals(
             "the modulation cable still lands where it did",
             lfoCable.toSet(),
@@ -583,11 +586,11 @@ class GroupTest {
         // now that it is the first. Stale indices happen to resolve -- both ends are wrong
         // by the same amount -- so the engine hears the right thing while the jack is drawn
         // off the end of the box.
-        val rail = f.patch.groupRail(group.id, Types.GroupIn)!!
-        val count = group.ports(PortDirection.INPUT).size
+        val rail = f.patch.subpatchRail(subpatch.id, Types.SubpatchIn)!!
+        val count = subpatch.ports(PortDirection.INPUT).size
         f.patch.connections.forEach { c ->
             listOf(c.from, c.to).forEach { ref ->
-                val names = (ref.moduleId == group.id && ref.dir == PortDirection.INPUT) ||
+                val names = (ref.moduleId == subpatch.id && ref.dir == PortDirection.INPUT) ||
                     (ref.moduleId == rail.id && ref.dir == PortDirection.OUTPUT)
                 if (names) assertTrue("cable names port ${ref.index} of $count", ref.index < count)
             }
@@ -600,17 +603,17 @@ class GroupTest {
      */
     @Test
     fun `a port feeding two modules survives losing one of them`() {
-        val f = GroupFixture()
-        val group = f.patch.group(setOf(f.osc.id, f.env.id))!!
-        val rail = f.patch.groupRail(group.id, Types.GroupIn)!!
+        val f = SubpatchFixture()
+        val subpatch = f.patch.makeSubpatch(setOf(f.osc.id, f.env.id))!!
+        val rail = f.patch.subpatchRail(subpatch.id, Types.SubpatchIn)!!
         // Steps feeds both the Osc and the Env, so one port inside goes to two places.
         val shared = f.patch.connections.filter { it.from.moduleId == rail.id }
             .groupBy { it.from.index }.entries.first { it.value.size > 1 }
         assertEquals(2, shared.value.size)
 
-        val before = group.ports(PortDirection.INPUT).size
+        val before = subpatch.ports(PortDirection.INPUT).size
         f.patch.remove(f.env)
-        assertEquals("the port stays for what is still on it", before, group.ports(PortDirection.INPUT).size)
+        assertEquals("the port stays for what is still on it", before, subpatch.ports(PortDirection.INPUT).size)
         assertTrue(f.patch.connections.any { it.from.moduleId == rail.id && it.from.index == shared.key })
     }
 
@@ -620,41 +623,41 @@ class GroupTest {
      * and both have to name the same port.
      */
     @Test
-    fun `a group's jack knows which port it is, from either side`() {
-        val f = GroupFixture()
-        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
-        val railIn = f.patch.groupRail(group.id, Types.GroupIn)!!
-        val railOut = f.patch.groupRail(group.id, Types.GroupOut)!!
+    fun `a subpatch's jack knows which port it is, from either side`() {
+        val f = SubpatchFixture()
+        val subpatch = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))!!
+        val railIn = f.patch.subpatchRail(subpatch.id, Types.SubpatchIn)!!
+        val railOut = f.patch.subpatchRail(subpatch.id, Types.SubpatchOut)!!
 
         assertEquals(
-            Triple(group, PortDirection.INPUT, 2),
-            f.patch.groupPortAt(PortRef(group.id, PortDirection.INPUT, 2)),
+            Triple(subpatch, PortDirection.INPUT, 2),
+            f.patch.subpatchPortAt(PortRef(subpatch.id, PortDirection.INPUT, 2)),
         )
         assertEquals(
-            "the left rail's output is the group's input",
-            Triple(group, PortDirection.INPUT, 2),
-            f.patch.groupPortAt(PortRef(railIn.id, PortDirection.OUTPUT, 2)),
+            "the left rail's output is the subpatch's input",
+            Triple(subpatch, PortDirection.INPUT, 2),
+            f.patch.subpatchPortAt(PortRef(railIn.id, PortDirection.OUTPUT, 2)),
         )
         assertEquals(
-            Triple(group, PortDirection.OUTPUT, 0),
-            f.patch.groupPortAt(PortRef(railOut.id, PortDirection.INPUT, 0)),
+            Triple(subpatch, PortDirection.OUTPUT, 0),
+            f.patch.subpatchPortAt(PortRef(railOut.id, PortDirection.INPUT, 0)),
         )
         // The patch's own rails are pinned too, and their ports belong to the audio device.
-        assertNull(f.patch.groupPortAt(PortRef(OUT_ID, PortDirection.INPUT, 0)))
-        assertNull(f.patch.groupPortAt(PortRef(f.osc.id, PortDirection.INPUT, 0)))
+        assertNull(f.patch.subpatchPortAt(PortRef(OUT_ID, PortDirection.INPUT, 0)))
+        assertNull(f.patch.subpatchPortAt(PortRef(f.osc.id, PortDirection.INPUT, 0)))
     }
 
     @Test
     fun `removing a port by hand takes its cables and leaves the sound of the rest`() {
-        val f = GroupFixture()
-        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+        val f = SubpatchFixture()
+        val subpatch = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))!!
         val before = f.patch.engineConnections()
         val cutoffCable = before.filter { it.to.moduleId == f.filter.id && it.to.dir == PortDirection.MOD }
 
         // The first input is Steps' notes; taking it off unpatches Steps from the Osc and
         // leaves everything else exactly as it was.
-        assertTrue(f.patch.removeGroupPort(group, PortDirection.INPUT, 0))
-        assertEquals(2, group.ports(PortDirection.INPUT).size)
+        assertTrue(f.patch.removeSubpatchPort(subpatch, PortDirection.INPUT, 0))
+        assertEquals(2, subpatch.ports(PortDirection.INPUT).size)
 
         val after = f.patch.engineConnections()
         assertTrue(
@@ -666,28 +669,28 @@ class GroupTest {
     }
 
     /**
-     * Found saving a patch whose top level was two groups, 2026-09-17.
+     * Found saving a patch whose top level was two subpatches, 2026-09-17.
      *
-     * Ungrouping moved the modules inside back out -- unless they were groups themselves,
+     * Unpacking moved the modules inside back out -- unless they were subpatches themselves,
      * which the filter skipped along with the two rails it was written to skip. A nested
-     * group was left pointing at a parent that had just been deleted: still in the patch,
+     * subpatch was left pointing at a parent that had just been deleted: still in the patch,
      * still playing, and drawn in no scope at all, since every view asks for the modules
      * whose parent is the one being looked at. Only a reload rescued it, because the file
      * reader puts a module with an unknown parent back at the top.
      */
     @Test
-    fun `ungrouping puts a nested group back, not into nowhere`() {
-        val f = GroupFixture()
-        val inner = f.patch.group(setOf(f.osc.id, f.filter.id))!!
-        val outer = f.patch.group(setOf(inner.id, f.lfo.id))!!
+    fun `unpacking puts a nested subpatch back, not into nowhere`() {
+        val f = SubpatchFixture()
+        val inner = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))!!
+        val outer = f.patch.makeSubpatch(setOf(inner.id, f.lfo.id))!!
 
-        f.patch.ungroup(outer)
+        f.patch.unpack(outer)
 
-        assertEquals("the nested group comes back out", TOP, inner.parent)
+        assertEquals("the nested subpatch comes back out", TOP, inner.parent)
         assertEquals("as does anything beside it", TOP, f.lfo.parent)
         assertTrue("and it is drawn where it now lives", f.patch.shownFree.any { it.id == inner.id })
         assertTrue("its own contents came with it", f.patch.descendants(inner.id).contains(f.osc.id))
-        assertNull("the group that held them is gone", f.patch.module(outer.id))
+        assertNull("the subpatch that held them is gone", f.patch.module(outer.id))
     }
 
     /**
@@ -695,20 +698,20 @@ class GroupTest {
      * port that was meant, and the empty one stayed with nothing to say it was unused.
      */
     @Test
-    fun `a group port with nothing on either side goes by itself`() {
-        val f = GroupFixture()
-        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
-        f.patch.enterScope(group.id)
-        val rail = f.patch.groupRail(group.id, Types.GroupOut)!!
-        val before = group.ports(PortDirection.OUTPUT).size
+    fun `a subpatch port with nothing on either side goes by itself`() {
+        val f = SubpatchFixture()
+        val subpatch = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))!!
+        f.patch.enterScope(subpatch.id)
+        val rail = f.patch.subpatchRail(subpatch.id, Types.SubpatchOut)!!
+        val before = subpatch.ports(PortDirection.OUTPUT).size
 
         // A second output, as dragging a jack to the rail's + slot makes.
-        assertTrue(f.patch.addGroupPort(group.id, PortRef(f.osc.id, PortDirection.OUTPUT, 0)))
-        assertEquals(before + 1, group.ports(PortDirection.OUTPUT).size)
+        assertTrue(f.patch.addSubpatchPort(subpatch.id, PortRef(f.osc.id, PortDirection.OUTPUT, 0)))
+        assertEquals(before + 1, subpatch.ports(PortDirection.OUTPUT).size)
 
         // Taking its cable back leaves it empty on both sides, so it goes.
         f.patch.disconnect(PortRef(rail.id, PortDirection.INPUT, before))
-        assertEquals(before, group.ports(PortDirection.OUTPUT).size)
+        assertEquals(before, subpatch.ports(PortDirection.OUTPUT).size)
 
         // The port that is still in use is untouched, and so are its cables.
         assertTrue("what was patched still is", f.patch.connections.any { it.to.moduleId == rail.id })
@@ -717,31 +720,31 @@ class GroupTest {
 
     @Test
     fun `a port patched on one side only stays, so it can be plugged back in`() {
-        val f = GroupFixture()
-        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
-        val rail = f.patch.groupRail(group.id, Types.GroupOut)!!
-        val outside = f.patch.connections.first { it.from.moduleId == group.id }
-        assertEquals("the group feeds something outside", group.id, outside.from.moduleId)
+        val f = SubpatchFixture()
+        val subpatch = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))!!
+        val rail = f.patch.subpatchRail(subpatch.id, Types.SubpatchOut)!!
+        val outside = f.patch.connections.first { it.from.moduleId == subpatch.id }
+        assertEquals("the subpatch feeds something outside", subpatch.id, outside.from.moduleId)
 
         // Unplug what feeds it from inside: the box's jack is still patched outward, so the
         // port is one a cable is being moved on, not one nobody wants.
         f.patch.disconnect(PortRef(rail.id, PortDirection.INPUT, outside.from.index))
         assertTrue(
             "the jack is still there to plug back into",
-            outside.from.index < group.ports(PortDirection.OUTPUT).size,
+            outside.from.index < subpatch.ports(PortDirection.OUTPUT).size,
         )
     }
 
     @Test
     fun `a saved file's unused port is gone when it opens`() {
-        val f = GroupFixture()
-        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
-        val before = group.ports(PortDirection.OUTPUT).size
-        assertTrue(f.patch.addGroupPort(group.id, PortRef(f.osc.id, PortDirection.OUTPUT, 0)))
+        val f = SubpatchFixture()
+        val subpatch = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))!!
+        val before = subpatch.ports(PortDirection.OUTPUT).size
+        assertTrue(f.patch.addSubpatchPort(subpatch.id, PortRef(f.osc.id, PortDirection.OUTPUT, 0)))
 
         // Written with the port and its cable, then the cable taken out by hand, which is
         // what a file from before the sweep looks like.
-        val rail = f.patch.groupRail(group.id, Types.GroupOut)!!
+        val rail = f.patch.subpatchRail(subpatch.id, Types.SubpatchOut)!!
         val json = org.json.JSONObject(f.patch.toJson()).apply {
             val cables = getJSONArray("connections")
             for (i in cables.length() - 1 downTo 0) {
@@ -751,9 +754,9 @@ class GroupTest {
         }.toString()
 
         val opened = patchFromJson(json)!!
-        val reopened = opened.modules.first { it.type == Types.Group }
+        val reopened = opened.modules.first { it.type == Types.Subpatch }
         assertEquals(before, reopened.ports(PortDirection.OUTPUT).size)
         assertEquals("and it stays gone", json.let { patchFromJson(opened.toJson())!! }
-            .modules.first { it.type == Types.Group }.ports(PortDirection.OUTPUT).size, before)
+            .modules.first { it.type == Types.Subpatch }.ports(PortDirection.OUTPUT).size, before)
     }
 }

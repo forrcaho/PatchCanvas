@@ -49,7 +49,7 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var store: PatchStore
     private lateinit var scales: ScaleLibrary
-    private lateinit var groups: GroupLibrary
+    private lateinit var subpatches: SubpatchLibrary
     private lateinit var soundFonts: SoundFontLibrary
     private lateinit var patch: Patch
 
@@ -124,7 +124,7 @@ class MainActivity : ComponentActivity() {
         // Seeds the bundled .scl files into a folder the user can add to, then reads
         // whatever is there. Before the patch loads, because the patch names a tuning.
         scales = ScaleLibrary.load(this)
-        groups = GroupLibrary.load(this)
+        subpatches = SubpatchLibrary.load(this)
         soundFonts = SoundFontLibrary.load(this)
         store = PatchStore(this, scales)
         patch = store.load() ?: demoPatch()
@@ -174,7 +174,7 @@ class MainActivity : ComponentActivity() {
             snapshotFlow {
                 listOf(
                     patch.modules.map { it.id to it.type.name },
-                    // Flattened, as GraphSync reads them: regrouping changes the cables in the
+                    // Flattened, as GraphSync reads them: re-subpatching changes the cables in the
                     // patch without changing a single one the engine has, and must not sync.
                     patch.engineConnections(),
                     patch.modules.map { it.params.toList() },
@@ -224,7 +224,7 @@ class MainActivity : ComponentActivity() {
                 // so resetting it is neither saved nor undone.
                 onResetTransport = { AudioEngine.resetTransport() },
                 scales = scales.scales,
-                library = groups,
+                library = subpatches,
                 scaleLibrary = scales,
                 soundFonts = soundFonts,
             )
@@ -380,7 +380,7 @@ fun PatchCanvasApp(
     onRedo: () -> Unit = {},
     onResetTransport: () -> Unit = {},
     scales: List<Scale> = listOf(Scale.Chromatic),
-    library: GroupLibrary? = null,
+    library: SubpatchLibrary? = null,
     scaleLibrary: ScaleLibrary = ScaleLibrary.of(null),
     soundFonts: SoundFontLibrary? = null,
 ) {

@@ -25,9 +25,12 @@ import java.io.File
  * 2: the Clock module became the patch's tempo. 3: one scale became a list of them.
  * 4: parameters can be exposed for modulation, and cables can land on them.
  * 5: CV and gate retired, taking the monophonic Osc and the VCA with them.
- * 6: groups. Additive -- a format 5 file is a patch with no groups -- so 5 still reads.
+ * 6: subpatches. Additive -- a format 5 file is a patch with no subpatches -- so 5 still reads.
+ * 9: the redesign around subpatches. Groups became subpatches, so their type names in the
+ * file changed; Osc and FM lost their envelopes, so their knob lists are shorter and every
+ * index after the first moved; Poly and Amp arrived. Nothing older can be read.
  */
-private const val FORMAT_VERSION = 8
+private const val FORMAT_VERSION = 9
 private const val TAG = "PatchStore"
 
 fun Patch.toJson(): String {
@@ -42,18 +45,18 @@ fun Patch.toJson(): String {
             .put("steps", stepsOf(m))
             .put("mod", modOf(m))
         if (m.type.grid == GridKind.DOTS) entry.put("dots", dotsOf(m))
-        // Absent at the top level, so a patch with no groups writes exactly what format 5 did.
+        // Absent at the top level, so a patch with no subpatches writes exactly what format 5 did.
         m.name?.let { entry.put("name", it) }
         m.font?.let { entry.put("font", it) }
         if (m.parent != TOP) entry.put("parent", m.parent)
-        if (m.type == Types.Group) {
+        if (m.type == Types.Subpatch) {
             // The rails inside are not modules in the file: they carry no knobs and no
-            // position, only ids for the cables inside to name, and the group's ports.
-            entry.put("in", groupRail(m.id, Types.GroupIn)?.id ?: -1L)
-            entry.put("out", groupRail(m.id, Types.GroupOut)?.id ?: -1L)
+            // position, only ids for the cables inside to name, and the subpatch's ports.
+            entry.put("in", subpatchRail(m.id, Types.SubpatchIn)?.id ?: -1L)
+            entry.put("out", subpatchRail(m.id, Types.SubpatchOut)?.id ?: -1L)
             entry.put("inputs", portsOf(m.ports(PortDirection.INPUT)))
             entry.put("outputs", portsOf(m.ports(PortDirection.OUTPUT)))
-            entry.put("knobs", knobsOf(m.groupPorts?.promoted.orEmpty()))
+            entry.put("knobs", knobsOf(m.subpatchPorts?.promoted.orEmpty()))
         }
         modules.put(entry)
     }
@@ -113,7 +116,7 @@ fun Patch.toJson(): String {
         .toString()
 }
 
-/** The knobs promoted to a group's edge, each as the module it belongs to and which knob. */
+/** The knobs promoted to a subpatch's edge, each as the module it belongs to and which knob. */
 private fun knobsOf(refs: List<ParamRef>): JSONArray {
     val out = JSONArray()
     refs.forEach { out.put(JSONObject().put("module", it.moduleId).put("param", it.index)) }
@@ -132,7 +135,7 @@ private fun knobsFrom(array: JSONArray?): List<ParamRef> {
     return out
 }
 
-/** A group's ports, as name and kind. Positional: a port's index is what its cables name. */
+/** A subpatch's ports, as name and kind. Positional: a port's index is what its cables name. */
 private fun portsOf(ports: List<Port>): JSONArray {
     val out = JSONArray()
     ports.forEach { out.put(JSONObject().put("name", it.name).put("kind", it.kind.name)) }
@@ -277,12 +280,12 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
         for (i in 0 until modules.length()) {
             val m = modules.optJSONObject(i) ?: continue
             val name = m.optString("type")
-            val type = Types.byName[name] ?: Types.Group.takeIf { it.name == name } ?: continue
+            val type = Types.byName[name] ?: Types.Subpatch.takeIf { it.name == name } ?: continue
             if (type.pinned != null) continue // rails already exist; never duplicate them
             val id = m.optLong("id", -1L)
             if (id < 0L || patch.module(id) != null) continue
-            val shared = if (type == Types.Group) {
-                GroupPorts().also {
+            val shared = if (type == Types.Subpatch) {
+                SubpatchPorts().also {
                     it.inputs.addAll(portsFrom(m.optJSONArray("inputs")))
                     it.outputs.addAll(portsFrom(m.optJSONArray("outputs")))
                     it.promoted.addAll(knobsFrom(m.optJSONArray("knobs")))
@@ -301,7 +304,7 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
             module.parent = m.optLong("parent", TOP)
             if (shared != null) {
                 // The rails come back under the ids the cables inside were saved against.
-                for ((key, railType) in listOf("in" to Types.GroupIn, "out" to Types.GroupOut)) {
+                for ((key, railType) in listOf("in" to Types.SubpatchIn, "out" to Types.SubpatchOut)) {
                     val railId = m.optLong(key, -1L)
                     if (railId < 0L || patch.module(railId) != null) continue
                     patch.adopt(PatchModule(railId, railType, Offset.Zero, shared).also { it.parent = id })
@@ -325,18 +328,18 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
             restoreParams(module, r.optJSONObject("params"))
         }
 
-        // A parent that is not a group in this file, or a loop of groups inside each other,
+        // A parent that is not a subpatch in this file, or a loop of subpatches inside each other,
         // puts the module at the top rather than somewhere nothing can reach.
         patch.modules.filter { !it.isPinned && it.parent != TOP }.forEach { module ->
             val seen = mutableSetOf(module.id)
             var at = module.parent
             while (at != TOP) {
-                val group = patch.module(at)
-                if (group?.type != Types.Group || !seen.add(at)) {
+                val subpatch = patch.module(at)
+                if (subpatch?.type != Types.Subpatch || !seen.add(at)) {
                     module.parent = TOP
                     break
                 }
-                at = group.parent
+                at = subpatch.parent
             }
         }
 
@@ -370,9 +373,9 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
             }
         }
 
-        // A group port with nothing on either side goes here too, so a file written before
+        // A subpatch port with nothing on either side goes here too, so a file written before
         // that rule -- or by hand -- opens as clean as an edit leaves it.
-        patch.sweepUnusedGroupPorts()
+        patch.sweepUnusedSubpatchPorts()
         patch
     } catch (e: Exception) {
         Log.w(TAG, "could not read patch", e)
@@ -399,16 +402,15 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
  */
 private fun upgrade(root: JSONObject): JSONObject? {
     val version = root.optInt("version", -1)
-    // 7, 6 and 5 read as they stand: groups, then the knobs promoted to a group's edge,
-    // then new modules and the dots and font they carry, were each added to the format and
-    // nothing was taken away. The rule is against converting a file silently, not against
-    // a change that needs no conversion.
-    //
-    // 8 exists for the other direction. A build before it reads a DotSeq, an SF, an FM or
-    // a Pluck as a type that no longer exists and skips it -- and then autosaves the patch
-    // without it. Bumping the version makes that build refuse the file and move it aside
-    // instead, which is the whole point of refusing.
-    if (version != FORMAT_VERSION && version != 7 && version != 6 && version != 5) {
+    // 8, 7, 6 and 5 read as they stood until format 9, because each change up to there was
+    // additive and a change that needs no conversion is not a silent conversion. 9 is not
+    // additive and so reads nothing else. A format 8 file names a "Group" where this build
+    // has a Subpatch, which would be skipped as a retired type and take everything inside
+    // it; and its Osc and FM carry an envelope's four knobs where this build has none, so
+    // every index after the first would land on the wrong knob. Either one converts
+    // silently into a patch that is quietly not the one that was saved, which is the thing
+    // refusing exists to prevent.
+    if (version != FORMAT_VERSION) {
         Log.w(TAG, "unsupported patch version $version")
         return null
     }

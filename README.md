@@ -49,7 +49,7 @@ from a file manager.
 | --- | --- |
 | `scales/` | Scala `.scl` tunings. The bundled ones are seeded here on first run; add your own beside them. |
 | `soundfonts/` | SoundFont `.sf2` banks for the **SF** module. Nothing ships with the app. |
-| `groups/` | Groups saved from the app, each a patch file holding one group. |
+| `subpatches/` | Subpatches saved from the app, each a patch file holding one subpatch. |
 
 A good free bank to start with is [GeneralUser GS](https://www.schristiancollins.com/generaluser)
 by S. Christian Collins -- 32MB, 261 instruments and 13 drum kits, and its license allows

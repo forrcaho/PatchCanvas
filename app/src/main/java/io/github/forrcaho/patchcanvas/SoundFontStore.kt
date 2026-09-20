@@ -9,7 +9,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /*
- * SoundFonts: the ones the user puts in `soundfonts`, beside the scales and the groups.
+ * SoundFonts: the ones the user puts in `soundfonts`, beside the scales and the subpatches.
  *
  * None ship with the app. GeneralUser GS was bundled for a day and taken out on 2026-09-19:
  * it is 32MB of the download for a file anyone who wants an SF module can fetch themselves,
@@ -104,7 +104,7 @@ class SoundFontLibrary(val directory: File?) {
 
     companion object {
         /**
-         * The folder is `soundfonts` beside `scales` and `groups`, made here so it is there
+         * The folder is `soundfonts` beside `scales` and `subpatches`, made here so it is there
          * to drop files into over USB.
          */
         fun load(context: Context): SoundFontLibrary = SoundFontLibrary(

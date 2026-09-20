@@ -76,7 +76,7 @@ being edited out from under it.
 | `GraphSync.kt` | the diff, `NodeType` mirror, `GraphCommands` seam for tests |
 | `PatchStore.kt` | JSON persistence, hand-rolled on `org.json` |
 | `SoundFontStore.kt` | the user's `.sf2` banks in `soundfonts`, loaded on demand |
-| `GroupStore.kt` | the group library: a saved group is a patch file holding one group |
+| `SubpatchStore.kt` | the subpatch library: a saved subpatch is a patch file holding one subpatch |
 | `History.kt` | undo as a stack of serialized patches, plus `Patch.replaceWith` |
 | `Scale.kt` | the tuning model: degrees in octaves, with a period |
 | `ScalaFile.kt` | `.scl` parsing — untrusted input, every bad shape returns null |
@@ -124,7 +124,7 @@ modules rather than renaming fields, so an older file could only have been conve
 *silently* -- a patch built around a VCA an envelope opened comes back as a filter fed by
 nothing, quieter than it was left, reporting success. So `upgrade` is a version check and
 nothing more; the migration ladder that walked 1 to 4 went with the formats it served.
-Format 6 added groups, 7 the knobs promoted to a group's edge, and 8 new modules with their
+Format 6 added subpatches, 7 the knobs promoted to a subpatch's edge, and 8 new modules with their
 dots and fonts, none taking anything away, so 8 reads 7, 6 and 5 as they stand -- the rule is against silent conversion, not
 against a change that needs none. **Adding a module type bumps the version** even though
 nothing needs converting: an older build reads an unknown type as retired, skips it, and
@@ -204,13 +204,13 @@ Node ids 1, 7 and 8 are retired and never reused; `Osc` is id 10, where `Voice` 
 grays for audio, purples for modulation -- in a shade of that family, never the cable
 color itself. `ModuleColorTest` enforces it, so a new module's accent has to follow it.
 
-**A saved group is a patch file holding one group.** The library (`GroupStore.kt`) writes
-to `getExternalFilesDir/groups`, beside the scales, and reads back through `patchFromJson`
--- so a group file gets the patch format's validation, its refusals and its version check
-rather than a second copy of all three. Loading is a **copy**: `adoptGroup` allocates ids
-in the receiving patch, which is the same routine that duplicates a group, so the same file
-loaded twice is two groups sharing nothing. Saving the whole patch groups a *copy* read
-back from the patch's own file -- never the live patch, since ungrouping re-adds the
+**A saved subpatch is a patch file holding one subpatch.** The library (`SubpatchStore.kt`) writes
+to `getExternalFilesDir/subpatches`, beside the scales, and reads back through `patchFromJson`
+-- so a subpatch file gets the patch format's validation, its refusals and its version check
+rather than a second copy of all three. Loading is a **copy**: `adoptSubpatch` allocates ids
+in the receiving patch, which is the same routine that duplicates a subpatch, so the same file
+loaded twice is two subpatches sharing nothing. Saving the whole patch subpatches a *copy* read
+back from the patch's own file -- never the live patch, since unpacking re-adds the
 boundary's cables at the end of the list and the reordered file became a phantom undo step.
 
 **Anything sized to hold a label reads `Frame.fontScale`.** Labels are sp, boxes are dp, and
@@ -218,29 +218,29 @@ the reference device runs at font scale 1.5; a menu tile sized for 12sp text ove
 there and nowhere else. Grow the box with the setting rather than shrinking the text back
 against it.
 
-**Groups never reach the engine.** Every module is in one flat list with a `parent`
-(`TOP`, or the id of the group it is in). A group is a module of type `Group` whose ports
-are its own, stored in a `GroupPorts` it shares with the two pinned rails inside it
-(`GroupIn` on the left, `GroupOut` on the right) -- so inside a group, the existing rail
+**Subpatches never reach the engine.** Every module is in one flat list with a `parent`
+(`TOP`, or the id of the subpatch it is in). A subpatch is a module of type `Subpatch` whose ports
+are its own, stored in a `SubpatchPorts` it shares with the two pinned rails inside it
+(`SubpatchIn` on the left, `SubpatchOut` on the right) -- so inside a subpatch, the existing rail
 drawing, hit testing and cables all apply unchanged. `GraphSync` reads
-`engineModules` and `engineConnections()`, which follow any chain of group ports to the
-real output at the far end. A group's ports are stored, never derived from the cables, so
+`engineModules` and `engineConnections()`, which follow any chain of subpatch ports to the
+real output at the far end. A subpatch's ports are stored, never derived from the cables, so
 unplugging one leaves the jack to plug back into -- but a port whose jack *inside* stops
 existing (its parameter unexposed, its module deleted) is dropped, since nothing could
 reach it again. Dropping one renumbers every cable that named a later port: indices are
 positional, and stale ones fail silently because both ends are wrong by the same amount,
-so the engine hears the right thing while the jack draws off the end of the box. **Grouping or ungrouping a playing patch must send the engine
-nothing**, and `GraphSyncTest` asserts exactly that. Which group you are looking at
+so the engine hears the right thing while the jack draws off the end of the box. **Subpatching or unpacking a playing patch must send the engine
+nothing**, and `GraphSyncTest` asserts exactly that. Which subpatch you are looking at
 (`Patch.scope`) is view state: not saved, not undone. **A knob reaches out through the
-boundary the same way a cable does.** Inside a group, the chip beside a row promotes that
-knob to the group's edge, and the group's panel -- opened from its menu, since a tap goes
+boundary the same way a cable does.** Inside a subpatch, the chip beside a row promotes that
+knob to the subpatch's edge, and the subpatch's panel -- opened from its menu, since a tap goes
 inside -- draws it. What is stored is a `ParamRef`, never a copy: the value stays on the
 module inside, so there is one number, the engine still reads the node that has it, and
 promoting sends the engine nothing. `panelRows` is what every panel draws and hit-tests
-against, which is why a group can show knobs its own type never declared. A group is named "Group N" -- one
+against, which is why a subpatch can show knobs its own type never declared. A subpatch is named "Subpatch N" -- one
 past the highest number in use anywhere in the patch -- on a `PatchModule.name` that every
 module has and that falls back to the type's name, so a file written before names still
-draws "Group".
+draws "Subpatch".
 
 **Nothing carries a pulse yet, and the kind stays anyway.** `Env` was the last thing taking
 a gate and it takes *notes* now: a pulse is an event with no duration, so it could never

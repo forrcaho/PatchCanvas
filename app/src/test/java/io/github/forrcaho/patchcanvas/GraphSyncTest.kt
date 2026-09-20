@@ -81,65 +81,65 @@ class GraphSyncTest {
     private val sync = GraphSync(rec)
 
     /**
-     * The engine-facing half of groups: a playing patch grouped, nested, ungrouped or
-     * regrouped is sent nothing, because the cables the engine has are the same cables. A
+     * The engine-facing half of subpatches: a playing patch subpatched, nested, unpacked or
+     * re-subpatched is sent nothing, because the cables the engine has are the same cables. A
      * command here would be a crossfade, and every one of them is audible.
      */
     @Test
-    fun `grouping a playing patch sends the engine nothing`() {
-        val f = GroupFixture()
+    fun `subpatching a playing patch sends the engine nothing`() {
+        val f = SubpatchFixture()
         sync.sync(f.patch)
         rec.clear()
 
-        val inner = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+        val inner = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))!!
         sync.sync(f.patch)
-        assertTrue("grouping: ${rec.log}", rec.log.isEmpty())
+        assertTrue("subpatching: ${rec.log}", rec.log.isEmpty())
 
-        val outer = f.patch.group(setOf(inner.id, f.lfo.id))!!
+        val outer = f.patch.makeSubpatch(setOf(inner.id, f.lfo.id))!!
         sync.sync(f.patch)
         assertTrue("nesting: ${rec.log}", rec.log.isEmpty())
 
-        f.patch.ungroup(outer)
-        f.patch.ungroup(inner)
+        f.patch.unpack(outer)
+        f.patch.unpack(inner)
         sync.sync(f.patch)
-        assertTrue("ungrouping: ${rec.log}", rec.log.isEmpty())
+        assertTrue("unpacking: ${rec.log}", rec.log.isEmpty())
     }
 
     /**
-     * Promoting a knob is the same promise as grouping: it moves where a control is reached
+     * Promoting a knob is the same promise as subpatching: it moves where a control is reached
      * from, not what it is. The engine holds the module inside either way, and a command
      * here would be a knob written twice or, worse, a node rebuilt under a playing patch.
      */
     @Test
-    fun `promoting a knob to a group's edge sends the engine nothing`() {
-        val f = GroupFixture()
-        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+    fun `promoting a knob to a subpatch's edge sends the engine nothing`() {
+        val f = SubpatchFixture()
+        val subpatch = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))!!
         sync.sync(f.patch)
         rec.clear()
 
-        f.patch.enterScope(group.id)
+        f.patch.enterScope(subpatch.id)
         assertTrue(f.patch.promote(f.filter, f.filter.type.rowParams.first()))
         sync.sync(f.patch)
         assertTrue("promoting: ${rec.log}", rec.log.isEmpty())
 
-        // Turning it from the group's panel is an ordinary parameter change, on the module
-        // that really holds it -- the group is not a node and cannot be sent one.
-        val row = f.patch.panelRows(group).single()
+        // Turning it from the subpatch's panel is an ordinary parameter change, on the module
+        // that really holds it -- the subpatch is not a node and cannot be sent one.
+        val row = f.patch.panelRows(subpatch).single()
         row.owner.setParam(row.index, 4321f)
         sync.sync(f.patch)
         assertEquals(listOf(Cmd.SetParam(f.filter.id, row.index, 4321f)), rec.log)
     }
 
     @Test
-    fun `a module inside a group is synced like any other`() {
-        val f = GroupFixture()
-        val group = f.patch.group(setOf(f.osc.id, f.filter.id))!!
+    fun `a module inside a subpatch is synced like any other`() {
+        val f = SubpatchFixture()
+        val subpatch = f.patch.makeSubpatch(setOf(f.osc.id, f.filter.id))!!
         sync.sync(f.patch)
 
-        assertTrue(rec.log.none { it is Cmd.Add && (it.id == group.id) })
+        assertTrue(rec.log.none { it is Cmd.Add && (it.id == subpatch.id) })
         assertTrue(rec.log.any { it == Cmd.Add(f.osc.id, NodeType.Osc) })
         assertTrue(
-            "a cable through the group's ports arrives as the one it stands for",
+            "a cable through the subpatch's ports arrives as the one it stands for",
             rec.log.contains(Cmd.Connect(f.filter.id, 0, OUT_ID, 0)),
         )
 

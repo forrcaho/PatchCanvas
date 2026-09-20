@@ -94,19 +94,19 @@ fun Patch.replaceWith(source: Patch): Set<Long> {
         val openId = modules.firstOrNull { it.expanded }?.id
 
         connections.clear()
-        // Every module but the patch's own two rails. A group's rails are pinned too, but they
-        // belong to the group and come and go with it.
+        // Every module but the patch's own two rails. A subpatch's rails are pinned too, but they
+        // belong to the subpatch and come and go with it.
         modules.removeAll { it.id != OUT_ID && it.id != IN_ID }
 
-        // One shared set of ports per group, made first so the rails inside can take it
+        // One shared set of ports per subpatch, made first so the rails inside can take it
         // whichever order the modules arrive in.
-        val shared = source.modules.filter { it.type == Types.Group }
-            .associate { it.id to (it.groupPorts ?: GroupPorts()).copy() }
+        val shared = source.modules.filter { it.type == Types.Subpatch }
+            .associate { it.id to (it.subpatchPorts ?: SubpatchPorts()).copy() }
 
         source.modules.filter { it.id != OUT_ID && it.id != IN_ID }.forEach { from ->
             val ports = when (from.type) {
-                Types.Group -> shared[from.id]
-                Types.GroupIn, Types.GroupOut -> shared[from.parent]
+                Types.Subpatch -> shared[from.id]
+                Types.SubpatchIn, Types.SubpatchOut -> shared[from.parent]
                 else -> null
             }
             val copy = PatchModule(from.id, from.type, from.position, ports)
