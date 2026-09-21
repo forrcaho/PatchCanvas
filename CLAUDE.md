@@ -131,8 +131,11 @@ modules rather than renaming fields, so an older file could only have been conve
 nothing, quieter than it was left, reporting success. So `upgrade` is a version check and
 nothing more; the migration ladder that walked 1 to 4 went with the formats it served.
 Format 6 added subpatches, 7 the knobs promoted to a subpatch's edge, and 8 new modules with their
-dots and fonts, none taking anything away, so 8 reads 7, 6 and 5 as they stand -- the rule is against silent conversion, not
-against a change that needs none. **Adding a module type bumps the version** even though
+dots and fonts, none taking anything away, so 8 read 7, 6 and 5 as they stood -- the rule is against silent conversion, not
+against a change that needs none. That additive run ended at 9, and **10 reads nothing but
+10**: 9 stores a dot's length in whole steps where this build reads quarter steps, so every
+note would come back a quarter of its length -- a sequence that still loads, still plays, and
+is not the music that was written, which is the exact failure refusing exists to prevent. **Adding a module type bumps the version** even though
 nothing needs converting: an older build reads an unknown type as retired, skips it, and
 autosaves the patch without it -- the bump makes that build refuse the file instead. What
 makes that affordable is that `PatchStore.load` moves a refused file to
@@ -285,6 +288,18 @@ against, which is why a subpatch can show knobs its own type never declared. A s
 past the highest number in use anywhere in the patch -- on a `PatchModule.name` that every
 module has and that falls back to the type's name, so a file written before names still
 draws "Subpatch".
+
+**A dot's length is its duration, in quarter steps.** `Seq` had a `gate` knob for one day:
+it took Steps' place in the Add menu, a dot's length was whole steps, nothing could be
+shorter than one, and the knob shortened the last step of every note at once. A length in
+quarter steps says that per note and says more, so the knob went -- Steps' half step is a
+length of 2. This is Bespoke's model and was `DotSeq`'s own design: **a gap between two
+notes is made by shortening the first**, and it is drawn that way, a half-step note being
+half a cell wide. The whole steps of a length are counted in ticks, so a stopped transport
+holds a note as it holds a `Steps` note; the part step left over is counted in frames from
+the tick it starts on. A note shorter than one step has no whole steps at all, so its part
+starts on the tick it does -- which is why `SeqNode::onTick` counts the tails out *after*
+the starts rather than beside the ends.
 
 **Nothing carries a pulse yet, and the kind stays anyway.** `Env` was the last thing taking
 a gate and it takes *notes* now: a pulse is an event with no duration, so it could never

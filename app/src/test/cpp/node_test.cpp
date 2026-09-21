@@ -1743,6 +1743,9 @@ void anSfWithoutItsFontIsSilent() {
     check(peak(voiceIdle(sf, 200)) > 0.05f, "and sounds once it has one");
 }
 
+/** Whole steps, in the quarter steps a dot's length is counted in. See SeqNode. */
+constexpr int32_t Q(int32_t steps) { return steps * SeqNode::kDotSubsteps; }
+
 /** Ticks [dots] once at [count] and returns what it said. */
 NoteBuffer tickDots(SeqNode &dots, int64_t count, int32_t offset = 0) {
     dots.setTiming(0.0, true, nullptr);
@@ -1760,7 +1763,7 @@ int countKind(const NoteBuffer &notes, NoteKind kind) {
 void aDotLastsItsLength() {
     std::printf("a dot lasts its length, in steps\n");
     SeqNode dots;
-    dots.setDot(0, 0, 7, 3);
+    dots.setDot(0, 0, 7, Q(3));
     const NoteBuffer first = tickDots(dots, 0);
     check(countKind(first, NoteKind::On) == 1 && first.events[0].degree == 7, "starts on its step");
     const uint32_t id = first.events[0].id;
@@ -1773,9 +1776,9 @@ void aDotLastsItsLength() {
 void aColumnOfDotsIsAChord() {
     std::printf("a column of dots is a chord, each note its own length\n");
     SeqNode dots;
-    dots.setDot(0, 0, 0, 1);
-    dots.setDot(1, 0, 4, 2);
-    dots.setDot(2, 0, 7, 4);
+    dots.setDot(0, 0, 0, Q(1));
+    dots.setDot(1, 0, 4, Q(2));
+    dots.setDot(2, 0, 7, Q(4));
     check(countKind(tickDots(dots, 0), NoteKind::On) == 3, "three notes start together");
     check(countKind(tickDots(dots, 1), NoteKind::Off) == 1, "the shortest ends first");
     check(countKind(tickDots(dots, 2), NoteKind::Off) == 1, "then the next");
@@ -1788,8 +1791,8 @@ void aColumnOfDotsIsAChord() {
 void aDotEndsBeforeTheNextStarts() {
     std::printf("a dot ends before the next one at its degree starts\n");
     SeqNode dots;
-    dots.setDot(0, 0, 5, 2);
-    dots.setDot(1, 2, 5, 1);
+    dots.setDot(0, 0, 5, Q(2));
+    dots.setDot(1, 2, 5, Q(1));
     tickDots(dots, 0);
     tickDots(dots, 1);
     const NoteBuffer turn = tickDots(dots, 2);
@@ -1802,7 +1805,7 @@ void dotsLoopAtTheLength() {
     std::printf("dots loop at the sequence's length\n");
     SeqNode dots;
     dots.setParam(0, 4.0f);
-    dots.setDot(0, 1, 2, 1);
+    dots.setDot(0, 1, 2, Q(1));
     int ons = 0;
     for (int64_t count = 0; count < 12; ++count) {
         const NoteBuffer said = tickDots(dots, count);
@@ -1821,7 +1824,7 @@ void dotsLoopAtTheLength() {
 void aJumpInTimeEndsWhatWasHeld() {
     std::printf("a jump in time ends what was held\n");
     SeqNode dots;
-    dots.setDot(0, 0, 0, 8);
+    dots.setDot(0, 0, 0, Q(8));
     tickDots(dots, 0);
     check(dots.notesHeld() == 1, "held");
     // The transport reset: the tick eight steps on, which would have ended it, may never
@@ -1862,8 +1865,14 @@ int firstOnDegree(const NoteBuffer &notes) {
     return -999;
 }
 
-void aSeqNoteSoundsItsGateOfItsLastStep() {
-    std::printf("a seq note sounds its gate of its last step\n");
+/**
+ * A length that is not a whole number of steps ends partway through one.
+ *
+ * This is what the `gate` knob used to do to every note at once, and why it went: a length
+ * in quarter steps says it per note. Steps' half step is a length of 2.
+ */
+void aDotEndsPartwayThroughAStep() {
+    std::printf("a dot whose length is not whole steps ends inside one\n");
     // 120bpm is two beats a second; an eighth-note step is half a beat, 12000 frames.
     const double beatsPerFrame = 2.0 / kRate;
     const int32_t stepFrames = 12000;
@@ -1883,20 +1892,27 @@ void aSeqNoteSoundsItsGateOfItsLastStep() {
         return *seq.noteOutput(0);
     };
 
-    SeqNode seq; // gate 0.5 by default: Steps' half step
-    seq.setDot(0, 0, 0, 2);
+    SeqNode seq;
+    seq.setDot(0, 0, 0, Q(1) + 2); // a step and a half
     check(countKind(tickAt(seq, 0), NoteKind::On) == 1, "starts");
     check(offsIn(seq, stepFrames - kBlockSize) == 0, "sounds all through its first step");
     tickAt(seq, 1);
-    check(offsIn(seq, stepFrames / 2 - 2 * kBlockSize) == 0, "and the first half of its last");
+    check(offsIn(seq, stepFrames / 2 - 2 * kBlockSize) == 0, "and the first half of the next");
     check(offsIn(seq, 4 * kBlockSize) == 1, "and ends halfway through it");
     check(countKind(tickAt(seq, 2), NoteKind::Off) == 0, "not again on the next tick");
 
+    // Shorter than a step: it has no whole steps at all, so its part starts on the tick it
+    // does -- the case that has to be counted out after the starts rather than before them.
+    SeqNode half;
+    half.setDot(0, 0, 0, 2);
+    check(countKind(tickAt(half, 0), NoteKind::On) == 1, "a half-step note starts");
+    check(offsIn(half, stepFrames / 2 - 2 * kBlockSize) == 0, "and holds half a step");
+    check(offsIn(half, 4 * kBlockSize) == 1, "then ends, without waiting for a tick");
+
     SeqNode legato;
-    legato.setParam(3, 1.0f);
-    legato.setDot(0, 0, 0, 1);
+    legato.setDot(0, 0, 0, Q(1));
     tickAt(legato, 0);
-    check(offsIn(legato, stepFrames - kBlockSize) == 0, "at a gate of 1 it sounds its whole step");
+    check(offsIn(legato, stepFrames - kBlockSize) == 0, "a whole-step note sounds its whole step");
     check(countKind(tickAt(legato, 1), NoteKind::Off) == 1, "and ends on the tick after");
 }
 
@@ -2275,7 +2291,7 @@ int main() {
     aDotEndsBeforeTheNextStarts();
     dotsLoopAtTheLength();
     aJumpInTimeEndsWhatWasHeld();
-    aSeqNoteSoundsItsGateOfItsLastStep();
+    aDotEndsPartwayThroughAStep();
     aDroneTransposeMovesWhatItHolds();
     chanceDecidesEachNoteOnce();
     chordMakesEveryNoteAChord();

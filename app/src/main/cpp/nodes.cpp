@@ -414,7 +414,7 @@ void SeqNode::setDot(int32_t slot, int32_t step, int32_t degree, int32_t length)
     if (slot < 0 || slot >= kMaxDots) return;
     dotStep_[slot] = std::max(0, std::min(step, kSteps - 1));
     dotDegree_[slot] = degree;
-    dotLength_[slot] = std::max(0, std::min(length, kSteps));
+    dotLength_[slot] = std::max(0, std::min(length, kSteps * kDotSubsteps));
 }
 
 void SeqNode::tick(int32_t offset, int64_t count) {
@@ -447,9 +447,14 @@ void SeqNode::onTick(NoteBuffer &notes, uint16_t offset, int64_t count) {
     lastCount_ = count;
 
     // Ends before starts, so a note followed at once by another at the same degree is two
-    // notes rather than one whose Off lands after the second's On.
+    // notes rather than one whose Off lands after the second's On. Only the notes that end
+    // on a tick: one with a part step left is counted out in frames below.
     for (int32_t h = 0; h < heldCount_;) {
-        if (held_[h].endCount <= count) release(notes, h, offset); else ++h;
+        if (held_[h].gateLeft < 0 && held_[h].tail == 0 && held_[h].endCount <= count) {
+            release(notes, h, offset);
+        } else {
+            ++h;
+        }
     }
 
     const int64_t length = length_ > 0 ? length_ : 1;
@@ -468,17 +473,28 @@ void SeqNode::onTick(NoteBuffer &notes, uint16_t offset, int64_t count) {
         on.cents = transposeCents_;
         on.velocity = 1.0f;
         if (!notes.push(on)) break;
-        held_[heldCount_++] = Held{on.id, on.degree, beat, count + dotLength_[d] - 1, count + dotLength_[d], -1};
+        // Whole steps in ticks, the part step in frames. A length under one step has no
+        // whole steps at all, so its part starts on this very tick -- which is why the
+        // pass below runs after the starts rather than beside the ends above.
+        held_[heldCount_++] = Held{
+                on.id, on.degree, beat,
+                count + dotLength_[d] / kDotSubsteps,
+                dotLength_[d] % kDotSubsteps,
+                -1,
+        };
     }
 
-    // A note on its last step starts its gate, in frames worked out at this tick's tempo.
-    // At a gate of 1, or with the transport stopped, there is nothing to count: it ends on
-    // the tick after, like every note did before there was a gate.
-    const int64_t frames = beatsPerFrame_ > 0.0 && gate_ < 1.0f
-            ? static_cast<int64_t>(gate_ * interval.num / (interval.den * beatsPerFrame_))
-            : 0;
+    // A note whose whole steps have run out starts counting its part step, in frames worked
+    // out at this tick's tempo. With the transport stopped there is nothing to count, so it
+    // ends on the tick after instead, as every note did before a length had a part.
     for (int32_t h = 0; h < heldCount_; ++h) {
-        if (held_[h].lastCount == count && frames > 0) held_[h].gateLeft = frames;
+        Held &held = held_[h];
+        if (held.gateLeft >= 0 || held.tail == 0 || held.endCount > count) continue;
+        const int64_t frames = beatsPerFrame_ > 0.0
+                ? static_cast<int64_t>(held.tail * interval.num /
+                                       (kDotSubsteps * interval.den * beatsPerFrame_))
+                : 0;
+        if (frames > 0) held.gateLeft = frames; else held.tail = 0;
     }
 }
 
@@ -527,7 +543,6 @@ void SeqNode::setParam(int32_t index, float value) {
             intervalIndex_ = static_cast<int32_t>(
                     clampf(value, 0.0f, static_cast<float>(kIntervalCount - 1)) + 0.5f);
             break;
-        case 3: gate_ = clampf(value, 0.05f, 1.0f); break;
         default: break;
     }
 }

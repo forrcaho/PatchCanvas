@@ -2616,6 +2616,37 @@ sends audio will not fit, and the answer then is not a narrower margin: it is th
 should probably be told apart by its *shape* or its glyph rather than by one more shade,
 with color kept for the family alone.
 
+### Seq's gate goes, and a dot's length is its duration
+
+**2026-09-20, from Forrest, and it is the roadmap correcting itself.** He asked whether Seq
+needed a gate at all, since an envelope shapes the note now -- and then whether Bespoke's
+DotSequencer, which Seq is modeled on, even has one.
+
+It does not, and neither did this module as designed. The DotSeq entry in Phase 9 says so
+in as many words: *"a gap between dots is made by shortening one."* The `gate` knob arrived
+the next morning for one reason, recorded in the entry after it: Seq took Steps' place in
+the Add menu and could not do the one thing Steps could, sound a note shorter than a step.
+A dot's length was whole steps with a minimum of one, so a global knob was the cheap way to
+get sub-step articulation into a model that already expressed duration per note.
+
+The answer was to fix the resolution rather than keep the knob. **A dot's length is now in
+quarter steps**, so duration is the dot's own extent again: Steps' half step is a length of
+2, a gap is made by shortening a note, and the grid *draws* it -- a half-step note is half a
+cell wide, where before the same music was a number hidden in a knob. `Seq` is back to two
+knobs in one column, which is also what the panel wanted.
+
+Worth writing down, because it was nearly missed: `gate` was not a control anyone had
+reasoned about on its own merits. It was a compatibility patch for a module it replaced, and
+it survived a day of use, a panel-layout fix built around accommodating it, and two rounds of
+argument about whether it was redundant -- before anyone asked what the thing it was copied
+from actually did. The check that settled it took one grep of this file.
+
+Format 10, reading nothing older: a 9 stores lengths in whole steps and would come back a
+quarter of its length, which still loads and still plays and is not the music that was
+written. Forrest's live patch was converted explicitly, off the device, by a script that
+multiplied each length by four and took the gate's share off -- a migration run by a person
+who knew what it meant, which is the only kind this project allows.
+
 ### What is not known yet
 
 **None of this has been heard.** Every defect that mattered in this project was found by a

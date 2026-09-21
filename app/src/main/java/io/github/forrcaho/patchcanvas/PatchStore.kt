@@ -29,8 +29,10 @@ import java.io.File
  * 9: the redesign around subpatches. Groups became subpatches, so their type names in the
  * file changed; Osc and FM lost their envelopes, so their knob lists are shorter and every
  * index after the first moved; Poly and Amp arrived. Nothing older can be read.
+ * 10: a dot's length is in quarter steps, and Seq lost its gate knob. A 9 reads as a
+ * quarter of the music it is.
  */
-private const val FORMAT_VERSION = 9
+private const val FORMAT_VERSION = 10
 private const val TAG = "PatchStore"
 
 fun Patch.toJson(): String {
@@ -192,7 +194,8 @@ private fun restoreDots(module: PatchModule, stored: JSONArray?) {
             Dot(
                 d.optInt(0).coerceIn(0, DOT_STEPS - 1),
                 d.optInt(1),
-                d.optInt(2, 1).coerceIn(1, DOT_STEPS),
+                // In quarter steps since format 10; see DOT_SUBSTEPS.
+                d.optInt(2, DOT_SUBSTEPS).coerceIn(1, DOT_STEPS * DOT_SUBSTEPS),
             ),
         )
     }
@@ -402,14 +405,12 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
  */
 private fun upgrade(root: JSONObject): JSONObject? {
     val version = root.optInt("version", -1)
-    // 8, 7, 6 and 5 read as they stood until format 9, because each change up to there was
-    // additive and a change that needs no conversion is not a silent conversion. 9 is not
-    // additive and so reads nothing else. A format 8 file names a "Group" where this build
-    // has a Subpatch, which would be skipped as a retired type and take everything inside
-    // it; and its Osc and FM carry an envelope's four knobs where this build has none, so
-    // every index after the first would land on the wrong knob. Either one converts
-    // silently into a patch that is quietly not the one that was saved, which is the thing
-    // refusing exists to prevent.
+    // Nothing older, and for the reason every refusal here exists: the conversion would be
+    // silent and the patch would be quietly not the one that was saved. A format 8 file
+    // names a "Group", which this build reads as a retired type and skips, taking everything
+    // inside it. A 9 stores a dot's length in whole steps where this build reads quarter
+    // steps, so every note would come back a quarter of its length -- a sequence that still
+    // loads, still plays and is not the music that was written.
     if (version != FORMAT_VERSION) {
         Log.w(TAG, "unsupported patch version $version")
         return null

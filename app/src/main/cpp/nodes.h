@@ -299,16 +299,24 @@ private:
  * the reason notes became events at all (ROADMAP, Phase 6). Called DotSeq for a night, then
  * Seq, when it took over from Steps.
  *
- * Ticked by the transport at its interval. A note starts on the tick of its step and sounds
- * through its steps -- all of them but the last in full, and [gate] of the last: at 0.5 a
- * one-step note is Steps' half step, and at 1 notes are legato, ending on the tick after.
- * The last step's share is counted in frames from its tick, and like Steps' gate it holds
- * still while the transport is stopped.
+ * Ticked by the transport at its interval. A note starts on the tick of its step and lasts
+ * its own length, which is measured in *quarter steps* -- so a note can end partway through
+ * a step, and a gap between two notes is made by shortening the first.
+ *
+ * That is Bespoke's model and was this module's own until Seq took Steps' place in the Add
+ * menu: a dot's length was whole steps, nothing could be shorter than one, and a `gate` knob
+ * was added to take a share off the last step of every note at once. A length in quarter
+ * steps says the same thing per note and says more -- Steps' half step is a length of 2 --
+ * so the knob went and duration is the dot's own extent again.
+ *
+ * The whole steps of a length are counted in ticks, so a stopped transport holds a note
+ * exactly as it holds a Steps note; the part step left over is counted in frames from the
+ * tick it starts on, at that tick's tempo, as the gate's share was.
  *
  * A jump in the count -- a reset, an interval changed -- ends everything held, since the
  * ticks it was waiting for may now never come.
  *
- * Knobs, mirroring PatchCanvas.kt: length, transpose, interval, gate.
+ * Knobs, mirroring PatchCanvas.kt: length, transpose, interval.
  */
 class SeqNode : public Node {
 public:
@@ -316,6 +324,15 @@ public:
     static constexpr int32_t kSteps = 32;
     /** Mirrored by MAX_DOTS in PatchCanvas.kt. */
     static constexpr int32_t kMaxDots = 128;
+    /**
+     * Divisions of a step a note's length is counted in. Mirrored by DOT_SUBSTEPS.
+     *
+     * Four, which is what a finger can place on a cell a finger can hit: at 32 columns a
+     * cell is 20dp and a quarter of it is 5dp, which is already past what a drag can aim
+     * at and is only reachable on a short loop. It also makes Steps' half step -- the
+     * length the retired `gate` knob defaulted to -- an exact 2.
+     */
+    static constexpr int32_t kDotSubsteps = 4;
     /** Notes sounding at once. Two chords of eight overlapping, which no voice here can play anyway. */
     static constexpr int32_t kMaxHeld = 16;
 
@@ -340,11 +357,11 @@ private:
         uint32_t id;
         int32_t degree;
         int64_t beat;
-        /** The tick of its last step, which starts its gate running. */
-        int64_t lastCount;
-        /** The tick after its last step, on which it ends whatever the gate. */
+        /** The tick its whole steps run out on: where it ends, or where its part step starts. */
         int64_t endCount;
-        /** Frames of its last step still to sound, or -1 while that step has not come. */
+        /** Quarter steps past [endCount], 0 for a note that ends on the tick. */
+        int32_t tail;
+        /** Frames of that part step still to sound, or -1 until [endCount] has come. */
         int64_t gateLeft;
     };
 
@@ -360,11 +377,10 @@ private:
     int32_t length_ = 16;
     int32_t intervalIndex_ = kDefaultInterval;
     float transposeCents_ = 0.0f;
-    float gate_ = 0.5f;
 
     int32_t dotStep_[kMaxDots] = {};
     int32_t dotDegree_[kMaxDots] = {};
-    /** 0 for an empty slot. */
+    /** In quarter steps; 0 for an empty slot. */
     int32_t dotLength_[kMaxDots] = {};
 
     Held held_[kMaxHeld] = {};

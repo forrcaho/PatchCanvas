@@ -188,13 +188,15 @@ class PatchJsonTest {
      * affordable is that PatchStore.load sets the file aside rather than letting the demo
      * patch overwrite it.
      *
-     * 5 to 8 joined them at format 9, which is the first change since 5 that takes something
+     * 5 to 8 joined them at format 9, which was the first change since 5 that took something
      * away: a "Group" is a type this build does not have, and Osc's and FM's knob lists lost
-     * an envelope from the middle, so every index after the first moved.
+     * an envelope from the middle, so every index after the first moved. 9 joined them at 10,
+     * where a dot's length went from whole steps to quarter steps -- a 9 still loads and
+     * still plays, at a quarter of the note lengths that were written.
      */
     @Test
     fun `every format older than this one is refused`() {
-        (1..8).forEach { version ->
+        (1..9).forEach { version ->
             val root = JSONObject(sample().toJson()).put("version", version)
             assertNull("format $version must not load", patchFromJson(root.toString()))
         }

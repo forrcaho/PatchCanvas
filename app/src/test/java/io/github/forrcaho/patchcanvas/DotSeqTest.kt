@@ -49,15 +49,55 @@ class DotSeqTest {
     @Test
     fun `a dot covers every step it lasts, and grows only as far as there is room`() {
         val (_, seq) = seq()
-        seq.addDot(Dot(2, 5, 3))
-        seq.addDot(Dot(8, 5, 1))
-        seq.addDot(Dot(3, 9, 1))
+        seq.addDot(Dot(2, 5, 3 * DOT_SUBSTEPS))
+        seq.addDot(Dot(8, 5, DOT_SUBSTEPS))
+        seq.addDot(Dot(3, 9, DOT_SUBSTEPS))
         assertEquals(0, seq.dotAt(2, 5))
         assertEquals(0, seq.dotAt(4, 5))
         assertEquals(-1, seq.dotAt(5, 5))
         assertEquals("another degree is another dot", 2, seq.dotAt(3, 9))
-        assertEquals("up to the next dot at its degree", 6, seq.dotRoom(0))
-        assertEquals("and the last runs to the end of the loop", 16 - 8, seq.dotRoom(1))
+        assertEquals("up to the next dot at its degree", 6 * DOT_SUBSTEPS, seq.dotRoom(0))
+        assertEquals("and the last runs to the end of the loop", (16 - 8) * DOT_SUBSTEPS, seq.dotRoom(1))
+    }
+
+    /**
+     * A dot's length is its duration, in quarter steps, which is what took Seq's `gate` knob
+     * away: the knob shortened the last step of every note at once, and a length says it per
+     * note. Steps' half step is a length of 2.
+     */
+    @Test
+    fun `a dot can be shorter than a step, and still covers the step it is in`() {
+        val (_, seq) = seq()
+        seq.addDot(Dot(2, 5, 2)) // half a step
+        assertEquals("one step long on the grid", 1, seq.dots[0].stepsSpanned)
+        assertEquals("and the step it is in is its own", 0, seq.dotAt(2, 5))
+        assertEquals("but no further", -1, seq.dotAt(3, 5))
+
+        seq.setDotLength(0, 1)
+        assertEquals("a quarter step is the shortest there is", 1, seq.dots[0].length)
+        seq.setDotLength(0, 0)
+        assertEquals(1, seq.dots[0].length)
+
+        assertTrue("and Seq has no gate knob to do it globally", Types.Seq.params.none { it.name == "gate" })
+        assertEquals("three knobs, one of them the header's interval", 3, Types.Seq.params.size)
+    }
+
+    /** Where a stretch measures to: quarter steps across the grid, clamped to it. */
+    @Test
+    fun `a stretch lands on the quarter step under the finger`() {
+        val (_, seq) = seq()
+        val area = panelGrid(panel, d, seq.type)
+        val columns = dotColumns(seq)
+        val per = area.width / (columns * DOT_SUBSTEPS)
+        listOf(0, 1, 2, 3, 7, columns * DOT_SUBSTEPS - 1).forEach { q ->
+            assertEquals(q, dotSubstepAt(area, columns, area.left + (q + 0.5f) * per))
+        }
+        assertEquals("past the left edge holds at the first", 0, dotSubstepAt(area, columns, area.left - 99f))
+        assertEquals(
+            "and past the right at the last",
+            columns * DOT_SUBSTEPS - 1,
+            dotSubstepAt(area, columns, area.right + 99f),
+        )
     }
 
     @Test
@@ -74,11 +114,14 @@ class DotSeqTest {
         seq.addDot(Dot(0, 0, 4))
         seq.addDot(Dot(31, -3, 1))
         val json = patch.toJson()
-        assertTrue(json.contains("\"version\":9"))
+        assertTrue(json.contains("\"version\":10"))
         assertEquals(seq.dots.toList(), patchFromJson(json)!!.modules.first { it.type == Types.Seq }.dots.toList())
 
         val wild = json.replace("[31,-3,1]", "[99,-3,500]")
-        assertEquals(Dot(DOT_STEPS - 1, -3, DOT_STEPS), patchFromJson(wild)!!.modules.first { it.type == Types.Seq }.dots[1])
+        assertEquals(
+            Dot(DOT_STEPS - 1, -3, DOT_STEPS * DOT_SUBSTEPS),
+            patchFromJson(wild)!!.modules.first { it.type == Types.Seq }.dots[1],
+        )
     }
 
     @Test

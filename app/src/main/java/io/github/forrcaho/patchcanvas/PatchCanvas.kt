@@ -312,7 +312,7 @@ data class Step(val degree: Int, val on: Boolean = true)
  * steps it lasts. Bespoke's DotSequencer is the shape, and the reason notes are events
  * with a start and an end rather than a gate a sequencer holds for half a step.
  */
-data class Dot(val step: Int, val degree: Int, val length: Int = 1)
+data class Dot(val step: Int, val degree: Int, val length: Int = DOT_SUBSTEPS)
 
 /**
  * What an exposed parameter sweeps between when something modulates it, in its own units.
@@ -520,9 +520,14 @@ object Types {
      * The sequencer: notes on a grid of steps by degrees, each its own length and a column
      * as many as a chord. Tap an empty cell for a one-step note, drag a note sideways to
      * lengthen or shorten it, tap one to remove it. The grid shows as many steps as the
-     * sequence is long. Called DotSeq for a night, after Bespoke's DotSequencer, and renamed
-     * when it took over from Steps -- which gave it the gate it lacked. Order mirrors
-     * SeqNode::setParam -- length, transpose, interval, gate.
+     * sequence is long. Called DotSeq for a night, after Bespoke's DotSequencer.
+     *
+     * A dot's length is its duration, in quarter steps, so a gap between two notes is made
+     * by shortening the first -- which is Bespoke's model and was this module's own design.
+     * It had a `gate` knob for a day: taking Steps' place in the menu, it could not express
+     * Steps' half step, because a length was whole steps and a dot could not be shorter than
+     * one. A length in quarter steps says that per note instead. Order mirrors
+     * SeqNode::setParam -- length, transpose, interval.
      */
     val Seq = ModuleType(
         "Seq", emptyList(), listOf(Port("notes", N)),
@@ -534,8 +539,6 @@ object Types {
                 "interval", 0f, (INTERVALS.size - 1).toFloat(), DEFAULT_INTERVAL.toFloat(),
                 curve = STEP, choice = Choice.DIVISION, header = true,
             ),
-            // How much of its last step a note sounds: 0.5 is Steps' half step, 1 is legato.
-            Param("gate", 0.05f, 1f, 0.5f, "", LIN),
         ),
         grid = GridKind.DOTS,
     )
@@ -976,7 +979,7 @@ class PatchModule(
 
     fun setDotLength(index: Int, length: Int) {
         val dot = dots.getOrNull(index) ?: return
-        if (dot.length != length) dots[index] = dot.copy(length = length.coerceIn(1, DOT_STEPS))
+        if (dot.length != length) dots[index] = dot.copy(length = length.coerceIn(1, DOT_STEPS * DOT_SUBSTEPS))
     }
 
     /**
@@ -1973,20 +1976,34 @@ internal fun dotColumns(module: PatchModule): Int =
 internal fun dotColumnAt(area: Rect, columns: Int, x: Float): Int =
     ((x - area.left) / (area.width / columns)).toInt().coerceIn(0, columns - 1)
 
-/** The dot covering [column] at [degree], or -1. A dot covers every step it lasts. */
+/** How many steps a dot reaches into, which is what it covers on the grid. */
+internal val Dot.stepsSpanned: Int get() = (length + DOT_SUBSTEPS - 1) / DOT_SUBSTEPS
+
+/** The dot covering [column] at [degree], or -1. A dot covers every step it reaches into. */
 internal fun PatchModule.dotAt(column: Int, degree: Int): Int =
-    dots.indexOfFirst { it.degree == degree && column >= it.step && column < it.step + it.length }
+    dots.indexOfFirst { it.degree == degree && column >= it.step && column < it.step + it.stepsSpanned }
 
 /**
- * How long dot [index] may grow: to the end of the grid, or to the next dot at its degree,
- * whichever is first -- two notes at one pitch cannot overlap, since the second's start
- * would be heard as nothing.
+ * How long dot [index] may grow, in quarter steps: to the end of the grid, or to the next
+ * dot at its degree, whichever is first -- two notes at one pitch cannot overlap, since the
+ * second's start would be heard as nothing.
  */
 internal fun PatchModule.dotRoom(index: Int): Int {
     val dot = dots[index]
     val next = dots.filter { it !== dot && it.degree == dot.degree && it.step > dot.step }
         .minOfOrNull { it.step } ?: dotColumns(this)
-    return (minOf(next, dotColumns(this)) - dot.step).coerceAtLeast(1)
+    return ((minOf(next, dotColumns(this)) - dot.step) * DOT_SUBSTEPS).coerceAtLeast(1)
+}
+
+/**
+ * The quarter step under [x], counted from the grid's left edge and clamped to it.
+ *
+ * What a stretch measures against. The column is not enough any more: a note may end partway
+ * through a step, so where inside the cell the finger is decides the length.
+ */
+internal fun dotSubstepAt(area: Rect, columns: Int, x: Float): Int {
+    val per = area.width / (columns * DOT_SUBSTEPS)
+    return ((x - area.left) / per).toInt().coerceIn(0, columns * DOT_SUBSTEPS - 1)
 }
 
 /**
@@ -4236,9 +4253,13 @@ fun PatchCanvas(
                                     val change = event.changes.firstOrNull { it.pressed } ?: break
                                     if ((change.position - down.position).getDistance() > slop) moved = true
                                     if (moved && hit >= 0) {
-                                        val under = dotColumnAt(gridArea, columns, change.position.x)
+                                        // In quarter steps, so a drag can end a note partway
+                                        // through a cell -- which is the whole of what the
+                                        // retired gate knob did, said per note.
+                                        val under = dotSubstepAt(gridArea, columns, change.position.x)
                                         val dot = open.dots[hit]
-                                        open.setDotLength(hit, (under - dot.step + 1).coerceIn(1, open.dotRoom(hit)))
+                                        val from = dot.step * DOT_SUBSTEPS
+                                        open.setDotLength(hit, (under - from + 1).coerceIn(1, open.dotRoom(hit)))
                                     } else if (moved) {
                                         val rows = (change.position.y - down.position.y) / rowHeight
                                         open.gridBottom = window.scrolledBy(rows.roundToInt())
@@ -5426,15 +5447,19 @@ private fun DrawScope.drawDotGrid(
         drawText(label, topLeft = Offset(area.left - label.size.width - 8f * d, top + (cellH - label.size.height) / 2f))
     }
 
+    val substep = cellW / DOT_SUBSTEPS
     module.dots.forEach { dot ->
         if (dot.step >= columns) return@forEach
-        val end = minOf(dot.step + dot.length, columns)
-        val sounding = playingStep in dot.step until dot.step + dot.length
+        // Its own width, in quarter steps, clipped to the grid: a dot that ends partway
+        // through a cell is drawn ending there, because that is when the note ends.
+        val left = area.left + dot.step * cellW
+        val right = minOf(left + dot.length * substep, area.right)
+        val sounding = playingStep in dot.step until dot.step + dot.stepsSpanned
         if (dot.degree in window.bottom..window.top) {
             val row = window.top - dot.degree
             val rect = Rect(
-                Offset(area.left + dot.step * cellW + inset, area.top + row * cellH + inset),
-                Size((end - dot.step) * cellW - inset * 2f, cellH - inset * 2f),
+                Offset(left + inset, area.top + row * cellH + inset),
+                Size(maxOf(right - left - inset * 2f, substep / 2f), cellH - inset * 2f),
             )
             drawRoundRect(accent, rect.topLeft, rect.size, CornerRadius(cellH / 3f, cellH / 3f))
             if (sounding) {
@@ -5450,8 +5475,8 @@ private fun DrawScope.drawDotGrid(
             val y = if (above) area.top else area.bottom - 3f * d
             drawRect(
                 accent.copy(alpha = if (sounding) 1f else 0.6f),
-                Offset(area.left + dot.step * cellW + inset, y),
-                Size((end - dot.step) * cellW - inset * 2f, 3f * d),
+                Offset(left + inset, y),
+                Size(maxOf(right - left - inset * 2f, substep / 2f), 3f * d),
             )
         }
     }
@@ -6433,6 +6458,21 @@ internal const val DRONE_CELLS = 64
 
 /** Steps on a dot sequencer's grid. Mirrors SeqNode::kSteps. */
 internal const val DOT_STEPS = 32
+
+/**
+ * Divisions of a step a dot's length is counted in. Mirrors SeqNode::kDotSubsteps.
+ *
+ * A dot's length *is* its duration -- that is what a dot sequencer is, and it is Bespoke's
+ * model. It was whole steps once, which meant nothing could be shorter than a step, and a
+ * `gate` knob was added to take a share off the last step of every note at once when Seq
+ * took Steps' place in the menu. Quarter steps say the same thing per note and say more, so
+ * the knob went: Steps' half step is a length of 2.
+ *
+ * Four, which is what a finger can place on a cell a finger can hit. At 32 columns a cell
+ * is 20dp and a quarter of it is 5dp, past what a drag can aim at -- but 32 columns is the
+ * longest loop there is, and a short one has room to spare.
+ */
+internal const val DOT_SUBSTEPS = 4
 
 /** An Arp's modes, as its buttons say them. Mirrors ArpNode::step. */
 internal val ARP_MODES = listOf("up", "down", "up/dn", "rand")
