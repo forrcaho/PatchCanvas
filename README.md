@@ -45,7 +45,9 @@ not a redundancy. The Compose compiler is applied as
 | `app/src/main/java/io/github/forrcaho/patchcanvas/PatchCanvas.kt` | Model, camera, gestures, drawing |
 | `app/src/main/java/io/github/forrcaho/patchcanvas/MainActivity.kt` | Full-bleed host for the canvas |
 
-`rememberDemoPatch()` supplies the starting patch — five modules, five cables.
+`rememberDemoPatch()` supplies the starting patch: a sequencer into a poly subpatch
+called Voice — an oscillator, an envelope and the amp it opens, one of each — then a
+filter. Every synth is monophonic; polyphony is the box around it.
 
 ## Tunings and SoundFonts
 

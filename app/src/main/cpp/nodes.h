@@ -18,9 +18,10 @@
  */
 enum class NodeType : int32_t {
     Unknown = 0,
-    // 1 was the monophonic Osc, retired when every synth became polyphonic and the
-    // polyphonic one took its name. Left unused rather than reassigned, so nothing can
-    // mistake an old id for a new module -- as with 7 and 8.
+    // 1 was the monophonic Osc, retired when polyphony moved inside the synths and the
+    // polyphonic one took its name. Polyphony has since moved out again, into the poly
+    // subpatch, and Osc is monophonic once more -- but an id is retired for good, so this
+    // one stays unused and nothing can mistake it for a new module. As with 7 and 8.
     Filter = 2,
     Env = 3,
     Steps = 4,
@@ -30,7 +31,7 @@ enum class NodeType : int32_t {
     // remained is a gain with a modulatable level, which is what Mix already is.
     // 8 was Clock, retired when the transport replaced it.
     Mix = 9,
-    /** The polyphonic synth. Called Voice while a monophonic Osc still existed. */
+    /** The oscillator. Called Voice for as long as a second, monophonic Osc existed. */
     Osc = 10,
     Lfo = 11,
     Drone = 12,
@@ -472,7 +473,7 @@ private:
 };
 
 /**
- * One note of an Osc: a band-limited waveform, on and off.
+ * An Osc's one voice: a band-limited waveform, on and off.
  *
  * It had an ADSR. The envelope went with the redesign, because a built-in one is the same
  * envelope for every voice of the module and cannot be patched to anything else -- an Env
@@ -506,7 +507,7 @@ public:
 };
 
 /**
- * One note of a Pluck: a burst of noise into a Karplus-Strong string.
+ * A Pluck's one voice: a burst of noise into a Karplus-Strong string.
  *
  * The string is DaisySP's, which is Emilie Gillet's from Rings. The excitation is written
  * here, after DaisySP's StringVoice (Plaits' string voice, also hers): a burst one period
@@ -552,13 +553,14 @@ struct PluckVoice {
  * A plucked string: notes in, sound out.
  *
  * Built as a module rather than left to be patched from parts, which is the roadmap's test
- * for a fixed module: a string is a delay line whose length is its pitch, so every voice
- * needs its own, following its own note -- and a patched delay would be one line for the
- * whole chord. It is also exactly the kind of thing that is fiddly to get right from parts.
+ * for a fixed module: a string is a delay line whose length *is* its pitch, so the line has
+ * to be retuned by the note -- and nothing patchable sets a delay's length from a note. It
+ * is also exactly the kind of thing that is fiddly to get right from parts.
  *
  * A note off lets the string ring for R before it is silent, like a finger coming down on
- * it; a string that rings out while still held frees its voice anyway. Order of knobs
- * mirrors PatchCanvas.kt: decay, bright, stiff, R.
+ * it; a string that rings out while still held frees its voice anyway, so the module is not
+ * deaf until something lets go. Order of knobs mirrors PatchCanvas.kt: decay, bright,
+ * stiff, R.
  */
 class PluckNode : public MonoSynth<PluckVoice> {
 public:
@@ -575,7 +577,7 @@ private:
 };
 
 /**
- * One note of an FM: a sine whose phase is pushed around by another sine.
+ * An FM's one voice: a sine whose phase is pushed around by another sine.
  *
  * Two operators, as decided when it was designed: a modulator at [ratio] times the note,
  * and the carrier at the note, the modulator's depth being the index -- in radians of
@@ -617,13 +619,12 @@ struct FmVoice {
  * That is now a cable: expose the index and patch an Env to it, which is both the thing
  * that could not be done before and a strictly larger set of sounds, since the envelope on
  * the index no longer has to be the one on the amplitude. [fall] stays, because the index
- * dying faster than the note is per *voice* and per strike and never was a knob's worth of
- * envelope.
+ * dying faster than the note is per strike and never was a knob's worth of envelope.
  *
  * A module rather than two oscillators patched together, and not only because modulation
- * runs once a block: each note needs its own modulator following its own pitch, and an
- * Osc sends the sum of its voices, so one patched into another would bend a chord by the
- * mixture of all of them.
+ * runs once a block: the modulator has to follow the note's own pitch at audio rate, and an
+ * Osc's frequency is set by the notes it is sent rather than by anything patchable. Two of
+ * them would be two independent notes, not a carrier and its modulator.
  */
 class FmNode : public MonoSynth<FmVoice> {
 public:

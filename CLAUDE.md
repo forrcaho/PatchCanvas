@@ -206,14 +206,17 @@ inside it is an ordinary `Env` holding an ordinary note and nothing else would e
 stacked with the inner one never choosing anything, and the whole design surface the
 redesign set out to retire still sitting there. `SF` is the exception and keeps its 64 --
 they are TinySoundFont's, and one note can use several of them at once for a layered
-preset, so capping it to one would silence half of some instruments. A voice says when it is finished, and a
-plucked string finishes while still held. Any DaisySP code that calls `rand()` is edited
-before it is vendored -- Bionic's takes a mutex.
+preset, so capping it to one would silence half of some instruments -- which makes `SF` the
+only polyphonic source in the app. A voice says when it is finished, and a plucked string
+finishes while still held, so a `Pluck` that rang out is not deaf until something lets go.
+Any DaisySP code that calls `rand()` is edited before it is vendored -- Bionic's takes a
+mutex.
 
-**Retired modules stay retired, and a retired id is never reused.** `Osc` is the
-polyphonic one -- what was called `Voice` -- and the monophonic oscillator is gone, which
-settled the worst naming collision in the project: "voice" now means only one of the eight
-slots inside an `Osc`. `Filter` lost its cutoff jack and `Steps` its pitch
+**Retired modules stay retired, and a retired id is never reused.** `Osc` is what was
+called `Voice`, and the second, monophonic oscillator that forced that rename is gone. The
+name settled the worst collision in the project -- "voice" meant both the module and one of
+the eight slots inside it -- and it has since settled itself: there are no slots any more,
+so "voice" means one note's worth of sound and nothing else. `Filter` lost its cutoff jack and `Steps` its pitch
 and gate outputs, so a sequencer says a note once rather than the same thing three ways.
 Node ids 1, 7 and 8 are retired and never reused; `Osc` is id 10, where `Voice` was. **A
 module can come back; its id cannot.** `Amp` is the VCA again, at id 21, because with the
@@ -224,9 +227,9 @@ there is no such thing here.
 
 **No synth has an envelope.** `Osc` has one knob and `FM` three; what is left of the ADSR
 is a 5ms gate ramp (`GateRamp` in `synth.h`) that keeps a note from starting or stopping
-with a step in it. An envelope built into a synth is *the same envelope for all eight
-voices* and can be patched to nothing else -- which is why an `Env` on FM's modulation index
-was impossible, and why this redesign happened. Shaping is an `Env` inside a poly subpatch,
+with a step in it. An envelope built into a synth was *one envelope for every voice it had*
+and could be patched to nothing else -- which is why an `Env` on FM's modulation index was
+impossible, and why this redesign happened. Shaping is an `Env` inside a poly subpatch,
 where there is one per note. `FM` lost Chowning's brightness-follows-loudness with it:
 expose `index`, patch an `Env`, and the two envelopes no longer have to be one envelope.
 
@@ -318,8 +321,10 @@ Note into a pulse input is the one designed conversion and is still refused, bec
 model alone would make a cable the UI accepts and the engine silently drops.
 
 **An envelope is legato.** A second note over a held one leaves the gate open rather than
-re-striking, because sustain is what an envelope is for and re-attacking under a chord
-turns it into a stutter. An Off is matched against *the source that sent it* as well as its
+re-striking, because sustain is what an envelope is for and re-attacking under a held note
+turns it into a stutter. Inside a poly subpatch that case is rarer than it was -- `PolyIn`
+gives each note its own instance and sends an Off before it steals one -- but an `Env` fed
+by two sources, or by a chord on one instance, still meets it. An Off is matched against *the source that sent it* as well as its
 id: ids are each source's own and restart at 1 when a node is rebuilt, so two sequencers on
 one envelope are both holding a note called 1 almost at once.
 

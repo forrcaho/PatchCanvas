@@ -24,6 +24,12 @@ whatever sounds them allocate the voices. Where they part, Bespoke's shape wins 
 not its names, and not its internal MIDI. See Phase 6, where notes became events, and
 Phase 7, where CV and gate follow them out.
 
+**Phase 10 took half of Eurorack's answer back.** Notes are still events and something
+still allocates -- but what they are allocated *to* is a copy of a patch, stamped out per
+note, which is the copying Eurorack was said to be stuck with. The difference that mattered
+was never copying; it was who copies. Here you build one voice and the engine makes the
+copies, so the patch on screen stays the size of one.
+
 ## Stack
 
 | Layer | Choice | License |
@@ -898,7 +904,14 @@ that reads as a refusal or as a bug is a judgment for the phone.**
 **Voices come from a curated module.** `Voice` is eight voices of oscillator and envelope,
 allocated by note id and source, summed like Mix -- a chord is louder than a note, which is
 true of every instrument. The other candidate, a patched voice from Phase 7 stamped out N
-times, is not ruled out and can coexist; this one can exist now. A note takes a free voice,
+times, is not ruled out and can coexist; this one can exist now.
+
+> **Reversed in Phase 10.** The other candidate is what shipped, and the two did not
+> coexist: a curated module's voices all share its envelope, so nothing inside one can be
+> patched per note, and an `Env` on FM's modulation index turned out to be inexpressible.
+> Every synth is monophonic now and the copies are a poly subpatch's. The rules below --
+> free voice, then oldest released, then steal -- were the right rules and moved intact to
+> `PolyIn`. A note takes a free voice,
 then the oldest already released, and only then steals one still held, softly. The name is
 the collision the naming pass already knows about.
 
@@ -1245,6 +1258,12 @@ Env, VCA and Filter patched together, and three voices meant three copies. Phase
 polyphony onto note events and voice pools, so grouping is about screen space again, and
 abstraction's stamped-out instances are one candidate for what fills a pool rather than
 the only route to a chord.
+
+> **Reversed again in Phase 10, back to what this phase first said.** Polyphony comes from
+> copying after all: a poly subpatch is a voice built once and stamped out per note, which
+> is "a three-voice patch is twelve nodes" with the twelve nodes made for you. What Phase 6
+> got right and kept is that notes are events and something allocates them; what it got
+> wrong is where the copies live. Grouping was never only about screen space.
 
 ### Opening a module is going inside it
 
@@ -2174,7 +2193,13 @@ is applied once per 32-sample block, about 1.5kHz, and FM needs every sample; si
 typing was enforced no `Osc` takes audio in anyway. And the harder reason: an `Osc` sends
 the sum of its eight voices, so one feeding another would bend every note of a chord by
 the same mixture rather than each note by its own partner. A string is the same problem --
-its pitch is the length of its delay line, one per note. Both are what the module *is*,
+its pitch is the length of its delay line, one per note.
+
+> **Still true in Phase 10, for a simpler reason.** The chord half of the argument went
+> when the synths went monophonic -- an `Osc` sends one voice now, so two of them inside a
+> poly subpatch would be one note each. What holds regardless is that an `Osc`'s frequency
+> comes from the notes it is sent and nothing patchable sets it, and that nothing patchable
+> sets a delay line's length from a note. Both are still what the module *is*. Both are what the module *is*,
 which is the roadmap's test for a fixed module ("Growing the library", above), and the
 decision already taken for FM on 2026-09-15.
 
@@ -2211,6 +2236,13 @@ paid only while an SF module exists.
 
 ### The voices share one engine
 
+> **Superseded in Phase 10**, though not much of it was wasted. `PolySynth<Voice, N>` is
+> `MonoSynth<Voice>` in `synth.h`, because polyphony moved out to the poly subpatch and a
+> synth with eight voices inside a four-instance subpatch is two allocators with the inner
+> one never choosing anything. Everything below that is about *one* note -- the Voice
+> interface, Off by source and id, the glide, a voice saying when it is free -- is
+> unchanged. Only slot selection moved, to `PolyIn`, which kept the rules exactly.
+
 Everything `Osc` did that was not its sound -- choosing a voice, stealing the oldest
 released one before a held one, matching an Off by source *and* id, gliding on a Change,
 releasing what an unpatched source held -- moved into `PolySynth<Voice, N>` in `poly.h`.
@@ -2237,8 +2269,12 @@ brighter and rings longer, as in Plaits.
   released; a string has no sustain and simply stops, so a held note that has rung out
   gives its voice back. Otherwise eight long notes and every voice is spoken for,
   silently. `voicesInUse()` exists so a test can see it -- stealing would otherwise hide
-  it, since a ninth note sounds either way.
-- **It costs about seven Osc voices a voice.** DaisySP's string works out its damping
+  it, since a ninth note sounds either way. *(Phase 10: `inUse()`, and with one voice the
+  cost of not freeing it is worse -- the module would be deaf until something let go. The
+  sustain half went with the envelopes; what holds a note open now is an `Env` outside.)*
+- **It costs about seven Osc voices a voice**, which in Phase 10 is seven Osc *instances*:
+  the per-voice cost is the same, and what varies is a poly subpatch's knob rather than a
+  constant in the node. DaisySP's string works out its damping
   filter with `powf` and `atanf` every sample; eight ringing voices measured 13.6ms per
   second of audio on the desk, against 2.0 for eight Osc voices and 4.9 for eight FM. Perhaps
   5% of a phone core -- fine, and the first place to look if a dense patch stutters.
@@ -2503,14 +2539,14 @@ structural rather than a missing feature. Everything below follows from that one
 
 ### What was actually wrong
 
-Phase 6 moved polyphony *inside* the synths: an `Osc` holds eight voices, a chord arrives
-down one cable, and the module allocates. That was the right call against the thing it
+Phase 6 moved polyphony *inside* the synths: an `Osc` held eight voices, a chord arrived
+down one cable, and the module allocated. That was the right call against the thing it
 replaced -- "a three-voice patch is twelve nodes", which this file proposed in Phase 7 and
 then retracted -- and it bought a chord for the price of one module.
 
-What it cost was not visible until someone wanted it. A synth's envelope is *the same
-envelope for all eight voices*, and nothing outside the synth can reach a single note. So
-"one Env per voice, patched wherever you like" is not expressible, and FM's brightness --
+What it cost was not visible until someone wanted it. A synth's envelope was *one envelope
+for every voice it had*, and nothing outside the synth could reach a single note. So
+"one Env per voice, patched wherever you like" was not expressible, and FM's brightness --
 the thing most worth shaping on an FM, and the one its knobs make hardest to get right --
 could only ever follow the loudness envelope sitting beside it.
 

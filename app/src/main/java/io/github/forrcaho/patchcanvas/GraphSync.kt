@@ -8,8 +8,10 @@ import android.util.Log
  */
 enum class NodeType(val id: Int) {
     Unknown(0),
-    // 1 was the monophonic Osc, retired when every synth became polyphonic and the
-    // polyphonic one took its name. Not reused, as with 7 and 8.
+    // 1 was the monophonic Osc, retired when polyphony moved inside the synths and the
+    // polyphonic one took its name. Polyphony has since moved out again, into the poly
+    // subpatch, and Osc is monophonic once more -- but an id is retired for good. As with
+    // 7 and 8.
     Filter(2),
     Env(3),
     Steps(4),
@@ -19,7 +21,7 @@ enum class NodeType(val id: Int) {
     // gain with a modulatable level is what Mix already is.
     // 8 was Clock, retired when the transport replaced it.
     Mix(9),
-    /** The polyphonic synth, called Voice while a monophonic Osc still existed. */
+    /** The oscillator, called Voice for as long as a second, monophonic Osc existed. */
     Osc(10),
     Lfo(11),
     Drone(12),

@@ -635,17 +635,17 @@ object Types {
         Color(0xFF6090C3),
         // One knob, where there were five. The envelope went to Env, which inside a poly
         // subpatch is one per note and can be patched anywhere -- an envelope built into a
-        // synth is the same envelope for all eight voices and reaches nothing else, which
-        // is the whole thing this redesign is about. What is left in OscNode is a 5ms gate
+        // synth was one envelope for every voice it had and reached nothing else, which is
+        // the whole thing this redesign is about. What is left in OscNode is a 5ms gate
         // ramp, enough that a note does not click on and off and nothing more.
         params = listOf(Param("wave", 0f, 3f, 0f, "", STEP, Choice.WAVE)),
     )
     /**
-     * A plucked string for every note: Karplus-Strong, one delay line per voice.
+     * A plucked string: Karplus-Strong, one delay line, one note at a time.
      *
-     * A module rather than something patched from parts, because a string's pitch is the
-     * length of its delay line -- every voice needs its own, following its own note, and a
-     * patched delay is one line under the whole chord. Order mirrors PluckNode::setParam.
+     * A module rather than something patched from parts, because a string's pitch *is* the
+     * length of its delay line -- so the line has to be retuned by the note, and nothing
+     * patchable sets a delay's length from a note. Order mirrors PluckNode::setParam.
      */
     val Pluck = ModuleType(
         "Pluck", listOf(Port("notes", N)), listOf(Port("out", A)),
@@ -778,15 +778,17 @@ object Types {
      * A subpatch that is monophonic inside and polyphonic from outside.
      *
      * One of everything in there, and the engine is given [voices] copies of the lot. Notes
-     * arriving at its note input are shared out one per instance, exactly as a synth shares
-     * them among its own voices; every other input is broadcast to all of them, and their
-     * outputs are summed back into one.
+     * arriving at its note input are shared out one per instance -- idle first, then the
+     * oldest released, then stealing; every other input is broadcast to all of them, and
+     * their outputs are summed back into one.
      *
-     * This is the answer to the thing that started the redesign. Polyphony used to live
-     * inside each synth, so every voice of an Osc shared one envelope and nothing could be
-     * patched per note -- an Env on FM's modulation index was not expressible. Here the
-     * envelope is an ordinary Env module inside an ordinary subpatch, and it is per note
-     * because the whole subpatch is.
+     * This is the answer to the thing that started the redesign, and the only place in the
+     * app that chooses between voices. Polyphony used to live inside each synth, so an Osc's
+     * eight voices shared one envelope and nothing could be patched per note -- an Env on
+     * FM's modulation index was not expressible. Now a voice *is* a patch: an Osc, an Env,
+     * an Amp and whatever else, one of each, stamped out per note. The synths are
+     * monophonic to match, or there would be two allocators with the inner one never
+     * choosing anything.
      *
      * A poly subpatch may not contain another. Instances would multiply, the id space that
      * stamps out the copies is one level deep on purpose, and nothing yet says what an

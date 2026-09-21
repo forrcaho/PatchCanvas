@@ -16,8 +16,8 @@ constexpr float kMiddleC = 261.6256f;
 /**
  * A note's pitch in octaves from middle C, against the scale of the beat it carries.
  *
- * The one place a note becomes a pitch for everything that sounds one -- the voices here,
- * and the SoundFont player, which has its own voices and needs the same answer.
+ * The one place a note becomes a pitch for everything that sounds one -- the synths here,
+ * and the SoundFont player, which has voices of its own and needs the same answer.
  */
 inline float pitchOf(const NoteEvent &event, const ScaleList *scales) {
     // The engine still never learns what a semitone is: a table lookup and an exp2.
