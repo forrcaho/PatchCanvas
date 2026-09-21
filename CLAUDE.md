@@ -93,7 +93,7 @@ being edited out from under it.
 | `nodes.{h,cpp}` | the module set, DaisySP-backed |
 | `processors.{h,cpp}` | notes in, notes out: Chance, Chord, Arp, Euclid |
 | `soundfont.{h,cpp}` | the SF node over TinySoundFont; a SoundFont loaded once and shared |
-| `poly.h` | `PolySynth` and `GateRamp`: voice allocation, stealing, glides, declick |
+| `synth.h` | `MonoSynth` and `GateRamp`: one note's pitch, glide and declick |
 | `audio_engine.{h,cpp}` | Oboe streams, ADPF, debug capture |
 
 ## Invariants
@@ -195,13 +195,18 @@ comes back through `collectGarbage`, as a scale list does. An SF node's synth is
 its font loads in the background, so the node exists before its synth and must keep the
 notes it is sent in the meantime.
 
-**Every synth is polyphonic, and shares one voice engine -- and so does a poly subpatch.**
-A synth is a `Voice` inside `PolySynth` (`poly.h`), which owns allocation, stealing,
-Off-by-source-and-id, glides and `notesCut`; a new synth supplies only its sound. `PolyIn`
-keeps the *same* rules deliberately -- idle first, then the oldest released, then steal --
-because each of them was paid for by a bug, with one addition a synth does not need: a
-stolen instance is sent an Off first, since what is inside it is an ordinary `Env` holding
-an ordinary note and nothing else would ever end it. A voice says when it is finished, and a
+**Every synth is monophonic, and there is one allocator.** A synth is a `Voice` inside
+`MonoSynth` (`synth.h`), which owns pitch resolution, Off-by-source-and-id, glides and
+`notesCut`; a new synth supplies only its sound. Polyphony is a poly subpatch around it,
+and `PolyIn` is the only thing that chooses between voices -- idle first, then the oldest
+released, then steal, which were `PolySynth`'s rules and were each paid for by a bug. It
+adds one thing a synth does not need: a stolen instance is sent an Off first, since what is
+inside it is an ordinary `Env` holding an ordinary note and nothing else would ever end it.
+**The synths' own eight voices went deliberately**: leaving them would be two allocators
+stacked with the inner one never choosing anything, and the whole design surface the
+redesign set out to retire still sitting there. `SF` is the exception and keeps its 64 --
+they are TinySoundFont's, and one note can use several of them at once for a layered
+preset, so capping it to one would silence half of some instruments. A voice says when it is finished, and a
 plucked string finishes while still held. Any DaisySP code that calls `rand()` is edited
 before it is vendored -- Bionic's takes a mutex.
 
@@ -218,7 +223,7 @@ and then patching. Id 7 stays dead all the same: that module took a control volt
 there is no such thing here.
 
 **No synth has an envelope.** `Osc` has one knob and `FM` three; what is left of the ADSR
-is a 5ms gate ramp (`GateRamp` in `poly.h`) that keeps a note from starting or stopping
+is a 5ms gate ramp (`GateRamp` in `synth.h`) that keeps a note from starting or stopping
 with a step in it. An envelope built into a synth is *the same envelope for all eight
 voices* and can be patched to nothing else -- which is why an `Env` on FM's modulation index
 was impossible, and why this redesign happened. Shaping is an `Env` inside a poly subpatch,

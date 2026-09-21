@@ -581,9 +581,9 @@ void OscNode::setParam(int32_t index, float value) {
                     daisysp::Oscillator::WAVE_POLYBLEP_TRI,
                     daisysp::Oscillator::WAVE_SIN,
             };
-            // Every voice, including any sounding: one module is one instrument, and half
-            // a chord changing shape underneath you is not what the control says.
-            forEachVoice([&](OscVoice &voice) { voice.osc.SetWaveform(kWaves[wave]); });
+            // Applied to the note sounding as well as the next: a waveform is what the
+            // module is, not something the next note starts using.
+                    voice().osc.SetWaveform(kWaves[wave]);
             break;
         }
         default: break;
@@ -665,17 +665,16 @@ float PluckVoice::render(bool gate, bool &finished) {
 }
 
 void PluckNode::prepare(int32_t sampleRate) {
-    PolySynth::prepare(sampleRate);
+    MonoSynth::prepare(sampleRate);
     applyAll();
 }
 
 void PluckNode::applyAll() {
     // R as a time constant, like the envelopes': the fade reaches a third in R seconds.
     const float step = std::exp(-1.0f / (release_ * static_cast<float>(sampleRate_)));
-    forEachVoice([&](PluckVoice &voice) {
-        voice.apply(decay_, bright_, stiff_);
-        voice.releaseStep = step;
-    });
+    PluckVoice &voice = this->voice();
+    voice.apply(decay_, bright_, stiff_);
+    voice.releaseStep = step;
 }
 
 void PluckNode::setParam(int32_t index, float value) {
@@ -735,19 +734,18 @@ float FmVoice::render(bool open, bool &finished) {
 }
 
 void FmNode::prepare(int32_t sampleRate) {
-    PolySynth::prepare(sampleRate);
+    MonoSynth::prepare(sampleRate);
     applyAll();
 }
 
 void FmNode::applyAll() {
     const float fallStep = std::exp(-1.0f / (fall_ * static_cast<float>(sampleRate_)));
-    forEachVoice([&](FmVoice &voice) {
-        voice.ratio = ratio_;
-        voice.index = index_;
-        voice.fallStep = fallStep;
-        // A new ratio moves a sounding note's modulator at once; its carrier is untouched.
-        voice.setFreq(voice.hz);
-    });
+    FmVoice &voice = this->voice();
+    voice.ratio = ratio_;
+    voice.index = index_;
+    voice.fallStep = fallStep;
+    // A new ratio moves a sounding note's modulator at once; its carrier is untouched.
+    voice.setFreq(voice.hz);
 }
 
 void FmNode::setParam(int32_t index, float value) {
@@ -801,7 +799,7 @@ void PolyInNode::setParam(int32_t index, float value) {
 }
 
 int32_t PolyInNode::choose() const {
-    // PolySynth's rule, and for its reasons: stealing an instance that is still holding
+    // The rule a synth used to keep for its own voices, and for its reasons: stealing one
     // restarts whatever is inside it mid-note, so it is the last resort rather than the
     // first, and by the time every instance is held the next note was going to cost
     // something regardless.

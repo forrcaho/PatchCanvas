@@ -2647,6 +2647,45 @@ written. Forrest's live patch was converted explicitly, off the device, by a scr
 multiplied each length by four and took the gate's share off -- a migration run by a person
 who knew what it meant, which is the only kind this project allows.
 
+### The synths go monophonic, which was the point all along
+
+**2026-09-20, and a correction to the entry above as much as to the code.** Asked whether
+`SF` should carry a stack, this assistant answered that it should not because Osc, Pluck and
+FM were polyphonic too -- and offered "should the synths be monophonic?" as an open fork
+worth deciding later. Forrest: *"the whole point of the Poly module is so the simple synths
+can be made monophonic. Otherwise it's not a simplification at all."*
+
+Which is right, and is what this phase was for. Polyphony inside each synth is the thing the
+poly subpatch replaces, not a second way of doing it. Leaving eight voices in an `Osc` that
+sits inside a four-instance subpatch is two allocators stacked with the inner one never
+choosing anything, and the whole design surface the redesign set out to retire still sitting
+there behind it.
+
+So `PolySynth<Voice, 8>` is `MonoSynth<Voice>` in `synth.h` -- the file renamed with it,
+since `poly.h` holding nothing polyphonic is a lie. What survives is everything one note
+needs and `PolyIn` does not do: resolving a degree against the scale of its beat, matching
+an Off by source as well as id, gliding on a Change, releasing on `notesCut`. What goes is
+slot selection, about twenty-five lines, now living once in `PolyIn`.
+
+`SF` keeps its 64 voices, and they are not the same thing: they are TinySoundFont's, and one
+note can take several of them at once for a layered preset, so capping it to one would
+silence half of some instruments. That makes `SF` genuinely the only polyphonic source --
+which is the question Forrest actually asked, arrived at from the other end.
+
+**What it cost the tests, which is the interesting part.** Four of them asserted things that
+only a polyphonic synth can do: a chord into one Osc, a ninth note stealing, two sequencers
+sounding at once, a long note surviving a short one's Offs. Every one of those properties is
+still real; three of them just moved to the poly subpatch, where two notes actually sound at
+once, and the graph tests now build the flattened rig by hand to say so. The fourth --
+"unpatching a source ends its notes" -- became a cleaner statement monophonically: the
+source that does not hold the voice takes nothing with it.
+
+**Not heard yet, and here is what to listen for.** A monophonic synth retriggers on every
+overlapping note, which never arose before because a second note took a second voice. The
+voice is told it was stolen, so an Osc keeps its gate ramp open and an FM leaves its phases
+running -- but there is no glide between the two pitches, so a legato line steps. Whether
+that wants a portamento is a question for a finger, not a test.
+
 ### What is not known yet
 
 **None of this has been heard.** Every defect that mattered in this project was found by a

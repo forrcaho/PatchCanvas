@@ -3,7 +3,7 @@
 #include <cstdint>
 
 #include "node.h"
-#include "poly.h"
+#include "synth.h"
 
 #include "adsr.h"
 #include "dcblock.h"
@@ -76,8 +76,9 @@ constexpr int32_t kDefaultInterval = 3; // 1/8
  * Nothing about nesting crosses into C++; a poly subpatch is a *flattening* with a
  * different rule, exactly as a plain subpatch is.
  *
- * This is where the notes are shared out. Its rules are PolySynth's, and deliberately the
- * same ones: a note takes an idle instance, then the oldest instance already released, and
+ * This is where the notes are shared out, and the only place anything here chooses between
+ * voices -- every synth is monophonic. Its rules are the ones PolySynth used to keep, and
+ * deliberately the same ones: a note takes an idle instance, then the oldest instance already released, and
  * only then steals one still holding -- and a stolen instance is sent an Off first, because
  * whatever is inside it is an ordinary Env holding an ordinary note and nothing else would
  * ever end it. An Off finds its instance by id *and* source, since ids belong to the source
@@ -140,7 +141,7 @@ private:
 /**
  * The signal edge of a poly subpatch: one input per instance, summed.
  *
- * Summed rather than averaged, like Mix and like PolySynth: a chord is louder than one
+ * Summed rather than averaged, like Mix: a chord is louder than one
  * note, which is true of every instrument, and Out's limiter catches what that costs at the
  * top. An instance that is not sounding contributes silence, so the sum is over what is
  * playing rather than over the knob.
@@ -489,27 +490,18 @@ struct OscVoice {
 };
 
 /**
- * Notes in, sound out: a small polyphonic synth with its voices built in.
+ * Notes in, sound out: one note's worth of oscillator.
  *
- * This is Bespoke's shape rather than Eurorack's. A Eurorack cable carries one signal, so
- * polyphony there means building a voice and copying it -- which is where the roadmap's
- * "a three-voice patch is twelve nodes" came from. Here a chord arrives down one cable
- * and whatever sounds it allocates the voices, so a chord costs one module.
- *
- * The voices are made when the node is, because the audio thread cannot make anything.
- * Patched voices, stamped out N times, are the other way to do this and are Phase 7's;
- * the two can coexist, and notes are the first step either way.
+ * Monophonic, which the roadmap spent two phases arriving back at. "A three-voice patch is
+ * twelve nodes" was Phase 7's plan and Phase 6 replaced it, putting the voices inside this
+ * module; a chord then cost one module, and cost per-note patching everything. A poly
+ * subpatch is the twelve nodes again, built for you -- so this is one voice and a chord is
+ * the box around it.
  */
-class OscNode : public PolySynth<OscVoice, 8> {
+class OscNode : public MonoSynth<OscVoice> {
 public:
-    // Eight voices. A sixteen-note column would be a chord nobody plays, and every voice
-    // costs an oscillator whether it is sounding or not.
-    //
-    // One knob now, the waveform. Inside a poly subpatch only one of these voices is ever
-    // used at a time and the shaping is an Env's; outside one, eight voices of plain
-    // on/off tone is an organ, which is a real instrument and the honest thing to get
-    // from a module with no envelope in it.
-
+    // One note at a time, and one knob: the waveform. Polyphony is a Poly subpatch around
+    // it -- see MonoSynth.
     void setParam(int32_t index, float value) override;
 };
 
@@ -568,7 +560,7 @@ struct PluckVoice {
  * it; a string that rings out while still held frees its voice anyway. Order of knobs
  * mirrors PatchCanvas.kt: decay, bright, stiff, R.
  */
-class PluckNode : public PolySynth<PluckVoice, 8> {
+class PluckNode : public MonoSynth<PluckVoice> {
 public:
     void prepare(int32_t sampleRate) override;
     void setParam(int32_t index, float value) override;
@@ -633,7 +625,7 @@ struct FmVoice {
  * Osc sends the sum of its voices, so one patched into another would bend a chord by the
  * mixture of all of them.
  */
-class FmNode : public PolySynth<FmVoice, 8> {
+class FmNode : public MonoSynth<FmVoice> {
 public:
     void prepare(int32_t sampleRate) override;
     void setParam(int32_t index, float value) override;

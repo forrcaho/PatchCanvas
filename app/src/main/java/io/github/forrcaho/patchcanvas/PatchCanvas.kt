@@ -618,16 +618,17 @@ object Types {
         grid = GridKind.DRONE,
     )
     /**
-     * Notes in, sound out, with the voices inside it.
+     * Notes in, sound out: one note at a time.
      *
-     * Called Voice until the monophonic oscillator was retired, which settled the worst
-     * naming collision in the project: "voice" was both this module and one of the eight
-     * inside it. Every synth is polyphonic now, so there is no other oscillator for the
-     * name to be ambiguous against, and "voice" is left meaning only the slot.
+     * Monophonic, which is the point of the poly subpatch rather than a limitation beside
+     * it. It held eight voices and its own envelope, and that is exactly the design this
+     * redesign replaced: nothing inside it could be reached per note. A voice is a patch
+     * now -- this, an Env, an Amp -- inside a Poly the engine stamps out per note. Leaving
+     * eight voices in here as well would be two allocators with the inner one never
+     * choosing anything.
      *
-     * On its own it is an organ: eight voices of plain tone, on while held. A shape comes
-     * from putting it in a poly subpatch with an Env and an Amp, where the envelope is per
-     * note because the whole subpatch is.
+     * It was called Voice until the monophonic oscillator was retired, and "voice" is free
+     * again now that there are no slots inside this for the word to also mean.
      */
     val Osc = ModuleType(
         "Osc", listOf(Port("notes", N)), listOf(Port("out", A)),

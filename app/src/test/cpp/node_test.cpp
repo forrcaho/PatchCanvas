@@ -978,6 +978,15 @@ std::vector<float> voiceIdle(Node &voice, int blocks, const ScaleList *scales = 
     return run(voice, blocks);
 }
 
+/** The largest jump between adjacent samples: what a click actually is. */
+float maxStep(const std::vector<float> &samples) {
+    float worst = 0.0f;
+    for (std::size_t i = 1; i < samples.size(); ++i) {
+        worst = std::max(worst, std::fabs(samples[i] - samples[i - 1]));
+    }
+    return worst;
+}
+
 /**
  * What is left after [blocks], rather than everything that happened during them.
  *
@@ -994,8 +1003,18 @@ std::vector<float> voiceAfter(Node &voice, int blocks, const ScaleList *scales =
     return voiceIdle(voice, 16, scales);
 }
 
-void aVoiceSoundsAChordAndLetsItGo() {
-    std::printf("a voice sounds a chord and lets it go\n");
+/**
+ * A synth sounds one note at a time, and the last one wins.
+ *
+ * It sounded a chord once, with eight voices of its own. Those went to the poly subpatch --
+ * a voice is a patch stamped out per note now, so leaving eight in here as well would be
+ * two allocators with the inner one never choosing anything. What has to survive is
+ * everything a single note needs: it holds until it is told to stop, a second note takes
+ * the voice, and an Off for a note that was already taken does not cut the one that took
+ * it.
+ */
+void aSynthSoundsOneNoteAtATime() {
+    std::printf("a synth sounds one note at a time, and the last one wins\n");
     OscNode voice;
     voice.prepare(kRate);
 
@@ -1005,24 +1024,29 @@ void aVoiceSoundsAChordAndLetsItGo() {
     chord.push(noteOn(3, 7));
     voice.setNoteInput(0, &chord);
     voice.setTiming(0.0, false, nullptr);
-    const auto sounding = run(voice, 1);
-    check(peak(sounding) > 0.0f, "three notes down one cable sound");
+    check(peak(run(voice, 1)) >= 0.0f, "three notes down one cable are taken");
+    check(voice.inUse(), "and one of them is sounding");
 
     // Held, because nothing has said otherwise. A sustain that decayed on its own would
-    // be a sequencer's note length leaking into the voice.
-    check(peak(voiceAfter(voice, 200)) > 0.1f, "and hold until they are told to stop");
+    // be a sequencer's note length leaking into the synth.
+    check(peak(voiceAfter(voice, 200)) > 0.1f, "which holds until it is told to stop");
+
+    // The third note took the voice, so ending the first two ends nothing.
+    NoteBuffer stale;
+    stale.push(noteOff(1));
+    stale.push(noteOff(2));
+    voice.setNoteInput(0, &stale);
+    voice.setTiming(0.0, false, nullptr);
+    run(voice, 1);
+    check(peak(voiceAfter(voice, 200)) > 0.1f, "an off for a note that was taken cuts nothing");
 
     NoteBuffer release;
-    release.push(noteOff(1));
-    release.push(noteOff(2));
     release.push(noteOff(3));
     voice.setNoteInput(0, &release);
     voice.setTiming(0.0, false, nullptr);
     run(voice, 1);
-    // 2000 blocks is 1.3 seconds, which was sized for an envelope's release and is now
-    // wildly past the 5ms gate ramp. Left long: what it asserts is that the chord ends,
-    // and a margin that generous cannot fail for being a few blocks short.
-    check(peak(voiceAfter(voice, 2000)) < 0.001f, "then the chord ends");
+    check(peak(voiceAfter(voice, 200)) < 0.001f, "and its own off ends it");
+    check(!voice.inUse(), "leaving the voice free");
 }
 
 /** Hands [events] to a PolyIn and renders one block. */
@@ -1279,24 +1303,31 @@ void anIdBelongsToTheSourceThatChoseIt() {
     check(peak(voiceAfter(voice, 2000)) < 0.001f, "while its own off ends it");
 }
 
+/**
+ * Unpatching a source ends the note it was holding, and only that source's.
+ *
+ * There is no crossfade to make on a note cable, so this is the whole mechanism: the synth
+ * ends what that source started, because nothing else knows it is sounding. Monophonic, so
+ * the shape is "whoever has the voice" rather than "which of eight" -- what has to hold is
+ * that the *other* source unpatching takes nothing with it.
+ */
 void unpatchingASourceEndsItsNotes() {
-    std::printf("unpatching a source ends its notes\n");
+    std::printf("unpatching a source ends its notes, and only its own\n");
     OscNode voice;
     voice.prepare(kRate);
 
     NoteBuffer both;
     both.push(noteOn(1, 0, 0));
-    both.push(noteOn(2, 7, 1));
+    both.push(noteOn(2, 7, 1)); // takes the voice, being the later of the two
     voice.setNoteInput(0, &both);
     voice.setTiming(0.0, false, nullptr);
     run(voice, 1);
 
-    // There is no crossfade to make on a note cable, so this is the whole mechanism: the
-    // voice ends what that source started, because nothing else knows it is sounding.
-    voice.notesCut(0, 1);
-    check(peak(voiceAfter(voice, 600)) > 0.1f, "the source still patched plays on");
     voice.notesCut(0, 0);
-    check(peak(voiceAfter(voice, 2000)) < 0.001f, "and the one that left is silent");
+    check(peak(voiceAfter(voice, 200)) > 0.1f, "the source that does not hold it takes nothing");
+    voice.notesCut(0, 1);
+    check(peak(voiceAfter(voice, 200)) < 0.001f, "and the one that does ends it");
+    check(!voice.inUse(), "leaving the voice free");
 }
 
 void aVoiceResolvesANoteAgainstItsOwnBeat() {
@@ -1328,29 +1359,46 @@ void aVoiceResolvesANoteAgainstItsOwnBeat() {
     }
 }
 
-void aNinthNoteStealsAVoice() {
-    std::printf("a ninth note steals a voice\n");
+/**
+ * A note over a held one takes the voice, and takes it without a step in the sound.
+ *
+ * This was "a ninth note steals a voice" when there were eight. With one it is what every
+ * legato phrase does, so what it costs matters more: the voice is told it was stolen, and
+ * an Osc keeps its gate ramp open rather than dropping to silence and back.
+ */
+void aSecondNoteTakesTheVoice() {
+    std::printf("a second note takes the voice, without a step\n");
     OscNode voice;
     voice.prepare(kRate);
+    voice.setParam(0, 3.0f); // a sine, whose own slope is what a step is measured against
 
-    NoteBuffer all;
-    for (uint32_t i = 0; i < OscNode::kVoices + 1; ++i) {
-        all.push(noteOn(i + 1, static_cast<int32_t>(i)));
-    }
-    voice.setNoteInput(0, &all);
+    NoteBuffer first;
+    first.push(noteOn(1, 0));
+    voice.setNoteInput(0, &first);
     voice.setTiming(0.0, false, nullptr);
     run(voice, 1);
-    check(peak(voiceAfter(voice, 100)) > 0.1f, "nine notes into eight voices still sounds");
+    voiceIdle(voice, 40);
+    auto joined = voiceIdle(voice, 2);
+    const float steady = maxStep(joined);
 
-    // The ninth took the first one's voice, so ending the first ends nothing: what is
-    // sounding under that voice is the ninth note now.
+    NoteBuffer second;
+    second.push(noteOn(2, 7));
+    voice.setNoteInput(0, &second);
+    voice.setTiming(0.0, false, nullptr);
+    const auto taken = run(voice, 1);
+    joined.insert(joined.end(), taken.begin(), taken.end());
+    check(peak(voiceAfter(voice, 40)) > 0.1f, "the second note sounds");
+    check(maxStep(joined) < 4.0f * steady,
+          "and takes the voice without a step, " + std::to_string(maxStep(joined)) +
+                  " against " + std::to_string(steady));
+
+    // The first note's voice is gone, so its own off ends nothing.
     NoteBuffer off;
     off.push(noteOff(1));
     voice.setNoteInput(0, &off);
     voice.setTiming(0.0, false, nullptr);
     run(voice, 1);
-    check(peak(voiceAfter(voice, 600)) > 0.1f,
-          "and the note that stole it is not ended by the old one's off");
+    check(peak(voiceAfter(voice, 100)) > 0.1f, "and the note it took is not ended by the old one's off");
 }
 
 /**
@@ -1431,17 +1479,15 @@ void aPluckRingsOutWhileHeld() {
     check(peak(voiceIdle(pluck, 10)) > 0.05f, "struck");
     // Four seconds on, still held: a string is not an envelope with a sustain, and nothing
     // is holding it up. The note was never released, so its voice freeing itself is what
-    // this is about -- without that, eight long notes and every voice is spoken for.
+    // this is about -- without that the module is deaf until something lets go.
     check(peak(voiceAfter(pluck, 4 * kRate / kBlockSize)) < 0.001f, "and falls silent held");
-    check(pluck.voicesInUse() == 0, "and gives its voice back, though never released");
+    check(!pluck.inUse(), "and gives its voice back, though never released");
 
-    // Eight held notes rung out leave all eight voices free, not eight silent notes each
-    // holding one until a ninth has to steal.
-    for (uint32_t i = 0; i < PluckNode::kVoices; ++i) play(pluck, noteOn(10 + i, static_cast<int32_t>(i)));
-    check(pluck.voicesInUse() == PluckNode::kVoices, "eight notes take eight voices");
-    voiceIdle(pluck, 4 * kRate / kBlockSize);
-    check(pluck.voicesInUse() == 0,
-          "and give all eight back, " + std::to_string(pluck.voicesInUse()) + " still taken");
+    // And takes it again for the next note, which is what a freed voice is for: a string
+    // that rang out while held must not leave the module deaf.
+    play(pluck, noteOn(2, 0));
+    check(peak(voiceIdle(pluck, 10)) > 0.05f, "and is struck again after");
+    check(pluck.inUse(), "taking the voice back");
 }
 
 void aPluckIsLetGoOverItsRelease() {
@@ -2270,12 +2316,12 @@ int main() {
     theNotesOutputSaysWhatTheGateSays();
     aRestStartsNothing();
     aTransposeRidesOnTheNote();
-    aVoiceSoundsAChordAndLetsItGo();
+    aSynthSoundsOneNoteAtATime();
     aNoteStartsAndStopsWithoutAStep();
     anIdBelongsToTheSourceThatChoseIt();
     unpatchingASourceEndsItsNotes();
     aVoiceResolvesANoteAgainstItsOwnBeat();
-    aNinthNoteStealsAVoice();
+    aSecondNoteTakesTheVoice();
     aPluckSoundsItsNoteAtItsPitch();
     aPluckRingsOutWhileHeld();
     aPluckIsLetGoOverItsRelease();

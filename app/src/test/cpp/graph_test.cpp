@@ -42,6 +42,12 @@ std::vector<float> render(Graph &graph, int blocks) {
     return all;
 }
 
+/** Node ids the poly rig below builds itself from; see polyRig. */
+constexpr int64_t kEdge = 90;
+constexpr int64_t kSumNode = 91;
+constexpr int64_t kOutNode = 92;
+constexpr int64_t kFirstOsc = 100;
+
 /** The largest jump between adjacent samples: what a click actually is. */
 float maxStep(const std::vector<float> &samples) {
     float worst = 0.0f;
@@ -892,91 +898,7 @@ void aRemovedSourceEndsTheNotesItStarted() {
     check(nearSilent(graph.outputL(), kBlockSize), "and deleting the sequencer ends it");
 }
 
-void twoSequencersMergeIntoOneVoice() {
-    std::printf("two sequencers merge into one voice\n");
-    Graph graph;
-    graph.setSampleRate(48000);
 
-    graph.postAdd(1, NodeType::Steps);
-    graph.postAdd(2, NodeType::Steps);
-    graph.postAdd(3, NodeType::Osc);
-    graph.postAdd(4, NodeType::Out);
-    graph.postConnect(1, 0, 3, 0);
-    graph.postConnect(2, 0, 3, 0); // the same input: a note input merges rather than replaces
-    graph.postConnect(3, 0, 4, 0);
-    graph.postSetParam(2, 1, 700.0f); // a fifth up, so the two are not the same note
-    graph.postSetTempo(300.0f);       // and fast, so both keep starting notes throughout
-    // Out turned down, so the comparison below is of two voices against one rather than
-    // of the limiter against itself. With no envelope on it an Osc voice runs at full
-    // scale for the whole note, so two of them sum past the knee and come back the same
-    // loudness as one -- which made "unpatching one is quieter" false for a reason that
-    // has nothing to do with the cable.
-    graph.postSetParam(4, 0, 0.25f);
-    graph.applyCommands();
-    graph.setTransportRunning(true);
-
-    render(graph, 64);
-    const auto both = render(graph, 256);
-    const float withBoth = energy(both.data(), static_cast<int32_t>(both.size()));
-    check(withBoth > 0.0f, "both sequencers reach the voice");
-
-    // One cable, named at both ends. The other sequencer is patched to the same port and
-    // must play on -- which is the whole reason a disconnect names its source.
-    graph.postDisconnect(1, 2, 3, 0);
-    graph.applyCommands();
-    // Past the releases of everything the unpatched one left sounding, so what is
-    // measured is the other sequencer still starting notes rather than the first one
-    // fading out. A disconnect that took both sources with it reads as silence here.
-    render(graph, 2000);
-    const auto remaining = render(graph, 256);
-    const float withOne = energy(remaining.data(), static_cast<int32_t>(remaining.size()));
-
-    check(withOne > 0.25f * withBoth, "unpatching one leaves the other sounding");
-    check(withOne < withBoth, "and takes only its own notes with it");
-}
-
-void anIdIsOnlyUniqueToItsOwnSource() {
-    std::printf("an id is only unique to its own source\n");
-    Graph graph;
-    graph.setSampleRate(48000);
-
-    // Two sequencers into one voice, both counting their note ids from one: the second
-    // sequencer's first Off must not end the first sequencer's first note. They are set
-    // to different intervals so their events interleave rather than landing together.
-    graph.postAdd(1, NodeType::Steps);
-    graph.postAdd(2, NodeType::Steps);
-    graph.postAdd(3, NodeType::Osc);
-    graph.postAdd(4, NodeType::Out);
-    graph.postConnect(1, 0, 3, 0);
-    graph.postConnect(2, 0, 3, 0);
-    graph.postConnect(3, 0, 4, 0);
-    graph.postSetParam(1, 2, 1.0f); // half notes: one long note held across many short ones
-    graph.postSetParam(2, 2, 5.0f); // 1/32, starting and ending inside it over and over
-    graph.postSetParam(2, 1, 700.0f);
-    // An envelope with no tail, so the short notes really do leave gaps rather than
-    // filling them with a release. Without this the test cannot fail: a 0.25s release is
-    // longer than the gaps it would have to show through.
-    graph.postSetParam(3, 1, 0.001f); // A
-    graph.postSetParam(3, 2, 0.001f); // D
-    graph.postSetParam(3, 3, 1.0f);   // S
-    graph.postSetParam(3, 4, 0.001f); // R
-    graph.postSetTempo(240.0f);
-    graph.applyCommands();
-    graph.setTransportRunning(true);
-
-    // Into the half note, past its first 1/32 companion.
-    render(graph, 100);
-    // Every block from here is inside the long note, and many 1/32 gaps fall in it. If
-    // the short sequencer's Off had ended the long note -- both are counting their ids
-    // from one, and only the source they are tagged with tells them apart -- those gaps
-    // would be silent.
-    bool everSilent = false;
-    for (int i = 0; i < 150; ++i) {
-        graph.process(kBlockSize);
-        if (nearSilent(graph.outputL(), kBlockSize)) everSilent = true;
-    }
-    check(!everSilent, "the long note survives the short one's offs");
-}
 
 // ---------------------------------------------------------------- modulation
 
@@ -1109,6 +1031,105 @@ void anUnpatchedAmpIsOpenAndPatchingOneFades() {
     check(maxStep(joined) < 2.0f * steady,
           "and patching one fades rather than steps, " + std::to_string(maxStep(joined)) +
                   " against " + std::to_string(steady));
+}
+
+/**
+ * Two note sources into one input, and a disconnect that names only one of them.
+ *
+ * Through a poly subpatch, because that is where two notes sound at once now: every synth
+ * is monophonic, so merging two sequencers into an Osc would be the two of them fighting
+ * over one voice. The merge itself is the graph's and is the same either way -- what the
+ * subpatch adds is somewhere for the second note to go.
+ *
+ * [instances] of an Osc behind a PolyIn, summed, exactly as GraphSync flattens one.
+ */
+void polyRig(Graph &graph, int instances) {
+    graph.postAdd(kEdge, NodeType::PolyIn);
+    graph.postAdd(kSumNode, NodeType::PolySum);
+    graph.postAdd(kOutNode, NodeType::Out);
+    graph.postSetParam(kEdge, 0, static_cast<float>(instances));
+    for (int k = 0; k < instances; ++k) {
+        graph.postAdd(kFirstOsc + k, NodeType::Osc);
+        graph.postConnect(kEdge, k, kFirstOsc + k, 0);
+        graph.postConnect(kFirstOsc + k, 0, kSumNode, k);
+    }
+    graph.postConnect(kSumNode, 0, kOutNode, 0);
+    // Below the limiter's knee, so two notes measure as two rather than as one squashed.
+    graph.postSetParam(kOutNode, 0, 0.2f);
+}
+
+void twoSequencersMergeIntoOnePolySubpatch() {
+    std::printf("two sequencers merge into one poly subpatch\n");
+    Graph graph;
+    graph.setSampleRate(48000);
+
+    graph.postAdd(1, NodeType::Steps);
+    graph.postAdd(2, NodeType::Steps);
+    polyRig(graph, 2);
+    graph.postConnect(1, 0, kEdge, 0);
+    graph.postConnect(2, 0, kEdge, 0); // the same input: a note input merges rather than replaces
+    graph.postSetParam(2, 1, 700.0f);  // a fifth up, so the two are not the same note
+    graph.postSetTempo(300.0f);        // and fast, so both keep starting notes throughout
+    graph.applyCommands();
+    graph.setTransportRunning(true);
+
+    render(graph, 64);
+    const auto both = render(graph, 256);
+    const float withBoth = energy(both.data(), static_cast<int32_t>(both.size()));
+    check(withBoth > 0.0f, "both sequencers reach the subpatch");
+
+    // One cable, named at both ends. The other sequencer is patched to the same port and
+    // must play on -- which is the whole reason a disconnect names its source.
+    graph.postDisconnect(1, 2, kEdge, 0);
+    graph.applyCommands();
+    // Past everything the unpatched one left sounding, so what is measured is the other
+    // sequencer still starting notes rather than the first one fading out. A disconnect
+    // that took both sources with it reads as silence here.
+    render(graph, 2000);
+    const auto remaining = render(graph, 256);
+    const float withOne = energy(remaining.data(), static_cast<int32_t>(remaining.size()));
+
+    check(withOne > 0.25f * withBoth, "unpatching one leaves the other sounding");
+    check(withOne < withBoth, "and takes only its own notes with it");
+}
+
+/**
+ * An id belongs to the source that chose it, all the way through the graph.
+ *
+ * Two sequencers both counting their note ids from one: the second's first Off must not end
+ * the first's first note. The boundary of a poly subpatch is where that is decided now --
+ * PolyIn finds the instance holding a note by id *and* source -- so this is the end-to-end
+ * check of what a node test pins in isolation.
+ */
+void anIdIsOnlyUniqueToItsOwnSource() {
+    std::printf("an id is only unique to its own source\n");
+    Graph graph;
+    graph.setSampleRate(48000);
+
+    graph.postAdd(1, NodeType::Steps);
+    graph.postAdd(2, NodeType::Steps);
+    polyRig(graph, 2);
+    graph.postConnect(1, 0, kEdge, 0);
+    graph.postConnect(2, 0, kEdge, 0);
+    graph.postSetParam(1, 2, 1.0f); // half notes: one long note held across many short ones
+    graph.postSetParam(2, 2, 5.0f); // 1/32, starting and ending inside it over and over
+    graph.postSetParam(2, 1, 700.0f);
+    graph.postSetTempo(240.0f);
+    graph.applyCommands();
+    graph.setTransportRunning(true);
+
+    // Into the half note, past its first 1/32 companion.
+    render(graph, 100);
+    // Every block from here is inside the long note, and many 1/32 gaps fall in it. If the
+    // short sequencer's Off had ended the long note -- both are counting their ids from one,
+    // and only the source they are tagged with tells them apart -- those gaps would be
+    // silent.
+    bool everSilent = false;
+    for (int i = 0; i < 150; ++i) {
+        graph.process(kBlockSize);
+        if (nearSilent(graph.outputL(), kBlockSize)) everSilent = true;
+    }
+    check(!everSilent, "the long note survives the short one's offs");
 }
 
 /**
@@ -1419,7 +1440,7 @@ int main() {
     aNoteCableSoundsAndOrdersTheGraph();
     notesAndSignalsDoNotPatchToEachOther();
     aRemovedSourceEndsTheNotesItStarted();
-    twoSequencersMergeIntoOneVoice();
+    twoSequencersMergeIntoOnePolySubpatch();
     anIdIsOnlyUniqueToItsOwnSource();
     anUnpatchedAmpIsOpenAndPatchingOneFades();
     aFlattenedPolySubpatchSoundsTwoNotesAtOnce();

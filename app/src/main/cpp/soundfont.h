@@ -3,7 +3,7 @@
 #include <cstdint>
 
 #include "node.h"
-#include "poly.h"
+#include "synth.h"
 
 struct tsf;
 
@@ -55,7 +55,7 @@ public:
 /**
  * A SoundFont player: notes in, sound out.
  *
- * Not a PolySynth, because TinySoundFont has voices of its own and renders them all at
+ * Not a MonoSynth, because TinySoundFont has voices of its own and renders them all at
  * once. What this adds is the engine's idea of pitch. A SoundFont thinks in MIDI keys; a
  * note here is a degree of whatever scale is sounding. So each note gets a channel of its
  * own, is played on the nearest key, and the channel's tuning -- fractional semitones --
