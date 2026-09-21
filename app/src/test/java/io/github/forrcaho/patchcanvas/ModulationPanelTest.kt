@@ -318,6 +318,32 @@ class ModulationPanelTest {
     }
 
     /**
+     * Every stack leans the same way, so the right-hand rail keeps its room for one.
+     *
+     * The pile used to lean inward on that rail alone, because it is against the screen edge
+     * and would otherwise stack off it -- which read as two different ideas rather than one.
+     * The room is reserved whether or not a stack is drawn, so the rail does not move when
+     * you step into a poly subpatch and out again.
+     */
+    @Test
+    fun `the right rail leaves room for a stack, and does not move when it gets one`() {
+        val patch = Patch()
+        val out = patch.module(OUT_ID)!!
+        val rect = frame.railRect(out)
+        assertTrue(
+            "the stack fits inside the canvas, ${rect.right + RAIL_STACK_ROOM * d} of ${frame.canvas.width}",
+            rect.right + RAIL_STACK_ROOM * d <= frame.canvas.width - frame.insetRight,
+        )
+
+        // The same geometry for a subpatch's right rail, which is the one that is drawn
+        // stacked: nothing about the rect depends on which box it belongs to.
+        val inner = patch.addBox(Types.Poly, Offset.Zero)!!
+        val rail = patch.subpatchRail(inner.id, Types.SubpatchOut)!!
+        assertEquals(rect.left, frame.railRect(rail).left, 0.01f)
+        assertEquals(rect.width, frame.railRect(rail).width, 0.01f)
+    }
+
+    /**
      * Every knob row is tall enough to hold what it draws, on every module that has a grid.
      *
      * Found on the phone: `Seq` took over from `Steps` with a third knob, and a flat third

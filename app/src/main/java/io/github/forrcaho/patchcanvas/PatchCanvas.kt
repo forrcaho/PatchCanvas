@@ -3351,7 +3351,8 @@ internal class Frame(
         val top = insetTop + (canvas.height - insetTop - insetBottom - h) / 2f
         val left = when (module.type.pinned) {
             Edge.LEFT -> insetLeft + RAIL_MARGIN * d
-            else -> canvas.width - insetRight - RAIL_MARGIN * d - w
+            // Short of the margin by a stack's room; see RAIL_STACK_ROOM.
+            else -> canvas.width - insetRight - (RAIL_MARGIN + RAIL_STACK_ROOM) * d - w
         }
         return Rect(Offset(left, top), Size(w, h))
     }
@@ -3469,7 +3470,7 @@ internal class Frame(
         val top = insetTop + (canvas.height - insetTop - insetBottom - h) / 2f
         val left = when (module.type.pinned) {
             Edge.LEFT -> insetLeft + RAIL_MARGIN * d
-            else -> canvas.width - insetRight - RAIL_MARGIN * d - w
+            else -> canvas.width - insetRight - (RAIL_MARGIN + RAIL_STACK_ROOM) * d - w
         }
         return Rect(Offset(left, top), Size(w, h))
     }
@@ -4554,7 +4555,6 @@ fun PatchCanvas(
                     title = patch.module(rail.parent)
                         ?.let { Types.railName(it.type, rail.type) } ?: rail.title,
                     stacked = patch.module(rail.parent)?.type == Types.Poly,
-                    stackToward = if (rail.type.pinned == Edge.RIGHT) -1f else 1f,
                 )
                 // After the box, not before: drawModuleBox fills opaquely, so a highlight
                 // drawn underneath is painted straight over and never appears.
@@ -5269,8 +5269,18 @@ internal val ModuleFill = Color(0xFF232830)
 internal const val MODULE_BORDER_ALPHA = 0.55f
 
 /** How a stacked box says it is several: how many outlines behind it, and how far apart. */
-private const val STACK_LAYERS = 2
-private const val STACK_STEP = 4f
+internal const val STACK_LAYERS = 2
+internal const val STACK_STEP = 4f
+
+/**
+ * The room a stack needs beyond the box it is behind, up and to the right.
+ *
+ * Reserved on the right-hand rail whether or not it is drawn stacked, for two reasons. The
+ * stack leans one way everywhere -- a pile that leaned inward on one rail and outward on
+ * everything else read as two different ideas -- and the rail must not move when you step
+ * into a poly subpatch, which it would if the room appeared only where it was used.
+ */
+internal const val RAIL_STACK_ROOM = STACK_LAYERS * STACK_STEP
 
 private val GridLine = Color(0xFF232A33)
 private val GridCell = Color(0xFF12151A)
@@ -6812,12 +6822,6 @@ private fun DrawScope.drawModuleBox(
     title: String = module.title,
     /** Drawn as a pile of boxes: a poly subpatch, and the rails inside one. */
     stacked: Boolean = false,
-    /**
-     * Which way the pile leans. Up and to the right for a box on the canvas, which has room
-     * in every direction; inward for the right-hand rail, which is against the screen edge
-     * and would otherwise stack off it.
-     */
-    stackToward: Float = 1f,
 ) {
     val corner = CornerRadius(PatchModule.CORNER * unit, PatchModule.CORNER * unit)
 
@@ -6829,7 +6833,7 @@ private fun DrawScope.drawModuleBox(
             val step = STACK_STEP * unit * layer
             drawRoundRect(
                 color = ModuleFill.copy(alpha = alpha),
-                topLeft = rect.topLeft + Offset(step * stackToward, -step),
+                topLeft = rect.topLeft + Offset(step, -step),
                 size = rect.size,
                 cornerRadius = corner,
             )
@@ -6837,7 +6841,7 @@ private fun DrawScope.drawModuleBox(
                 color = module.type.accent.copy(
                     alpha = MODULE_BORDER_ALPHA * alpha / (layer + 1f),
                 ),
-                topLeft = rect.topLeft + Offset(step * stackToward, -step),
+                topLeft = rect.topLeft + Offset(step, -step),
                 size = rect.size,
                 cornerRadius = corner,
                 style = Stroke(width = strokeWidth),
