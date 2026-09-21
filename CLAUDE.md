@@ -240,6 +240,15 @@ declares such a port in `unityInputs()` and the graph hands it a buffer of ones,
 *previous* side of a crossfade as well as the current one, or patching a modulator would
 fade up from zero.
 
+**A stack means several of this sound at once**, and exactly two types draw one:
+`Types.Poly`, a voice the engine stamps out per note, and `Sf`, whose voices are
+TinySoundFont's and cannot be capped to one because a single note can layer several of
+them. Since every other synth is monophonic, the marker's job is to say where you do *not*
+need a `Poly` around it. It promises multiplicity and not a canvas behind it -- only a
+subpatch opens, and a stacked `SF` opens its panel like any other module. A poly subpatch's
+rails stack with it, because in there you are looking at one instance of several. `PolyTest`
+pins the set at two, so a third is a decision rather than a drift.
+
 **A module's color is the kind of cable it sends** -- greens for notes, steel blues, warm grays and
 grays for audio, purples for modulation -- in a shade of that family, never the cable
 color itself. `ModuleColorTest` enforces it, so a new module's accent has to follow it.

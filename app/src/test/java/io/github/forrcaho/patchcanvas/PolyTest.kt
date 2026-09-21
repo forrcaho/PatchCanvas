@@ -241,6 +241,25 @@ class PolyTest {
         assertEquals("byte for byte, so an undo is not a new edit", json, back.toJson())
     }
 
+    /**
+     * A stack means several of this sound at once, and exactly two things do.
+     *
+     * Pinned as a set rather than checked one by one, so adding a third has to be a
+     * decision. Every synth is monophonic, so the marker's job is to say where you do *not*
+     * need a Poly around it: a poly subpatch, and SF, whose voices are TinySoundFont's and
+     * cannot be capped to one because a single note can layer several of them.
+     */
+    @Test
+    fun `only a poly subpatch and SF are drawn as stacks`() {
+        val stacked = (Types.palette + Types.boxes.values + listOf(Types.Steps, Types.Out, Types.In))
+            .filter { it.stacked }
+            .map { it.name }
+            .toSet()
+        assertEquals(setOf("Poly", "SF"), stacked)
+        assertFalse("a plain subpatch is one of one", Types.Subpatch.stacked)
+        assertFalse("and a monophonic synth is not marked", Types.Osc.stacked)
+    }
+
     /** The rails say what they are: one instance of several, not the box's own edge. */
     @Test
     fun `the rails inside a poly subpatch are instance rails`() {

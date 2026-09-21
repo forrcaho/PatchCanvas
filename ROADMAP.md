@@ -2708,6 +2708,15 @@ note can take several of them at once for a layered preset, so capping it to one
 silence half of some instruments. That makes `SF` genuinely the only polyphonic source --
 which is the question Forrest actually asked, arrived at from the other end.
 
+**So `SF` is drawn as a stack, and the question answered itself.** Asked before the synths
+went monophonic, the answer was no: Osc, Pluck and FM were polyphonic too, so marking one
+of four would say nothing. Afterwards it is yes, and for the same reason -- it is the only
+one left, so the stack tells you the one place you do not need a `Poly` around anything.
+The cost Forrest named stands: opening it finds a panel rather than a canvas. That is worth
+less than the marker, because the stack promises *several sound at once* and never promised
+something to go inside. `ModuleType.stacked` declares it and a test pins the set at two, so
+a third is a decision.
+
 **What it cost the tests, which is the interesting part.** Four of them asserted things that
 only a polyphonic synth can do: a chord into one Osc, a ninth note stealing, two sequencers
 sounding at once, a long note surviving a short one's Offs. Every one of those properties is

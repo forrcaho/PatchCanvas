@@ -430,6 +430,21 @@ data class ModuleType(
      * "is this a subpatch?" in the model actually means.
      */
     val box: Boolean = false,
+    /**
+     * Drawn as a pile of boxes: **several of this sound at once**.
+     *
+     * Exactly two types, and the rule is what keeps it to two. Every synth is monophonic --
+     * a note at a time, and polyphony is a [Poly] around it -- so a stack tells you the two
+     * places where that is not so and you do not need to wrap anything: a poly subpatch,
+     * which is a voice the engine stamps out per note, and [Sf], whose voices are
+     * TinySoundFont's and cannot be reduced to one because a single note can layer several
+     * of them.
+     *
+     * It promises multiplicity, not a canvas behind it. Only a subpatch can be opened; a
+     * stacked `SF` opens its panel like any other module, which is the one thing about this
+     * that reads oddly and is worth less than the marker.
+     */
+    val stacked: Boolean = false,
 ) {
     /** Indices of the parameters drawn as rows of the panel; the rest live in its header. */
     val rowParams: List<Int> get() = params.indices.filter { !params[it].header }
@@ -697,6 +712,9 @@ object Types {
     val Sf = ModuleType(
         "SF", listOf(Port("notes", N)), listOf(Port("out", A)),
         Color(0xFF00849C),
+        // Drawn as a stack: the only module that sounds several notes by itself. See
+        // ModuleType.stacked.
+        stacked = true,
         params = listOf(
             Param(
                 "preset", 0f, (129 * 128 - 1).toFloat(), 0f,
@@ -795,7 +813,8 @@ object Types {
      * inner poly's stealing would mean against an outer one's.
      */
     val Poly = ModuleType(
-        "Poly", emptyList(), emptyList(), Color(0xFF9FB4A8), structural = true, box = true,
+        "Poly", emptyList(), emptyList(), Color(0xFF9FB4A8),
+        structural = true, box = true, stacked = true,
         // Its one knob, and the only knob any subpatch has of its own. Not exposable: see
         // PatchModule.canExpose -- a modulator that adds and removes nodes is not a knob.
         params = listOf(Param("voices", 1f, MAX_PORTS.toFloat(), 4f, "", STEP, short = "vce")),
@@ -4512,7 +4531,7 @@ fun PatchCanvas(
                         showTitle = camera.zoom >= Camera.TITLE_ZOOM,
                         showLabels = camera.zoom >= Camera.LABEL_ZOOM,
                         alpha = 1f,
-                        stacked = module.type == Types.Poly,
+                        stacked = module.type.stacked,
                     )
                     if (module.id in flash.ids && pulse.value > 0f) {
                         drawFlash(module.bounds, 1f, pulse.value, 3f / camera.zoom)
@@ -4557,7 +4576,9 @@ fun PatchCanvas(
                     // one copy of several and the notes on this rail are this copy's share.
                     title = patch.module(rail.parent)
                         ?.let { Types.railName(it.type, rail.type) } ?: rail.title,
-                    stacked = patch.module(rail.parent)?.type == Types.Poly,
+                    // A poly subpatch's rails stack with it: what you are looking at in
+                    // there is one instance of several.
+                    stacked = patch.module(rail.parent)?.type?.stacked == true,
                 )
                 // After the box, not before: drawModuleBox fills opaquely, so a highlight
                 // drawn underneath is painted straight over and never appears.
