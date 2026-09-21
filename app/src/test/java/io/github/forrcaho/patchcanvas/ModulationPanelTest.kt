@@ -322,15 +322,18 @@ class ModulationPanelTest {
      *
      * Found on the phone: `Seq` took over from `Steps` with a third knob, and a flat third
      * of the body split three ways is 35dp a row, where the label, the value and the bar
-     * need 46. The panel drew all three on top of each other. The split now follows the row
-     * count, so this is the assertion that keeps it following.
+     * need 60. The panel drew the bar through the bottom of all three labels. The split
+     * now follows the row count, so this is the assertion that keeps it following.
+     *
+     * Every row of every module, not the deepest column of each: rows are a uniform height,
+     * so if one is too short they all are, and asking about all of them needs no second copy
+     * of the rule this is checking.
      */
     @Test
     fun `a knob row is never shorter than what it has to draw`() {
         Types.palette.filter { it.rowParams.isNotEmpty() }.forEach { type ->
             val rows = type.rowParams.size
-            val deepest = if (rows > PANEL_ONE_COLUMN) (rows + 1) / 2 else rows
-            (0 until deepest).forEach { slot ->
+            (0 until rows).forEach { slot ->
                 val row = panelRowAt(panel, d, type, rows, slot)
                 assertTrue(
                     "${type.name} row $slot is ${row.height / d}dp",
@@ -386,12 +389,29 @@ class ModulationPanelTest {
         assertEquals("an odd count puts the extra row on the left", 4, seven.count { it.left == seven[0].left })
     }
 
+    /**
+     * A panel goes to two columns when one can no longer give every row the height it draws.
+     *
+     * That was a declared constant, "more than five rows", and is now a consequence: on a
+     * panel with no grid the knobs have the whole body, and five rows at 60dp is the most
+     * that fits on the reference device. The number is unchanged; what changed is that a
+     * panel with a grid has half the room and so reaches two columns at three, which is
+     * what Seq needed and a flat five could not express.
+     */
     @Test
-    fun `five rows or fewer stay in one column, as they were`() {
-        (1..PANEL_ONE_COLUMN).forEach { count ->
+    fun `a panel goes to two columns when one can no longer hold the rows`() {
+        fun columns(type: ModuleType, count: Int) =
+            (0 until count).map { panelRowAt(panel, d, type, count, it).left }.distinct().size
+
+        (1..5).forEach { count ->
+            assertEquals("$count rows with no grid", 1, columns(Types.Mix, count))
             val rows = (0 until count).map { panelRowAt(panel, d, Types.Mix, count, it) }
-            assertEquals(1, rows.map { it.left }.distinct().size)
             assertEquals(panel.width - 2f * PatchModule.PANEL_SIDE * d, rows[0].width, 0.01f)
         }
+        assertEquals("and six do not fit", 2, columns(Types.Mix, 6))
+
+        // Seq's three, against a dot grid that keeps half the body.
+        assertEquals("a sequencer reaches two columns at three", 2, columns(Types.Seq, 3))
+        assertEquals("but not at two, as Steps had", 1, columns(Types.Steps, 2))
     }
 }

@@ -1230,11 +1230,29 @@ internal fun panelPort(panel: Rect, d: Float, dir: PortDirection, index: Int, co
 internal fun panelGrid(panel: Rect, d: Float, type: ModuleType? = null): Rect {
     val body = panelBody(panel, d)
     val side = PatchModule.PANEL_SIDE * d
-    // The complement of the knobs, so the two can never overlap or leave a gap between
-    // them however the split is decided. See controlsHeight.
-    val controls = if (type == null) body.height * (1f - GRID_SHARE) else controlsHeight(type, body.height, d)
+    // The complement of the knobs, so the two can never overlap or leave a gap between them
+    // however the split is decided. A grid-bearing module's rows are always its own, so the
+    // count is its own -- only a subpatch's panel shows somebody else's, and it has no grid.
+    val controls = if (type == null) body.height * (1f - GRID_SHARE)
+    else panelSplit(panel, d, type, type.rowParams.size).controls
     return Rect(panel.left + side, body.top, panel.right - side, body.bottom - controls)
 }
+
+/**
+ * The least a knob's row can be and still hold what it draws.
+ *
+ * A row is a label (14sp) and a value (16sp) on one line, then the bar: 4dp above the text,
+ * the text itself, the 16dp bar and 10dp under it. At the reference device's font scale of
+ * 1.5 the value is 24sp, whose line is about 28dp, so 60 is what the largest setting needs.
+ *
+ * A constant rather than read from `Frame.fontScale`, which is what a menu tile does,
+ * because a panel cannot grow: it already has the whole screen. What it owes its knobs is a
+ * floor at the worst case, which is a floor and not a scale.
+ *
+ * It was 46, arrived at by counting the font's *size* rather than its line, and the bar was
+ * drawn through the bottom of every label. Seen on the phone.
+ */
+internal const val PANEL_ROW_MIN = 60f
 
 /** What a grid took of the body before the knobs' own height decided it, and their floor now. */
 private const val GRID_SHARE = 0.66f
@@ -1242,51 +1260,61 @@ private const val GRID_SHARE = 0.66f
 /** A pattern's share, which is fixed: it is one row of marks and is only looked at. */
 private const val PATTERN_GRID_SHARE = 0.2f
 
-private fun panelControls(panel: Rect, d: Float, type: ModuleType): Rect {
-    val body = panelBody(panel, d)
-    if (type.grid == GridKind.NONE) return body
-    return Rect(body.left, body.bottom - controlsHeight(type, body.height, d), body.right, body.bottom)
+/** The grid never goes below this, whatever the knobs ask for. */
+private const val GRID_FLOOR = 0.5f
+
+/**
+ * How a panel's body divides between the grid and the knobs, and into how many columns.
+ *
+ * One answer for both, because they are one decision: the columns depend on how much height
+ * the knobs have, and how much height they take depends on the columns. Worked out against
+ * the most the knobs could ever be given, so the two cannot disagree.
+ */
+private class PanelSplit(
+    /** The knobs' band, measured up from the body's bottom. The grid has the rest. */
+    val controls: Float,
+    val columns: Int,
+    /** Rows in the taller column, which is what the band has to hold. */
+    val deepest: Int,
+)
+
+/**
+ * It was a flat third to the knobs, decided when a sequencer had two of them and they were
+ * legible at that. `Seq` arrived with three, and a third of the body split three ways is
+ * 35dp a row where 60 is what a row draws. So the knobs ask for what they need, the grid
+ * keeps the rest, and a panel too short for them all in one column goes to two.
+ *
+ * Two columns used to be a flat "more than five rows". That is exactly what this comes to
+ * on a panel with no grid, where the knobs have the whole body; a panel with a grid has
+ * half of it at most and so reaches two columns at three.
+ */
+private fun panelSplit(panel: Rect, d: Float, type: ModuleType, count: Int): PanelSplit {
+    val body = panelBody(panel, d).height
+    val rows = maxOf(count, 1)
+    fun split(most: Float, least: Float): PanelSplit {
+        val columns = if (rows * PANEL_ROW_MIN * d > most) 2 else 1
+        val deepest = if (columns == 2) (rows + 1) / 2 else rows
+        return PanelSplit((deepest * PANEL_ROW_MIN * d).coerceIn(least, most), columns, deepest)
+    }
+    return when {
+        // No grid: the knobs have the whole body, as every panel did before grids.
+        type.grid == GridKind.NONE -> split(body, body).let { PanelSplit(body, it.columns, it.deepest) }
+        // A grid with no knobs under it takes the whole body rather than leaving a third of
+        // the panel empty -- a drone had no parameters at all until 2026-09-19.
+        count == 0 -> PanelSplit(0f, 1, 1)
+        // A pattern is one row of marks that is only looked at, so it keeps its thin strip
+        // and the knobs that change it get the rest, at the fixed share they always had.
+        type.grid == GridKind.PATTERN ->
+            split(body * (1f - PATTERN_GRID_SHARE), body * (1f - PATTERN_GRID_SHARE))
+        // A sequence or a drone grid is the thing being edited: the knobs take what they
+        // need between the third they always had and half, and the grid keeps the rest.
+        else -> split(body * GRID_FLOOR, body * (1f - GRID_SHARE))
+    }
 }
 
-/**
- * The least a knob's row can be and still hold what it draws.
- *
- * A row is a label and a value on one line, then the bar: 2dp above the text, the text
- * itself, the 16dp bar and 10dp under it. The text is 12sp, which is 18dp at the reference
- * device's font scale of 1.5, so 46 is what the largest setting needs.
- *
- * A constant rather than read from `Frame.fontScale`, which is what a menu tile does,
- * because a panel cannot grow: it already has the whole screen. What it owes its knobs is
- * not to squeeze them below the worst case, which is a floor and not a scale.
- */
-internal const val PANEL_ROW_MIN = 46f
-
-/**
- * How much of the panel's body the knobs take, leaving the rest to the grid.
- *
- * It was a flat third, decided when a sequencer had two knobs and they were legible at
- * that. `Seq` arrived with three -- length, transpose and gate -- and a third of the body
- * split three ways is 35dp a row on the reference device, where the label, the value and
- * the bar all have to fit and 46 is what they need. So the knobs ask for what they need
- * and the grid keeps the rest.
- *
- * Bounded at both ends. Never less than the third it always had, so a module with one knob
- * still draws it at a comfortable height rather than shrinking to its minimum; and never
- * more than half, because the grid is the thing being edited and a panel that cannot show
- * the sequence is not a panel. Past that the knobs are better served by the second column
- * the panel already goes to, which is why this counts the deepest column rather than the
- * rows.
- */
-private fun controlsHeight(type: ModuleType, body: Float, d: Float): Float {
-    val rows = type.rowParams.size
-    // A grid with no knobs under it takes the whole body rather than leaving a third of the
-    // panel empty -- a drone had no parameters at all until 2026-09-19.
-    if (rows == 0) return 0f
-    // A pattern is one row of marks that is only looked at, so it keeps its thin strip and
-    // the knobs that change it get the rest. Euclid is the only one.
-    if (type.grid == GridKind.PATTERN) return body * (1f - PATTERN_GRID_SHARE)
-    val deepest = if (rows > PANEL_ONE_COLUMN) (rows + 1) / 2 else rows
-    return (deepest * PANEL_ROW_MIN * d).coerceIn(body * (1f - GRID_SHARE), body * 0.5f)
+private fun panelControls(panel: Rect, d: Float, type: ModuleType, count: Int): Rect {
+    val body = panelBody(panel, d)
+    return Rect(body.left, body.bottom - panelSplit(panel, d, type, count).controls, body.right, body.bottom)
 }
 
 /** A knob's row: label, value and the bar beneath them. */
@@ -1303,28 +1331,27 @@ internal fun panelRow(panel: Rect, d: Float, type: ModuleType, index: Int): Rect
  * subpatch type's own parameters.
  */
 internal fun panelRowAt(panel: Rect, d: Float, type: ModuleType, count: Int, slot: Int): Rect {
-    val area = panelControls(panel, d, type)
+    val area = panelControls(panel, d, type, count)
     val side = PatchModule.PANEL_SIDE * d
-    // Past five rows, two columns: the first half down the left, the rest down the right,
-    // so reading order is still top to bottom and the parameters' order is kept.
-    val columns = if (count > PANEL_ONE_COLUMN) 2 else 1
-    // Split at half. A parameter could once ask to start the second column, for FM, whose
-    // seven knobs split ratio/index/fall/A and D/S/R and cut ADSR in two. FM has three knobs
-    // now and no module has more than four, so the only panel that reaches two columns is a
-    // subpatch's -- and its rows are other modules' knobs, which have no break to declare.
-    val first = if (columns == 1) count else (count + 1) / 2
+    val split = panelSplit(panel, d, type, count)
+    // The first half down the left and the rest down the right, so reading order is still
+    // top to bottom and the parameters' order is kept. Split at half: a parameter could once
+    // ask to start the second column, for FM, whose seven knobs split ratio/index/fall/A and
+    // D/S/R and cut ADSR in two. FM has three knobs now and no module has more than four, so
+    // the only panels that reach two columns are a subpatch's and a sequencer's -- and their
+    // rows are other modules' knobs, which have no break to declare.
+    val first = if (split.columns == 1) count else (count + 1) / 2
     val column = if (slot < first) 0 else 1
     val within = if (slot < first) slot else slot - first
-    val deepest = maxOf(first, count - first)
-    val rowHeight = minOf(PatchModule.PANEL_ROW_MAX * d, area.height / maxOf(deepest, 1))
-    val block = rowHeight * deepest
+    val rowHeight = minOf(PatchModule.PANEL_ROW_MAX * d, area.height / maxOf(split.deepest, 1))
+    val block = rowHeight * split.deepest
     val top = area.top + (area.height - block) / 2f + within * rowHeight
     // The gap between the columns is a gutter as wide as a side one, because it has the
     // same work to do: the left column's [ ] chip and the right column's promote chip both
     // sit in it, each against its own row.
     val left = panel.left + side
     val right = panel.right - side
-    val width = (right - left - (columns - 1) * side) / columns
+    val width = (right - left - (split.columns - 1) * side) / split.columns
     val x = left + column * (width + side)
     return Rect(x, top, x + width, top + rowHeight)
 }
@@ -6385,13 +6412,6 @@ internal const val MAX_PORTS = 8
 
 /** Mirrors kMaxParams in node.h. A ninth knob would simply never reach the engine. */
 internal const val MAX_PARAMS = 8
-
-/**
- * The most rows a panel stacks in one column. Past this it lays them out in two, side by
- * side: the landscape panel is wide and not tall, and at eight rows in one column each is
- * thinner than a finger, while half the panel's width is still a long bar.
- */
-internal const val PANEL_ONE_COLUMN = 5
 
 /**
  * The most knobs a subpatch can carry out to its edge.
