@@ -231,19 +231,90 @@ class EnvelopeTest {
 
     /** The rails are what keep the sustain and the keypad off the shape. See ENV_RAIL. */
     @Test
-    fun `the rails divide evenly by segment and never overlap the curve`() {
+    fun `the rails sit above and below the curve, never over it`() {
         val (_, env) = env()
         val sustain = envSustainRail(area, 1f)
         val times = envTimeRail(area, 1f)
         val curve = envCurveArea(area, 1f)
-        assertTrue("the curve sits between them", curve.top >= sustain.bottom && curve.bottom <= times.top)
+        assertTrue(
+            "the curve sits between them",
+            curve.top >= sustain.bottom && curve.bottom <= times.top,
+        )
+        val edges = envCellEdges(envGeometry(area, env, 1f), env, 10f)
+        assertEquals("and the curve area is not a rail", -1, envCellAt(sustain, edges, curve.center))
+    }
 
-        val count = env.segments.size
-        repeat(count) { i ->
-            val cell = envCell(sustain, count, i)
-            assertEquals("cell $i is hit at its own centre", i, envCellAt(sustain, count, cell.center))
+    /**
+     * A cell is as wide as its segment is long, so the rails read against the shape above
+     * them rather than beside it.
+     *
+     * They were divided evenly, which put the `hold` chip nowhere near its own dashed line
+     * and the last cell over empty canvas past the end of the curve -- the editor's habit of
+     * drawing one thing and meaning another, in its third and last known form.
+     */
+    @Test
+    fun `a rail cell is as wide as its segment is long`() {
+        val (_, env) = env()
+        env.segments.clear()
+        env.segments.add(EnvSegment(0.1f, 1f, 0f))
+        env.segments.add(EnvSegment(0.3f, 0.5f, 0f))  // three times as long
+        val geo = envGeometry(area, env, 1f)
+        val edges = envCellEdges(geo, env, 1f)  // a floor low enough to bind on neither
+
+        val first = edges[1] - edges[0]
+        val second = edges[2] - edges[1]
+        assertEquals("three times as long, three times as wide", 3f, second / first, 0.01f)
+
+        // And they land on the segments' own columns, which is the whole point.
+        val times = env.segmentTimes
+        assertEquals(geo.x(0f), edges[0], 0.5f)
+        assertEquals(geo.x(times[0]), edges[1], 0.5f)
+        assertEquals(geo.x(times[1]), edges[2], 0.5f)
+    }
+
+    /**
+     * However short the segment, its cell still has to be tappable and still has to say
+     * "5ms" -- which is why the even division existed in the first place.
+     */
+    @Test
+    fun `a short segment's cell keeps a floor wide enough for its text`() {
+        val (_, env) = env()
+        env.segments.clear()
+        env.segments.add(EnvSegment(0.005f, 1f, 0f))  // half a percent of the axis
+        env.segments.add(EnvSegment(1f, 0f, 0f))
+        val geo = envGeometry(area, env, 1f)
+        val floor = 60f
+        val edges = envCellEdges(geo, env, floor)
+
+        assertTrue(
+            "the 5ms cell is ${edges[1] - edges[0]}px, floor $floor",
+            edges[1] - edges[0] >= floor - 0.5f,
+        )
+        assertTrue("and the long one keeps the rest", edges[2] - edges[1] > floor)
+        // Contiguous, always: a gap between cells is a touch that hits nothing.
+        assertEquals(envCellEdges(geo, env, floor).size, env.segments.size + 1)
+    }
+
+    /** Even at the cap, with every segment tiny, no cell overlaps another. */
+    @Test
+    fun `the cells stay in order and never overlap, however they are squeezed`() {
+        val (_, env) = env()
+        env.segments.clear()
+        repeat(MAX_SEGMENTS) { env.segments.add(EnvSegment(0.002f, 0.5f, 0f)) }
+        val geo = envGeometry(area, env, 1f)
+        val edges = envCellEdges(geo, env, 200f)  // floors that cannot possibly all fit
+        assertEquals(MAX_SEGMENTS + 1, edges.size)
+        edges.zipWithNext().forEach { (a, b) ->
+            assertTrue("edges must ascend, got $a then $b", b > a)
         }
-        assertEquals("and the curve area is not a rail", -1, envCellAt(sustain, count, curve.center))
+        assertTrue("and stay inside the panel", edges.last() <= geo.area.right + 0.5f)
+    }
+
+    /** Sized to hold a label, so it reads the font setting; see CLAUDE.md. */
+    @Test
+    fun `the cell floor grows with the text size`() {
+        assertTrue(envCellMin(1f, 1.5f) > envCellMin(1f, 1f))
+        assertEquals(ENV_CELL_MIN * 1.5f * 2f, envCellMin(2f, 1.5f), 0.001f)
     }
 
     /** Typed in milliseconds, because that is the number anyone says out loud. */

@@ -367,11 +367,13 @@ costs nothing -- a second drag carries on from the first.
 time and a level and a drag moves both; the sustain and the keypad live in a rail above the
 shape and a rail below it. This is Surge's split rather than Bespoke's, and the reason is
 arithmetic: three quantities on one draggable point makes the control that picks between them
-a mode, and a mode on a fingertip-sized target is a coin toss. The rails divide **evenly by
-segment** rather than against the time axis, because a 5ms attack is half a percent of a
-one-second axis and the attack is the first thing anyone wants to type exactly -- which is the
-keypad's whole job here, in **milliseconds**, since nobody can drag a node to 12ms and everybody
-can tap it and type 12. `MAX_SEGMENTS` is 8 and is a **cap**, not a scroll or a zoom: a scroll
+a mode, and a mode on a fingertip-sized target is a coin toss. **A rail cell is as wide as its
+segment is long**, floored at `envCellMin` so a 5ms attack still has something tappable that
+still says "5ms" -- allocated by water-filling, so where no floor binds the cells land exactly
+on the segment columns and the rails line up with the nodes. They were divided evenly once,
+which kept every cell tappable and put the `hold` chip nowhere near its own dashed line. The
+keypad is in **milliseconds**, since nobody can drag a node to 12ms and everybody can tap it
+and type 12. `MAX_SEGMENTS` is 8 and is a **cap**, not a scroll or a zoom: a scroll
 needs a gesture that competes with dragging a node, and a zoom-to-fit puts the nodes closest
 together exactly when the envelope gets interesting.
 

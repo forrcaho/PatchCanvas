@@ -4632,10 +4632,15 @@ fun PatchCanvas(
                                 inEditor
                             ) {
                                 val d = frame.density
-                                val count = open.segments.size
+                                // The rails are laid out from the same edges the drawing uses,
+                                // so a cell is hit where it is seen.
+                                val railEdges = envCellEdges(
+                                    envGeometry(gridArea, open, d), open,
+                                    envCellMin(d, frame.fontScale),
+                                )
 
                                 val sustainCell =
-                                    envCellAt(envSustainRail(gridArea, d), count, down.position)
+                                    envCellAt(envSustainRail(gridArea, d), railEdges, down.position)
                                 if (sustainCell >= 0) {
                                     if (BuildConfig.DEBUG) {
                                         android.util.Log.d("PatchGesture", "sustain rail cell $sustainCell")
@@ -4646,7 +4651,7 @@ fun PatchCanvas(
                                     return@awaitEachGesture
                                 }
                                 val timeCell =
-                                    envCellAt(envTimeRail(gridArea, d), count, down.position)
+                                    envCellAt(envTimeRail(gridArea, d), railEdges, down.position)
                                 if (timeCell >= 0) {
                                     if (BuildConfig.DEBUG) {
                                         android.util.Log.d("PatchGesture", "time rail cell $timeCell")
@@ -5247,6 +5252,7 @@ fun PatchCanvas(
                     open, patch, panelRect(frame), d, screenMeasurer, playing, playingStep,
                     intervalMenu, liveParams, sfView,
                     patch.scales.getOrElse(playingEntry) { patch.scales.first() }.rootCents,
+                    frame.fontScale,
                 )
             }
 
@@ -6112,16 +6118,88 @@ internal fun envTimeRail(area: Rect, d: Float): Rect =
 internal fun envCurveArea(area: Rect, d: Float): Rect =
     Rect(area.left, area.top + ENV_RAIL * d, area.right, area.bottom - ENV_RAIL * d)
 
-/** One rail cell per segment, evenly divided. */
-internal fun envCell(rail: Rect, count: Int, index: Int): Rect {
-    val w = rail.width / count.coerceAtLeast(1)
-    return Rect(rail.left + index * w, rail.top, rail.left + (index + 1) * w, rail.bottom)
+/**
+ * The least a rail cell may be, in dp *before* the font setting.
+ *
+ * Read against `Frame.fontScale` like anything else sized to hold a label: the cell says
+ * "800ms" and the reference device runs at 1.5.
+ */
+internal const val ENV_CELL_MIN = 44f
+
+internal fun envCellMin(d: Float, fontScale: Float): Float = ENV_CELL_MIN * fontScale * d
+
+/**
+ * Where each rail cell begins and ends: n + 1 edges, left to right.
+ *
+ * **A cell is as wide as its segment is long**, so the rails read against the shape above
+ * them rather than beside it -- the evenly-divided version put the `hold` chip nowhere near
+ * its own dashed line and the last cell over empty canvas past the end of the curve. Every
+ * cell keeps at least [envCellMin], because the whole reason the even version existed is
+ * that a 5ms attack is half a percent of a one-second axis and its cell still has to be
+ * tappable and still has to say "5ms".
+ *
+ * Allocated by water-filling: anything that would fall under the floor takes the floor and
+ * drops out, and what is left is shared among the rest by duration, repeatedly, until
+ * nothing else sinks. Where no floor binds, the cells land exactly on the segment columns
+ * and the rails line up with the nodes. Where the floors cannot all fit at once -- eight
+ * segments on a short envelope -- the row widens toward the panel edge, and past even that
+ * the cells share what there is equally, which is where this started.
+ */
+internal fun envCellEdges(geo: EnvGeometry, module: PatchModule, minWidth: Float): List<Float> {
+    val left = geo.x(0f)
+    val n = module.segments.size
+    if (n == 0) return listOf(left)
+
+    val extent = geo.x(module.envelopeSpan) - left
+    val room = geo.area.right - left
+    val budget = minOf(room, maxOf(extent, minWidth * n))
+
+    val widths = FloatArray(n)
+    val floored = BooleanArray(n)
+    var spare = budget
+    var pool = module.segments.sumOf { it.time.toDouble() }.toFloat()
+
+    if (minWidth * n >= budget || pool <= 0f) {
+        // The floors alone do not fit, so nothing can be proportional: share it out.
+        widths.fill(budget / n)
+    } else {
+        while (true) {
+            var sank = false
+            for (i in 0 until n) {
+                if (floored[i]) continue
+                if (spare * (module.segments[i].time / pool) < minWidth) {
+                    widths[i] = minWidth
+                    floored[i] = true
+                    spare -= minWidth
+                    pool -= module.segments[i].time
+                    sank = true
+                }
+            }
+            if (!sank || pool <= 0f) break
+        }
+        for (i in 0 until n) {
+            if (!floored[i]) widths[i] = spare * (module.segments[i].time / pool)
+        }
+    }
+
+    val edges = ArrayList<Float>(n + 1)
+    var x = left
+    edges.add(x)
+    widths.forEach { x += it; edges.add(x) }
+    return edges
 }
 
-/** Which cell of [rail] holds [at], or -1 when it is outside. */
-internal fun envCellAt(rail: Rect, count: Int, at: Offset): Int {
-    if (count <= 0 || !rail.contains(at)) return -1
-    return ((at.x - rail.left) / (rail.width / count)).toInt().coerceIn(0, count - 1)
+/** One rail cell, from the edges [envCellEdges] worked out. */
+internal fun envCell(rail: Rect, edges: List<Float>, index: Int): Rect =
+    Rect(edges[index], rail.top, edges[index + 1], rail.bottom)
+
+/** Which cell of [rail] holds [at], or -1 when it is outside the rail or past the last cell. */
+internal fun envCellAt(rail: Rect, edges: List<Float>, at: Offset): Int {
+    if (edges.size < 2 || !rail.contains(at)) return -1
+    for (i in 0 until edges.size - 1) {
+        if (at.x >= edges[i] && at.x <= edges[i + 1]) return i
+    }
+    return -1
 }
 
 /** [area] is the whole grid; the curve gets what the rails leave. */
@@ -6264,6 +6342,7 @@ private fun DrawScope.drawEnvelope(
     module: PatchModule,
     accent: Color,
     measurer: TextMeasurer,
+    fontScale: Float,
 ) {
     val geo = envGeometry(area, module, d)
     val radius = ENV_NODE_RADIUS * d
@@ -6331,12 +6410,12 @@ private fun DrawScope.drawEnvelope(
     drawCircle(accent.copy(alpha = 0.5f), radius * 0.5f, origin)
 
     // The rails. Drawn after the shape so neither can be hidden behind the fill.
-    val count = module.segments.size
     val sustainRail = envSustainRail(area, d)
     val timeRail = envTimeRail(area, d)
+    val edges = envCellEdges(geo, module, envCellMin(d, fontScale))
     module.segments.forEachIndexed { i, seg ->
-        val top = envCell(sustainRail, count, i).deflate(2f * d)
-        val bottom = envCell(timeRail, count, i).deflate(2f * d)
+        val top = envCell(sustainRail, edges, i).deflate(2f * d)
+        val bottom = envCell(timeRail, edges, i).deflate(2f * d)
 
         // The sustain cell: filled where the envelope waits, an outline everywhere else, so
         // the one that holds it is legible without reading the dashes in the shape.
@@ -8027,6 +8106,8 @@ private fun DrawScope.drawPanel(
     sf: SfView? = null,
     /** The key sounding now, in cents from middle C, for a degree read as a note. */
     rootCents: Float = 0f,
+    /** The text size setting, for anything sized to hold a label. See ENV_CELL_MIN. */
+    fontScale: Float = 1f,
 ) {
     val corner = CornerRadius(14f * d, 14f * d)
 
@@ -8151,7 +8232,8 @@ private fun DrawScope.drawPanel(
         GridKind.DRONE -> drawDroneGrid(gridArea, d, module, scale, module.type.accent)
         GridKind.DOTS -> drawDotGrid(gridArea, d, module, scale, module.type.accent, measurer, playingStep)
         GridKind.PATTERN -> drawEuclidPattern(gridArea, d, module, module.type.accent, playingStep)
-        GridKind.ENVELOPE -> drawEnvelope(gridArea, d, module, module.type.accent, measurer)
+        GridKind.ENVELOPE ->
+            drawEnvelope(gridArea, d, module, module.type.accent, measurer, fontScale)
         GridKind.NONE -> {}
     }
     // Neither of these scrolls: a pattern is read-only and an envelope is capped to what

@@ -3296,8 +3296,30 @@ is the pattern this file has recorded from the beginning -- but the trace is new
 the third one from a guess to a measurement in a single reading. It stays in the debug build
 for the next one.
 
-Open still: the rails not lining up with the nodes, which is now the last known instance of
-the same problem and should probably be fixed on that basis rather than on its own.
+### The rails line up, 2026-09-22
+
+**Forrest's, and the right answer**: the cells should shrink and grow with their segments but
+keep a minimum width for the text. That is both halves of the problem at once -- the even
+division existed because a 5ms attack is half a percent of a one-second axis and its cell has
+to stay tappable, and the cost was that nothing lined up with anything.
+
+Allocated by water-filling: anything that would fall under the floor takes the floor and drops
+out, and what is left is shared among the rest by duration, repeatedly, until nothing else
+sinks. Where no floor binds the cells land exactly on the segment columns, so the `hold` chip's
+edge falls on its own dashed line and the last cell ends at the last node. Where the floors
+cannot all fit -- eight segments on a short envelope -- the row widens toward the panel edge,
+and past even that they share equally, which is where this started. The floor reads
+`Frame.fontScale`, like anything else sized to hold a label.
+
+Confirmed on the phone both ways: a two-segment envelope's cells land on its two columns with
+the dashed line exactly on the boundary, and setting the first segment to 5ms through the
+keypad leaves a small, legible "5ms" cell beside a long "965ms" one, the short cell wider than
+its own column by exactly the floor.
+
+**That closes the editor's habit of drawing one thing and targeting another**, which was three
+faults in three sessions: the rails beside the shape rather than above it, the curvature
+following the number rather than the line, and the fill that looked like the segment and was
+not a target. All three were found by a finger and none by the suite.
 
 Was open, now answered by use: whether a tap on a node should remove it. It mirrors the dot grid, where a tap
 toggles, but a dot costs one tap to put back and a node costs its curve and its time. It was
