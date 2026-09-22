@@ -4598,7 +4598,16 @@ fun PatchCanvas(
                             // and a level and a drag moves both; hanging the sustain and the
                             // keypad on that same node as well is what makes an envelope
                             // editor unusable with a finger, so they are elsewhere entirely.
-                            if (open.type.grid == GridKind.ENVELOPE && !onHistory && knob == null) {
+                            //
+                            // Scoped to the grid, and that is not a tidiness: this loop ends in
+                            // an unconditional return, so without the bounds check it swallowed
+                            // every touch on the screen -- including the tap *outside* the panel
+                            // that is the only way to close one. The panel became a room with no
+                            // door. Anything that returns unconditionally has to earn the
+                            // gesture first.
+                            if (open.type.grid == GridKind.ENVELOPE && !onHistory && knob == null &&
+                                gridArea.contains(down.position)
+                            ) {
                                 val d = frame.density
                                 val count = open.segments.size
 

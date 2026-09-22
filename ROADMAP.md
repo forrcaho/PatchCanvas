@@ -3197,6 +3197,23 @@ cells would make the attack's cell half a percent of the width -- so the fix is 
 cell and its span of the curve together. Not yet decided, and it is a decision about a picture,
 which is a decision for an eye.
 
+**And it shipped with no way out.** Forrest, the moment he had it: the open Env could not be
+closed. The breadcrumb is hidden while any panel is open -- by design, and true of every panel
+-- so the only exit is a tap on the border *outside* the panel, and the envelope's gesture loop
+was swallowing it. The loop ends in an unconditional `return@awaitEachGesture`, and nothing
+scoped it to the editor, so it claimed every touch on the screen and the panel became a room
+with no door. Scoped to `gridArea` now, and `EnvelopeTest` pins the geometry that makes the
+exit reachable.
+
+The general lesson is worth more than the fix: **a gesture loop that returns unconditionally
+has to earn the gesture first.** The dot grid's loop looks identical and is safe only because
+it is reached through a `cell != null` that is null everywhere outside the grid. The envelope's
+had no such gate and nothing in the suite could see it, because closing a panel is a touch on
+a composable and every test here is geometry. Found in one sentence by the person using it,
+which is the pattern this file has now recorded for the invisible rail highlight, four
+transients, the mic race, the knobs that never reached the engine, the velocity click, and now
+this.
+
 **Two smaller notes.** The grab radius is honest but the curve is thin: two deliberate attempts
 to bend a segment missed by about 32dp and did nothing at all, with no feedback to say why.
 And the release still cannot be *heard* on a synth -- the Seq capture shows the audio stop dead

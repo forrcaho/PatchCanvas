@@ -2,6 +2,7 @@ package io.github.forrcaho.patchcanvas
 
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -19,6 +20,16 @@ import org.junit.Test
 class EnvelopeTest {
 
     private val area = Rect(0f, 0f, 800f, 400f)
+
+    /** The reference device, as ModulationPanelTest uses it. */
+    private val frame = Frame(
+        canvas = Size(2404f, 1080f),
+        density = 2.4375f,
+        insetLeft = 160f,
+        insetTop = 54f,
+        insetRight = 0f,
+        insetBottom = 58f,
+    )
 
     private fun env(): Pair<Patch, PatchModule> {
         val patch = Patch()
@@ -238,6 +249,35 @@ class EnvelopeTest {
         assertNotNull(adopted)
         val inside = into.modules.first { it.type == Types.Env }
         assertEquals(shape, inside.segments.toList())
+    }
+
+    /**
+     * The way out of a panel is a tap outside it, and the envelope's editor must not be able
+     * to eat one.
+     *
+     * Its gesture loop ends in an unconditional return, so for one build it swallowed every
+     * touch on the screen and an open Env could not be closed at all -- no breadcrumb, since
+     * that is hidden while any panel is open, and no border tap either. The panel was a room
+     * with no door. The fix is that the loop only claims touches inside its own grid, and this
+     * is the geometry that makes the fix true: there is somewhere outside the panel to tap,
+     * and none of it is inside the grid.
+     */
+    @Test
+    fun `the envelope's editor cannot swallow the tap that closes the panel`() {
+        val panel = panelRect(frame)
+        val grid = panelGrid(panel, frame.density, Types.Env)
+        assertTrue("the grid is inside the panel", panel.contains(grid.topLeft))
+
+        // The border the close is measured against: points on the canvas, outside the panel.
+        val outside = listOf(
+            Offset(frame.insetLeft + 1f, frame.canvas.height / 2f),
+            Offset(frame.canvas.width / 2f, frame.insetTop + 1f),
+            Offset(frame.canvas.width / 2f, frame.canvas.height - frame.insetBottom - 1f),
+        )
+        outside.forEach {
+            assertFalse("$it must be outside the panel, or there is no way out", panel.contains(it))
+            assertFalse("$it must not be claimed by the envelope's grid", grid.contains(it))
+        }
     }
 
     /** Anything that changes what toJson emits changes what is undoable; see ReplaceWithTest. */
