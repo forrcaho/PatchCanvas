@@ -2531,7 +2531,7 @@ the last clearly blue shade that `ModuleColorTest` passes. Five note processors 
 all fit in the greens at a 15-point border distance; that wants deciding when they land,
 not by picking whatever passes.
 
-## Phase 10 -- PatchMatryoshka: the poly subpatch
+## Phase 10 -- PatchGarden: the poly subpatch
 
 **Begun 2026-09-20, on its own branch, because it may not turn out better.** Forrest tried
 to put an envelope on an FM's modulation index and found he could not, and the reason was
@@ -2559,11 +2559,18 @@ true. Neither addressed per-note patching, because nothing had tried to do it ye
 
 The name settles on **subpatch**, replacing "group" throughout -- "group" said what the
 feature did to a selection, and the thing itself is a patch inside a patch. **Superpatch**
-is the parent, for prose; it has nowhere to appear on screen yet. The app is
-**PatchMatryoshka**: a patch nests inside a patch nests inside a patch, and "canvas" named
-the surface at a time when the surface was the idea. The launcher label and the docs only --
-changing the `applicationId` makes it a different app to Android, with no update path from
-an installed copy.
+is the parent, for prose; it has nowhere to appear on screen yet. The app is renamed:
+"canvas" named the surface at a time when the surface was the idea, and the canvas is still
+there and still the thing you touch, but it is no longer what distinguishes this from any
+other patcher. The launcher label and the docs only -- changing the `applicationId` makes it
+a different app to Android, with no update path from an installed copy.
+
+**The name was PatchMatryoshka for two days and is now PatchGarden.** Matryoshka named the
+nesting, which is the mechanism; it is recorded here because the rename is in the history
+either way, and because it pinned down what a rename costs -- the launcher label,
+`rootProject.name` and the docs, and nothing else. That the second one was as cheap as the
+first is the useful part: keeping the `applicationId` and the package on the original name
+is what makes the app's name a label rather than an identity.
 
 The goal behind the rename is that a subpatch should be **the first thing anyone reaches
 for**, not the thing you tidy up with afterwards. So both kinds can be made empty from the

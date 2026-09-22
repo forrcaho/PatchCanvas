@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "PatchMatryoshka"
+rootProject.name = "PatchGarden"
 include(":app")

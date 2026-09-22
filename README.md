@@ -1,14 +1,15 @@
-# PatchMatryoshka
+# PatchGarden
 
 A touch-first modular synthesizer for Android, built with Jetpack Compose.
 
-Named for what it is built around: a patch nests inside a patch nests inside a patch.
-A **subpatch** is a box holding a patch of its own, with the same rails and the same
+What it is built around: a patch nests inside a patch nests inside a patch. A
+**subpatch** is a box holding a patch of its own, with the same rails and the same
 canvas inside it, and a **poly subpatch** is one the engine stamps out a copy of per
 note -- monophonic on the inside, polyphonic from outside. The app was called
-PatchCanvas while the canvas was the idea; the `applicationId` and the
-`io.github.forrcaho.patchcanvas` package still are, because changing those would make
-this a different app to Android with no update path from an installed copy.
+PatchCanvas while the canvas was the idea, and briefly PatchMatryoshka for the nesting;
+the `applicationId` and the `io.github.forrcaho.patchcanvas` package are still the
+original, because changing those would make this a different app to Android with no
+update path from an installed copy.
 
 The interaction model departs from the drag-a-cable convention in three ways
 (see the comment at the top of `PatchCanvas.kt`):

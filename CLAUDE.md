@@ -2,11 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-PatchMatryoshka is a touch-first modular synthesizer for Android: a Compose canvas for
+PatchGarden is a touch-first modular synthesizer for Android: a Compose canvas for
 patching, and a C++/Oboe audio engine behind it. It was PatchCanvas until the redesign
-around subpatches; the `applicationId`, the package and `PatchCanvas.kt` still carry the
-old name, because changing the `applicationId` makes it a different app to Android and an
-installed copy cannot update into it. `ROADMAP.md` carries the plan, the phase-by-phase
+around subpatches, and PatchMatryoshka briefly after it; the `applicationId`, the package
+and `PatchCanvas.kt` still carry the original name, because changing the `applicationId`
+makes it a different app to Android and an installed copy cannot update into it. **Only
+the launcher label, `rootProject.name` and the docs ever carry the app's name** -- a
+rename touches those four places and nothing else. `ROADMAP.md` carries the plan, the phase-by-phase
 reasoning, and the decisions that were made and reversed — read it before proposing
 direction. This file is the operating manual.
 
