@@ -3154,17 +3154,61 @@ the byte-identical round-trip test, which is the one this file already credits w
 the tuning and the tempo. They share `PatchModule.copyGridFrom` now -- one function, so the
 next kind of grid is added in one place rather than in three and a half.
 
-**Not verified on hardware.** 360 JVM tests, 104 graph checks and 334 node checks pass, lint
-is clean and the APK builds, and none of that is the same as playing it -- which this file has
-said about every feature in the project and been right about every time. No device was
-attached when this was written. The three things most likely to be wrong are all of the kind a
-finger finds in a minute: whether eight nodes across a phone in landscape really are a
-fingertip apart, whether a drag that moves both axes at once is controllable or skittish, and
-whether `ENV_CURVE_TRAVEL` at 90dp bends too fast or too slow.
+### On the phone, 2026-09-22
 
-Open and deliberately unanswered until then: whether a tap on a node should remove it. It
-mirrors the dot grid, where a tap toggles, but a dot costs one tap to put back and a node
-costs its curve and its time.
+**Every gesture works, the shape is exact, and one thing looks wrong.**
+
+Driven on the Pixel 10 Pro XL with a purpose-built patch (`EnvTestPatchGen`): Seq into Osc
+into Amp, the same Seq opening a five-segment Env on the Amp's modulation port, so what is
+heard is the envelope and nothing else. All six of the editor's actions confirmed against
+`PatchSync`: dragging a node moves time and level together and every frame reaches the engine;
+dragging a segment bends it and clamps at 1.0; a tap on a segment splits it; a tap on a node
+removes it and clears the trailing slot; a tap on a time cell opens the keypad, where **typing
+12 gave `seg 102[0] = 0.012s`** -- the roadmap's own sentence, executed; and a tap on a
+sustain cell moves the hold with exactly two commands, one gaining it and one losing it. Undo
+restores the whole shape through the model. The autosave round-trips and reloads identically.
+Engine throughout: MMAP exclusive, 96-frame burst, ~5ms, **zero xruns**.
+
+**The refusal behaved.** The format-13 "Ear tests" patch on the device was refused on the
+version alone and kept at `patch.rejected.json`, byte for byte. A refusal is still not a
+delete.
+
+**The shape is exact, and proving it needed the node rather than the capture.** Measured off
+`EnvNode` on the host, the listening patch's five segments read 1.0000 / 0.3500 / 0.7499 /
+0.6001 and then hold 0.6000 forever -- each within 0.0001 of what was asked. The phone capture
+appeared to disagree, reading the dip at 0.43 where 0.35 was asked, and the capture was the
+one that was wrong: `Out`'s limiter squashes the attack peak, and normalising against a
+limited peak inflates everything measured below it. The giveaway was two captures side by
+side -- a sustain of 0.6 read 0.3257 and an attack of 1.0 read 0.3813, a ratio of 1.17 where
+1.67 was due. **Another entry for the list of times a capture accused the engine and was
+wrong**, after the sawtooth's own edges and the Bluetooth packet loss. `find_clicks.py`
+likewise reported 63 discontinuities, every one of them a step of 0.0006 against a peak of
+0.38 -- the detection floor, not a click. The verdict line reads spacing and cannot read
+magnitude.
+
+**What looks wrong: the rails do not line up with the nodes.** Both are divided evenly by
+segment, deliberately, so that a 5ms attack still has a tappable cell. On screen the cost is
+larger than the argument made it sound: the `hold` chip sits nowhere near its own dashed line,
+and the last cell floats over empty canvas past the end of the curve, because the time axis is
+a round number above the envelope's length and the cells are not. The eye expects column N to
+stand under node N and it does not. The tappability argument still holds -- variable-width
+cells would make the attack's cell half a percent of the width -- so the fix is probably to
+*tie* them rather than to move them: a faint leader from each cell to its node, or shading the
+cell and its span of the curve together. Not yet decided, and it is a decision about a picture,
+which is a decision for an eye.
+
+**Two smaller notes.** The grab radius is honest but the curve is thin: two deliberate attempts
+to bend a segment missed by about 32dp and did nothing at all, with no feedback to say why.
+And the release still cannot be *heard* on a synth -- the Seq capture shows the audio stop dead
+at note-off, because the Osc is freed the moment its gate ramp closes, which is the Phase 10
+finding exactly. Half of every envelope drawn here is currently unhearable in any patch that
+does not outlive its own note. Delay and reverb are the answer and they are the next thing in
+this phase.
+
+Still open: whether a tap on a node should remove it. It mirrors the dot grid, where a tap
+toggles, but a dot costs one tap to put back and a node costs its curve and its time. It was
+not hit by accident once while driving the editor, which is weak evidence and the only kind
+available until it is played.
 
 ### The fm port comes back to Osc
 
