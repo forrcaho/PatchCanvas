@@ -39,6 +39,7 @@ adb shell am force-stop io.github.forrcaho.patchcanvas
 adb shell am start -n io.github.forrcaho.patchcanvas/.MainActivity
 adb logcat -d -s PatchAudio:V      # engine: stream state, latency, xruns
 adb logcat -d -s PatchSync:V       # every command crossing to the graph (debug builds)
+adb logcat -d -s PatchGesture:V    # what the envelope editor made of each touch (debug builds)
 adb shell run-as io.github.forrcaho.patchcanvas cat files/patch.json
 adb shell ls /sdcard/Android/data/io.github.forrcaho.patchcanvas/files/scales   # tunings
 adb shell ls /sdcard/Android/data/io.github.forrcaho.patchcanvas/files/subpatches
@@ -325,6 +326,24 @@ to drag them -- one patch went from six to two without anyone meaning it. A remo
 one tap to put back and a removed node costs its time and its curve, which is the asymmetry
 that makes the same gesture right in one grid and wrong in the other. Removal is a long press
 now; a tap on a node does nothing at all, and a tap on the *line* still adds one.
+
+**A target must match what is drawn.** The envelope is drawn as a *filled* area under its
+curve, and for two builds only a 53px band around the stroke responded -- so a finger landing
+in the middle of the fill, which is the part that looks like the segment, did nothing at all.
+**A segment owns its whole column** now. A *tap* still has to point at the line, because
+adding a node changes what the envelope is made of where bending it is an adjustment; that is
+the same line that makes removing one a long press. This is the third time this editor has
+drawn one thing and targeted another -- the rails do not line up with the nodes either -- so
+treat "what is drawn here, and is that what answers a finger?" as the question to ask of any
+new one.
+
+**`PatchGesture:V` says what the editor made of a touch.** Debug builds log, per touch, where
+it landed, whether that resolved to a node, a segment, a rail cell or nothing, the distance to
+the two nearest nodes and how far off the curve it was. The same habit as `PatchSync` tracing
+every command: "what did my finger actually hit" is otherwise answered by guessing, and it is
+what finally located a fault that two rounds of reading the code and one device pass had
+missed -- three touches logged at 200 to 300px below a line the user believed they were on.
+**Ask for the trace before theorising about a gesture.**
 
 **Up bends the line up, whichever way the segment travels.** Curvature's sign is a fact
 about *shape* -- leaves fast, arrives slow -- not about the screen: that shape puts a rising

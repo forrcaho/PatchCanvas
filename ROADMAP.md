@@ -3266,7 +3266,38 @@ and concluded the control worked. **Checking that the number moved is not checki
 line followed the finger.** The test asserts the drawn midpoint, uphill and down, and
 mutation-checks against the old sign.
 
-Open still: the rails not lining up with the nodes, from the session before this one.
+**Third round, and this time the phone was asked instead of the code.** Same complaint --
+the last segment's curvature would not change -- after two fixes that were both real and
+neither of which was it. Rather than theorise again, a `PatchGesture` trace went into the
+debug build: every touch in the editor logs what it landed on, what the nearest nodes were and
+how far off the curve it was. Three attempts came back identical:
+
+```
+down (1150,808) -> NOTHING | nearest n0@519px n1@541px | off-curve - | grab 53px
+down (1131,874) -> NOTHING | nearest n1@555px n0@581px | off-curve - | grab 53px
+down (1140,897) -> NOTHING | nearest n1@546px n0@604px | off-curve - | grab 53px
+```
+
+Every one of them 200 to 300px *below* a line drawn at y=595, and every one inside the shaded
+fill. **The envelope is drawn as a filled area and only its outline was a target.** The fill
+is the part that looks like the segment and it is the part a finger goes for; it did nothing,
+silently, which is exactly what "the controls are flaky" describes.
+
+A segment owns its whole column now. A tap still has to point at the line, because adding a
+node changes what the envelope is made of where bending it is an adjustment -- the same line
+that makes removal a long press, and worth holding because the previous round's complaint was
+about changes nobody asked for.
+
+**What this says about the last three sessions.** All three faults were the same mistake
+wearing different clothes: drawing one thing and targeting another. The rails do not line up
+with the nodes; the curvature followed the number rather than the line; the fill looks like
+the segment and was not it. Each was found by a person's finger and none by the suite, which
+is the pattern this file has recorded from the beginning -- but the trace is new, and it took
+the third one from a guess to a measurement in a single reading. It stays in the debug build
+for the next one.
+
+Open still: the rails not lining up with the nodes, which is now the last known instance of
+the same problem and should probably be fixed on that basis rather than on its own.
 
 Was open, now answered by use: whether a tap on a node should remove it. It mirrors the dot grid, where a tap
 toggles, but a dot costs one tap to put back and a node costs its curve and its time. It was

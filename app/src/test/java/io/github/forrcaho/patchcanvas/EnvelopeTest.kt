@@ -178,21 +178,55 @@ class EnvelopeTest {
         )
     }
 
-    /** A node wins over the line it sits on, so the two never compete for one finger. */
+    /**
+     * A segment owns its whole column, fill included, and a node still wins near itself.
+     *
+     * The fill is the part that looks like the segment and the part a finger goes for. For
+     * two builds only a band around the stroke responded, so a touch in the middle of the
+     * fill did nothing -- traced from the phone as three attempts 200 to 300px below the
+     * line, each reported as NOTHING. Drawing one thing and targeting another is the failure
+     * this editor keeps finding new ways to make.
+     */
     @Test
-    fun `a segment is grabbed along its curve, away from the nodes`() {
+    fun `a segment owns its whole column, including the fill under it`() {
         val (_, env) = env()
         env.segments.clear()
-        env.segments.add(EnvSegment(1f, 1f, 0.7f))
+        // Straight, so the midpoint sits halfway up and there is room under it to aim at.
+        env.segments.add(EnvSegment(0.1f, 1f, 0f))
+        env.segments.add(EnvSegment(0.1f, 0f, 0f))
         val geo = envGeometry(area, env, 1f)
 
-        val midX = geo.x(0.5f)
-        val onCurve = Offset(midX, envCurveY(geo, env, 0, 0.5f))
-        assertEquals("on the bent line", 0, envSegmentAt(geo, env, onCurve, 1f))
-        // The straight chord at this x is far below the bend, which is the point of testing
-        // against the curve rather than against a line between the two ends.
-        val chord = geo.y(0.5f)
-        assertTrue("and the curve is well above its own chord", onCurve.y < chord - 40f)
+        val times = env.segmentTimes
+        val midX = (geo.x(times[0]) + geo.x(times[1])) / 2f
+        val onLine = envCurveY(geo, env, 1, 0.5f)
+        val floor = geo.y(0f)
+
+        // Deep in the fill: three quarters of the way from the line down to the floor.
+        val inFill = Offset(midX, onLine + 0.75f * (floor - onLine))
+        assertTrue("the probe is well below the line", inFill.y > onLine + 40f)
+        assertEquals("and the fill still grabs the segment", 1, envSegmentAt(geo, env, inFill))
+
+        // Above the line too: the column is the target, not the ink.
+        assertEquals(1, envSegmentAt(geo, env, Offset(midX, geo.area.top + 4f)))
+
+        // Each column is its own segment, and past the envelope's end nothing is.
+        assertEquals(0, envSegmentAt(geo, env, Offset(geo.x(times[0]) - 20f, onLine)))
+        assertEquals(-1, envSegmentAt(geo, env, Offset(geo.x(times[1]) + 40f, onLine)))
+
+        // But a *tap* still has to point at the line, so the fill cannot grow a node by
+        // accident: bending is an adjustment, adding one changes what the envelope is.
+        assertTrue("on the line", envOnCurve(geo, env, 1, Offset(midX, onLine), 1f))
+        assertFalse("in the fill", envOnCurve(geo, env, 1, inFill, 1f))
+    }
+
+    /** A node still wins over the column it sits in, so the two never compete for a finger. */
+    @Test
+    fun `a node wins over its own column`() {
+        val (_, env) = env()
+        val geo = envGeometry(area, env, 1f)
+        envNodes(geo, env).forEachIndexed { i, p ->
+            assertEquals("node $i is grabbed at its own position", i, envNodeAt(geo, env, p, 1f))
+        }
     }
 
     /** The rails are what keep the sustain and the keypad off the shape. See ENV_RAIL. */

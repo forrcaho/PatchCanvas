@@ -4637,6 +4637,9 @@ fun PatchCanvas(
                                 val sustainCell =
                                     envCellAt(envSustainRail(gridArea, d), count, down.position)
                                 if (sustainCell >= 0) {
+                                    if (BuildConfig.DEBUG) {
+                                        android.util.Log.d("PatchGesture", "sustain rail cell $sustainCell")
+                                    }
                                     waitForUpRelease()
                                     open.setSustain(sustainCell)
                                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -4645,6 +4648,9 @@ fun PatchCanvas(
                                 val timeCell =
                                     envCellAt(envTimeRail(gridArea, d), count, down.position)
                                 if (timeCell >= 0) {
+                                    if (BuildConfig.DEBUG) {
+                                        android.util.Log.d("PatchGesture", "time rail cell $timeCell")
+                                    }
                                     waitForUpRelease()
                                     interaction = Interaction.Typing(
                                         NumberTarget.SegmentTime(open.id, timeCell),
@@ -4657,8 +4663,14 @@ fun PatchCanvas(
                                 // A node wins over the line it sits on, so the two never
                                 // compete for the same finger.
                                 val segment =
-                                    if (node >= 0) -1 else envSegmentAt(geo, open, down.position, d)
+                                    if (node >= 0) -1 else envSegmentAt(geo, open, down.position)
                                 val grabbed = open.segments.getOrNull(if (node >= 0) node else segment)
+                                if (BuildConfig.DEBUG) {
+                                    android.util.Log.d(
+                                        "PatchGesture",
+                                        traceEnvTouch(open, geo, down.position, d, node, segment),
+                                    )
+                                }
                                 // Which way this segment travels, read once: only its curve
                                 // changes under the drag, so where it starts from cannot move.
                                 val segmentRises = grabbed != null && segment >= 0 &&
@@ -4742,10 +4754,25 @@ fun PatchCanvas(
                                     }
                                     change.consume()
                                 }
-                                // A tap adds a node where the line was tapped. A tap on a
-                                // node itself does nothing at all, which is the point: the
-                                // only destructive thing in here costs a deliberate hold.
-                                if (!envMoved && node < 0 && segment >= 0) {
+                                if (BuildConfig.DEBUG) {
+                                    val what = when {
+                                        !envMoved -> "TAP"
+                                        node >= 0 -> "moved NODE $node"
+                                        segment >= 0 ->
+                                            "bent SEGMENT $segment to " +
+                                                "${open.segments.getOrNull(segment)?.curve}"
+                                        else -> "drag hit NOTHING"
+                                    }
+                                    android.util.Log.d("PatchGesture", "  ...$what")
+                                }
+                                // A tap adds a node, and unlike a drag it has to be pointing
+                                // at the line: a drag owns the whole column because bending is
+                                // an adjustment, where adding a node changes what the envelope
+                                // is made of. A tap on a node itself does nothing at all --
+                                // the only destructive thing in here costs a deliberate hold.
+                                if (!envMoved && node < 0 && segment >= 0 &&
+                                    envOnCurve(geo, open, segment, down.position, d)
+                                ) {
                                     val times = open.segmentTimes
                                     val left = geo.x(if (segment == 0) 0f else times[segment - 1])
                                     val right = geo.x(times[segment])
@@ -6117,6 +6144,40 @@ internal fun envFrom(module: PatchModule, index: Int): Float =
     if (index <= 0) 0f else module.segments[index - 1].level
 
 /** Which node [at] is grabbing, or -1. Nearest wins, so two close together are both reachable. */
+/**
+ * What the envelope editor made of a touch, for a debug build's logcat.
+ *
+ * `adb logcat -s PatchGesture:V`, the same habit as PatchSync tracing every command that
+ * crosses to the engine: "what did my finger actually land on" is otherwise answered by
+ * guessing, and this editor has now been wrong twice in ways that a report could describe
+ * but not locate.
+ */
+internal fun traceEnvTouch(
+    module: PatchModule, geo: EnvGeometry, at: Offset, d: Float, node: Int, segment: Int,
+): String {
+    val nodes = envNodes(geo, module)
+    val near = nodes.mapIndexed { i, p -> i to (p - at).getDistance() }
+        .sortedBy { it.second }
+        .take(2)
+        .joinToString(" ") { "n${it.first}@${it.second.toInt()}px" }
+    val curveGap = if (segment >= 0) {
+        val times = module.segmentTimes
+        val left = geo.x(if (segment == 0) 0f else times[segment - 1])
+        val right = geo.x(times[segment])
+        val t = ((at.x - left) / (right - left)).coerceIn(0f, 1f)
+        "${(at.y - envCurveY(geo, module, segment, t)).toInt()}px"
+    } else {
+        "-"
+    }
+    val got = when {
+        node >= 0 -> "NODE $node"
+        segment >= 0 -> "SEGMENT $segment"
+        else -> "NOTHING"
+    }
+    return "down (${at.x.toInt()},${at.y.toInt()}) -> $got | nearest $near | " +
+        "off-curve $curveGap | grab ${(ENV_GRAB * d).toInt()}px | segs ${module.segments.size}"
+}
+
 internal fun envNodeAt(geo: EnvGeometry, module: PatchModule, at: Offset, d: Float): Int {
     val grab = ENV_GRAB * d
     var best = -1
@@ -6139,17 +6200,53 @@ internal fun envCurveY(geo: EnvGeometry, module: PatchModule, index: Int, t: Flo
 }
 
 /**
- * Which segment's line [at] is on, or -1. Checked against the curve rather than a straight
- * chord, so a bent segment is grabbed where it is drawn and not where it would have been.
+ * Which segment [at] belongs to, or -1 past the end of the envelope.
+ *
+ * **A segment owns its whole column**, not a band around its line. That is the second thing
+ * this editor got wrong by drawing one thing and targeting another: the shape is drawn as a
+ * *filled* area under the curve, which is the part that looks like the segment and is the
+ * part a finger goes for -- and for two builds only a 53px band around the stroke responded,
+ * so touches landing in the middle of the fill did nothing at all. Traced from the phone:
+ * three attempts in a row at (1140, 808)-(1140, 897), each 200 to 300px below a stroke that
+ * was drawn at y=595, each reported as NOTHING.
+ *
+ * Every x inside the envelope belongs to exactly one segment, so a column is unambiguous, and
+ * a node still wins near itself. Past the last node there is no envelope, and nothing there
+ * is a target.
  */
-internal fun envSegmentAt(geo: EnvGeometry, module: PatchModule, at: Offset, d: Float): Int {
+/**
+ * Whether [at] is near enough to segment [index]'s drawn line to be *pointing* at it.
+ *
+ * The column is what a drag owns, because bending is an adjustment and wants a big target.
+ * Adding a node is structural, so it is pointed at -- the same line this editor already draws
+ * between adjusting a thing and changing what things there are, which is why removing one
+ * costs a long press. A tap in the middle of the fill does nothing rather than quietly
+ * growing the envelope a node.
+ *
+ * Measured against the curve rather than a straight chord, so a bent segment is pointed at
+ * where it is drawn and not where it would have been.
+ */
+internal fun envOnCurve(
+    geo: EnvGeometry,
+    module: PatchModule,
+    index: Int,
+    at: Offset,
+    d: Float,
+): Boolean {
+    val times = module.segmentTimes
+    val left = geo.x(if (index == 0) 0f else times[index - 1])
+    val right = geo.x(times[index])
+    if (right <= left) return false
+    val t = ((at.x - left) / (right - left)).coerceIn(0f, 1f)
+    return abs(at.y - envCurveY(geo, module, index, t)) <= ENV_GRAB * d
+}
+
+internal fun envSegmentAt(geo: EnvGeometry, module: PatchModule, at: Offset): Int {
     val times = module.segmentTimes
     for (i in module.segments.indices) {
         val left = geo.x(if (i == 0) 0f else times[i - 1])
         val right = geo.x(times[i])
-        if (at.x < left || at.x > right || right <= left) continue
-        val t = ((at.x - left) / (right - left)).coerceIn(0f, 1f)
-        if (abs(at.y - envCurveY(geo, module, i, t)) <= ENV_GRAB * d) return i
+        if (right > left && at.x >= left && at.x <= right) return i
     }
     return -1
 }
