@@ -4659,6 +4659,10 @@ fun PatchCanvas(
                                 val segment =
                                     if (node >= 0) -1 else envSegmentAt(geo, open, down.position, d)
                                 val grabbed = open.segments.getOrNull(if (node >= 0) node else segment)
+                                // Which way this segment travels, read once: only its curve
+                                // changes under the drag, so where it starts from cannot move.
+                                val segmentRises = grabbed != null && segment >= 0 &&
+                                    grabbed.level >= envFrom(open, segment)
                                 var envMoved = false
                                 var lifted = false
                                 var removed = false
@@ -4727,13 +4731,12 @@ fun PatchCanvas(
                                             ),
                                         )
                                     } else if (envMoved && grabbed != null && segment >= 0) {
-                                        // Up bends the line up, which is the direction the
-                                        // finger is pushing it.
                                         open.setSegment(
                                             segment,
                                             grabbed.copy(
-                                                curve = grabbed.curve -
-                                                    travel.y / (ENV_CURVE_TRAVEL * d),
+                                                curve = envCurveAfterDrag(
+                                                    grabbed.curve, travel.y, segmentRises, d,
+                                                ),
                                             ),
                                         )
                                     }
@@ -5996,6 +5999,28 @@ internal const val ENV_GRAB = 22f
  * costs nothing -- a second drag carries on from the first.
  */
 internal const val ENV_CURVE_TRAVEL = 200f
+
+/**
+ * The curvature a vertical drag of [dy] pixels leaves, starting from [start].
+ *
+ * **Up bends the line up, whichever way the segment travels**, and that needs [rising]
+ * because the curvature's own sign is a fact about *shape* -- leaves fast, arrives slow --
+ * not about the screen. That shape puts the middle of a rising segment high and the middle
+ * of a falling one low, so mapping the finger straight onto the number moves the line the
+ * wrong way on exactly half of all segments. Which is what happened: on a release falling to
+ * zero, dragging down raised the line, and kept raising it until the number hit -1 and the
+ * control went dead. Reported as two faults and it was one.
+ *
+ * The trap for anyone changing this: checking that the *number* moved is not checking that
+ * the *line* followed the finger. The first was verified on hardware and the second was not.
+ *
+ * Relative to [start] rather than absolute, so a second drag carries on from the first and a
+ * deliberately slow rate costs nothing.
+ */
+internal fun envCurveAfterDrag(start: Float, dy: Float, rising: Boolean, density: Float): Float {
+    val towardsFinger = if (rising) -1f else 1f
+    return (start + towardsFinger * dy / (ENV_CURVE_TRAVEL * density)).coerceIn(-1f, 1f)
+}
 
 /**
  * The time axis an envelope is drawn against: a round number at or above its own length,

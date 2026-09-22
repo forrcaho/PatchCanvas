@@ -326,6 +326,15 @@ one tap to put back and a removed node costs its time and its curve, which is th
 that makes the same gesture right in one grid and wrong in the other. Removal is a long press
 now; a tap on a node does nothing at all, and a tap on the *line* still adds one.
 
+**Up bends the line up, whichever way the segment travels.** Curvature's sign is a fact
+about *shape* -- leaves fast, arrives slow -- not about the screen: that shape puts a rising
+segment's middle high and a falling segment's middle low, so mapping the finger straight onto
+the number moves the line backwards on half of all segments. `envCurveAfterDrag` takes
+`rising` for exactly this. The trap it was found by is worth more than the rule: **checking
+that the number moved is not checking that the line followed the finger**, and a device pass
+that read `PatchSync` and never looked at the picture confirmed the first while the second was
+wrong. `EnvelopeTest` now asserts the drawn midpoint, uphill and down.
+
 **A control whose whole range fits inside one drag reads as broken.** `ENV_CURVE_TRAVEL` was
 90dp, which put the curvature's full -1 to +1 inside 439px against a curve area 631px tall, so
 any real drag slammed it to a limit and left it there. The report was "the curvature won't

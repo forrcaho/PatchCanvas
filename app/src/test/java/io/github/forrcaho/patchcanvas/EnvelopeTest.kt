@@ -252,6 +252,45 @@ class EnvelopeTest {
     }
 
     /**
+     * A drag bends the line the way the finger went, on a falling segment as well as a
+     * rising one.
+     *
+     * Asserted against the drawn *midpoint* rather than against the curvature number, which
+     * is the whole point: curvature's sign is a fact about shape -- leaves fast, arrives slow
+     * -- and that shape puts a rising segment's middle high and a falling segment's middle
+     * low. Mapping the finger onto the number therefore moved the line backwards on half of
+     * all segments. It shipped because the device check confirmed the number moved and never
+     * looked at where the line went.
+     */
+    @Test
+    fun `a drag bends the line the way the finger went, uphill or down`() {
+        val d = frame.density
+        listOf(
+            "rising" to listOf(EnvSegment(0.2f, 1f, 0f)),
+            "falling" to listOf(EnvSegment(0.2f, 1f, 0f), EnvSegment(0.2f, 0f, 0f)),
+        ).forEach { (name, shape) ->
+            val (_, env) = env()
+            env.segments.clear()
+            env.segments.addAll(shape)
+            val index = env.segments.size - 1
+            val geo = envGeometry(area, env, d)
+            val before = envCurveY(geo, env, index, 0.5f)
+
+            // Downwards, in screen pixels, which is what y increasing means.
+            val rises = env.segments[index].level >= envFrom(env, index)
+            env.setSegment(
+                index,
+                env.segments[index].copy(curve = envCurveAfterDrag(0f, 120f, rises, d)),
+            )
+            val after = envCurveY(envGeometry(area, env, d), env, index, 0.5f)
+            assertTrue(
+                "$name: dragging down must lower the line, was $before -> $after",
+                after > before,
+            )
+        }
+    }
+
+    /**
      * Bending a segment takes a deliberate drag, not a flick.
      *
      * ENV_CURVE_TRAVEL was 90dp, which put the whole range from -1 to +1 inside 439px on the

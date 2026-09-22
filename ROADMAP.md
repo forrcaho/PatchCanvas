@@ -3250,6 +3250,22 @@ Catching the wrong one compiles, never matches, and lets the exception end the g
 the feature was simply inert. The canvas loop three hundred lines above has always caught the
 right one. Found by logging the exception's class name, after the code read as correct twice.
 
+**And then the same complaint again, from the other end of the same mistake.** The last
+segment's curvature would not move, and before it stopped it moved *the wrong way*: dragged
+down and to the left, the middle of the segment went up. That second sentence is the entire
+diagnosis. Curvature's sign is a fact about shape -- leaves fast, arrives slow -- and that
+shape puts a rising segment's middle high and a falling segment's middle **low**. The drag
+mapped the finger onto the number, so on any falling segment the line went the wrong way, and
+kept going until the number reached -1 and the control looked dead. One fault, reported as
+two, twice: the saturation fixed in the previous pass was this same bug pushing the value into
+a corner.
+
+`envCurveAfterDrag` takes the segment's direction now. What is worth keeping is how it
+survived a device pass: the earlier check watched `PatchSync` report the curvature changing
+and concluded the control worked. **Checking that the number moved is not checking that the
+line followed the finger.** The test asserts the drawn midpoint, uphill and down, and
+mutation-checks against the old sign.
+
 Open still: the rails not lining up with the nodes, from the session before this one.
 
 Was open, now answered by use: whether a tap on a node should remove it. It mirrors the dot grid, where a tap
