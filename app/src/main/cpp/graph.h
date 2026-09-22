@@ -102,14 +102,29 @@ public:
     bool postConnectMod(int64_t srcId, int32_t srcPort, int64_t dstId, int32_t paramIndex);
     /** Unpatches a parameter's modulator, fading back to the knob's own value. */
     bool postDisconnectMod(int64_t srcId, int32_t srcPort, int64_t dstId, int32_t paramIndex);
+    /**
+     * One entry of a node's slot-indexed list. See [SlotValue].
+     *
+     * The three helpers under it are the typed way in, and the only reason they exist: a
+     * call site reading `postSetDot(id, 3, step, degree, length, velocity)` says what it
+     * means where a packed struct literal would not.
+     */
+    bool postSetSlot(int64_t id, const SlotValue &slot);
+
     /** One step of a sequence, as a degree of the patch's scales. */
-    bool postSetStep(int64_t id, int32_t index, int32_t degree, bool gate);
+    bool postSetStep(int64_t id, int32_t index, int32_t degree, bool gate) {
+        return postSetSlot(id, stepSlot(index, degree, gate));
+    }
     /** One dot of a dot sequencer, by slot; a length of 0 clears the slot. */
     bool postSetDot(int64_t id, int32_t slot, int32_t step, int32_t degree, int32_t length,
-                    float velocity);
+                    float velocity) {
+        return postSetSlot(id, dotSlot(slot, step, degree, length, velocity));
+    }
     /** One segment of an envelope, by slot; a time of 0 clears the slot. */
     bool postSetSegment(int64_t id, int32_t slot, float time, float level, float curve,
-                        bool sustain);
+                        bool sustain) {
+        return postSetSlot(id, segmentSlot(slot, time, level, curve, sustain));
+    }
     /**
      * Replaces the patch's scales with [list], which the graph takes ownership of. Built
      * by the caller off the audio thread and swapped in whole; the list it replaces comes
@@ -175,8 +190,8 @@ public:
 
 private:
     enum class CommandType : int32_t {
-        Add, Remove, Connect, Disconnect, SetParam, SetStep, SetTempo, ResetTransport,
-        SetScales, SetModRange, ConnectMod, DisconnectMod, SetResource, SetDot, SetSegment,
+        Add, Remove, Connect, Disconnect, SetParam, SetTempo, ResetTransport,
+        SetScales, SetModRange, ConnectMod, DisconnectMod, SetResource, SetSlot,
     };
 
     struct Command {
@@ -193,22 +208,12 @@ private:
         /** SetModRange only: the high end, and whether the sweep between them is geometric. */
         float high = 0.0f;
         bool exponential = false;
-        /** SetStep only: whether the step sounds, and its degree. */
-        bool gate = false;
-        int32_t degree = 0;
         /** SetScales only: the list to swap in. */
         ScaleList *scales = nullptr;
         /** SetResource only: what the node takes. */
         Resource *resource = nullptr;
-        /** SetDot only, beside paramIndex (the slot) and degree: where it starts and how long. */
-        int32_t step = 0;
-        int32_t length = 0;
-        /**
-         * SetSegment only: how the segment bends. The third float a segment needs, where
-         * value carries its level and high its time -- a curve had nowhere else to ride,
-         * and four bytes on a POD in a queue is not worth a bit field to save.
-         */
-        float curve = 0.0f;
+        /** SetSlot only: one entry of a step, dot or segment list, tagged with which. */
+        SlotValue slot;
     };
 
     /**

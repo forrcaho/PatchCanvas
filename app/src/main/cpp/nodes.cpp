@@ -160,9 +160,9 @@ void EnvNode::prepare(int32_t sampleRate) {
     // The shape that arrives before the interface has said anything, and the one every
     // Env has had: a short attack, a moderate decay, a sustain and a release. It is here
     // so a node that is added and heard in the same block is not silent.
-    setSegment(0, 0.005f, 1.0f, 0.6f, false);
-    setSegment(1, 0.12f, 0.6f, 0.6f, true);
-    setSegment(2, 0.25f, 0.0f, 0.6f, false);
+    setSlot(segmentSlot(0, 0.005f, 1.0f, 0.6f, false));
+    setSlot(segmentSlot(1, 0.12f, 0.6f, 0.6f, true));
+    setSlot(segmentSlot(2, 0.25f, 0.0f, 0.6f, false));
 }
 void EnvNode::rescan() {
     segCount_ = 0;
@@ -181,12 +181,15 @@ void EnvNode::rescan() {
         holding_ = false;
     }
 }
-void EnvNode::setSegment(int32_t slot, float time, float level, float curve, bool sustain) {
-    if (slot < 0 || slot >= kMaxSegments) return;
-    seg_[slot].time = time <= 0.0f ? 0.0f : (time < kMinTime ? kMinTime : time);
-    seg_[slot].level = clampf(level, 0.0f, 1.0f);
-    seg_[slot].curve = clampf(curve, -1.0f, 1.0f);
-    seg_[slot].sustain = sustain;
+void EnvNode::setSlot(const SlotValue &slot) {
+    if (slot.kind != SlotKind::Segment) return;
+    const int32_t i = slot.index;
+    if (i < 0 || i >= kMaxSegments) return;
+    const SegmentSlot &s = slot.segment;
+    seg_[i].time = s.time <= 0.0f ? 0.0f : (s.time < kMinTime ? kMinTime : s.time);
+    seg_[i].level = clampf(s.level, 0.0f, 1.0f);
+    seg_[i].curve = clampf(s.curve, -1.0f, 1.0f);
+    seg_[i].sustain = s.sustain;
     rescan();
 }
 void EnvNode::enter(int32_t index) {
@@ -311,10 +314,12 @@ DroneNode::DroneNode() {
     for (int32_t i = 0; i < kCells; ++i) degree_[i] = i;
 }
 
-void DroneNode::setStep(int32_t index, int32_t degree, bool gate) {
-    if (index < 0 || index >= kCells) return;
-    degree_[index] = degree;
-    on_[index] = gate;
+void DroneNode::setSlot(const SlotValue &slot) {
+    if (slot.kind != SlotKind::Step) return;
+    const int32_t i = slot.index;
+    if (i < 0 || i >= kCells) return;
+    degree_[i] = slot.step.degree;
+    on_[i] = slot.step.gate;
 }
 
 void DroneNode::tick(int32_t offset, int64_t count) {
@@ -450,10 +455,12 @@ StepsNode::StepsNode() {
     }
 }
 
-void StepsNode::setStep(int32_t index, int32_t degree, bool gate) {
-    if (index < 0 || index >= kSteps) return;
-    degree_[index] = degree;
-    gate_[index] = gate;
+void StepsNode::setSlot(const SlotValue &slot) {
+    if (slot.kind != SlotKind::Step) return;
+    const int32_t i = slot.index;
+    if (i < 0 || i >= kSteps) return;
+    degree_[i] = slot.step.degree;
+    gate_[i] = slot.step.gate;
 }
 
 void StepsNode::tick(int32_t offset, int64_t count) {
@@ -569,12 +576,15 @@ void StepsNode::setParam(int32_t index, float value) {
 
 // ---------------------------------------------------------------- Seq
 
-void SeqNode::setDot(int32_t slot, int32_t step, int32_t degree, int32_t length, float velocity) {
-    if (slot < 0 || slot >= kMaxDots) return;
-    dotStep_[slot] = std::max(0, std::min(step, kSteps - 1));
-    dotDegree_[slot] = degree;
-    dotLength_[slot] = std::max(0, std::min(length, kSteps * kDotSubsteps));
-    dotVelocity_[slot] = clampf(velocity, 0.0f, 1.0f);
+void SeqNode::setSlot(const SlotValue &slot) {
+    if (slot.kind != SlotKind::Dot) return;
+    const int32_t i = slot.index;
+    if (i < 0 || i >= kMaxDots) return;
+    const DotSlot &d = slot.dot;
+    dotStep_[i] = std::max(0, std::min(d.step, kSteps - 1));
+    dotDegree_[i] = d.degree;
+    dotLength_[i] = std::max(0, std::min(d.length, kSteps * kDotSubsteps));
+    dotVelocity_[i] = clampf(d.velocity, 0.0f, 1.0f);
 }
 
 void SeqNode::tick(int32_t offset, int64_t count) {

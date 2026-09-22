@@ -290,6 +290,26 @@ and 1 at 1 for every `a`, so bending a segment cannot move where it arrives; `en
 Kotlin and `EnvNode` in C++ are **the same expression on purpose**, because an envelope that
 sounds unlike its own picture is worse than one with no picture.
 
+**A slot-indexed list crosses as one command, and there is one of everything for it.**
+Steps, dots and segments are the same shape -- a positional list the interface edits and the
+engine keeps a slot per entry -- so they share `SlotValue` (a tag plus a union of
+`StepSlot`/`DotSlot`/`SegmentSlot`), one `Node::setSlot`, one `CommandType::SetSlot`, one
+apply case, one JNI shim and one `GraphSync.diffSlots`. **The payload stays typed**: a node
+reads `slot.dot.velocity`, because `nodes.cpp` is where the DSP is read and clarity there
+beats the packing it would save. What is *not* typed is the JNI shim, whose ten arguments are
+the union of all three kinds -- the one place in the crossing that is not self-describing, and
+the reason `AudioEngine`'s three typed wrappers are the only callers. `SlotKind` is a
+cross-boundary contract like `NodeType` and is asserted against `node.h` the same way; a
+disagreement there would read a segment as a dot rather than merely dropping it.
+
+**A panel editor that returns unconditionally must earn the gesture first.** Every grid's
+loop in the panel ends in `return@awaitEachGesture`, so one reached without a bounds check
+claims the whole screen -- the envelope's did, and swallowed the tap *outside* the panel that
+is the only way to close one, leaving a panel with no door (the breadcrumb is deliberately
+hidden while any panel is open). They share one `inEditor` gate now. The tap-only chips never
+had this problem and do not need it: each carries a rect and none returns without hitting it.
+It is loops that claim.
+
 **An envelope editor's decisions each get their own target, never a mode.** A node carries a
 time and a level and a drag moves both; the sustain and the keypad live in a rail above the
 shape and a rail below it. This is Surge's split rather than Bespoke's, and the reason is
@@ -475,8 +495,9 @@ compile and a green suite. Verify on the device, and say plainly when something 
 been.
 
 Cross-boundary contracts are asserted rather than trusted: `NodeType` mirrors the C++
-enum, `MAX_PORTS`/`MAX_PARAMS` mirror `kMaxPorts`/`kMaxParams`. A mismatch there fails
-silently in production.
+enum, `SlotKind` mirrors `SlotKind`, and `MAX_PORTS`/`MAX_PARAMS`/`MAX_SEGMENTS` mirror
+`kMaxPorts`/`kMaxParams`/`kMaxSegments`. A mismatch there fails silently in production.
+Each is read out of the header by the test rather than copied into it.
 
 ## Diagnosing audio
 

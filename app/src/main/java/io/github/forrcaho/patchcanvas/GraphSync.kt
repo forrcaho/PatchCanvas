@@ -3,6 +3,18 @@ package io.github.forrcaho.patchcanvas
 import android.util.Log
 
 /**
+ * Which slot-indexed list an entry belongs to, mirroring SlotKind in node.h.
+ *
+ * Part of the JNI contract like [NodeType], so append rather than reorder; NodeTypeTest
+ * asserts the numbering against the C++ side.
+ */
+enum class SlotKind(val id: Int) {
+    STEP(0),
+    DOT(1),
+    SEGMENT(2),
+}
+
+/**
  * Node type ids, mirroring the enum in nodes.h. The numbering is part of the JNI
  * contract, so append rather than reorder.
  */

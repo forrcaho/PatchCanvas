@@ -133,30 +133,36 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeDisconnectMod(JNIEnv *, jo
     return engine().graph().postDisconnectMod(srcId, srcPort, dstId, index) ? JNI_TRUE : JNI_FALSE;
 }
 
+/**
+ * One entry of a node's slot-indexed list: a step, a dot or a segment.
+ *
+ * One shim rather than three, so a new kind of list adds a case here and nothing else on
+ * this boundary. The arguments are the union of what the three kinds carry, which makes
+ * this the one place in the crossing that is not self-describing -- the switch below is
+ * where it is made to describe itself, and the typed wrappers in AudioEngine.kt mean no
+ * caller ever writes them out.
+ */
 JNIEXPORT jboolean JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetStep(JNIEnv *, jobject,
-                                                              jlong id, jint index,
-                                                              jint degree, jboolean gate) {
-    return engine().graph().postSetStep(id, index, degree, gate == JNI_TRUE) ? JNI_TRUE
-                                                                            : JNI_FALSE;
-}
-
-JNIEXPORT jboolean JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetDot(JNIEnv *, jobject, jlong id,
-                                                             jint slot, jint step, jint degree,
-                                                             jint length, jfloat velocity) {
-    return engine().graph().postSetDot(id, slot, step, degree, length, velocity) ? JNI_TRUE
-                                                                                 : JNI_FALSE;
-}
-
-JNIEXPORT jboolean JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetSegment(JNIEnv *, jobject, jlong id,
-                                                                 jint slot, jfloat time,
-                                                                 jfloat level, jfloat curve,
-                                                                 jboolean sustain) {
-    return engine().graph().postSetSegment(id, slot, time, level, curve, sustain == JNI_TRUE)
-        ? JNI_TRUE
-        : JNI_FALSE;
+Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetSlot(JNIEnv *, jobject, jlong id,
+                                                              jint kind, jint index,
+                                                              jint i0, jint i1, jint i2,
+                                                              jfloat f0, jfloat f1, jfloat f2,
+                                                              jboolean flag) {
+    SlotValue slot;
+    switch (static_cast<SlotKind>(kind)) {
+        case SlotKind::Step:
+            slot = stepSlot(index, i0, flag == JNI_TRUE);
+            break;
+        case SlotKind::Dot:
+            slot = dotSlot(index, i0, i1, i2, f0);
+            break;
+        case SlotKind::Segment:
+            slot = segmentSlot(index, f0, f1, f2, flag == JNI_TRUE);
+            break;
+        default:
+            return JNI_FALSE;
+    }
+    return engine().graph().postSetSlot(id, slot) ? JNI_TRUE : JNI_FALSE;
 }
 
 /**

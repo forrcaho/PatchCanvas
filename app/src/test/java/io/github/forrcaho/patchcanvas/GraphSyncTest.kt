@@ -541,6 +541,34 @@ class ModuleContractTest {
         assertEquals(constant("kMaxPorts"), MAX_PORTS)
     }
 
+    /**
+     * The same again for the slot kinds, which became a crossing the day steps, dots and
+     * segments started sharing one command.
+     *
+     * The tag is what tells the engine which member of a union it was handed, so a Kotlin
+     * id that disagreed would not be a dropped edit -- it would be a segment read as a dot,
+     * its time reinterpreted as a step index. Silent, and wrong in the loudest possible way.
+     */
+    @Test
+    fun `slot kinds are the engine's`() {
+        val header = java.io.File("src/main/cpp/node.h").readText()
+        val body = header.substringAfter("enum class SlotKind : int32_t {").substringBefore("}")
+        val engine = Regex("""(\w+)\s*=\s*(\d+)""")
+            .findAll(body)
+            .associate { it.groupValues[1].uppercase() to it.groupValues[2].toInt() }
+        assertEquals(SlotKind.entries.size, engine.size)
+        assertEquals(engine, SlotKind.entries.associate { it.name to it.id })
+    }
+
+    /** And the envelope's cap: a segment past kMaxSegments is dropped by the engine silently. */
+    @Test
+    fun `the envelope's limits are the engine's`() {
+        val header = java.io.File("src/main/cpp/nodes.h").readText().substringAfter("class EnvNode")
+        val cap = Regex("""constexpr int32_t kMaxSegments = (\d+);""")
+            .find(header)!!.groupValues[1].toInt()
+        assertEquals(cap, MAX_SEGMENTS)
+    }
+
     @Test
     fun `the dot sequencer's limits are the engine's`() {
         val header = java.io.File("src/main/cpp/nodes.h").readText().substringAfter("class SeqNode")

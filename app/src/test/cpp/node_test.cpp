@@ -733,7 +733,7 @@ void stepsPlayTheirOwnPattern() {
     steps.prepare(kRate);
 
     // One octave up on step 1, which no default pattern contains.
-    steps.setStep(1, 12, true);
+    steps.setSlot(stepSlot(1, 12, true));
     tickAt(steps, 1);
     check(std::fabs(soundsAs(startedNote(steps), nullptr) - 1.0f) < 0.0001f,
           "the degree written to a step is the pitch it plays");
@@ -741,8 +741,8 @@ void stepsPlayTheirOwnPattern() {
     // Out of range in both directions must be ignored rather than corrupt a neighbor.
     // Checked by coming round to step 1 again, since a sequencer only says anything at a
     // tick now -- there is no held output to re-read between them.
-    steps.setStep(-1, 108, true);
-    steps.setStep(StepsNode::kSteps, 108, true);
+    steps.setSlot(stepSlot(-1, 108, true));
+    steps.setSlot(stepSlot(StepsNode::kSteps, 108, true));
     tickAt(steps, 9); // step 1 again, a lap later
     check(std::fabs(soundsAs(startedNote(steps), nullptr) - 1.0f) < 0.0001f,
           "an out-of-range step changes nothing");
@@ -752,9 +752,9 @@ void aClosedGateIsARestNotASkip() {
     std::printf("a closed gate is a rest, not a skip\n");
     StepsNode steps;
     steps.prepare(kRate);
-    steps.setStep(0, 6, true);
-    steps.setStep(1, 3, false);  // a rest, remembering a pitch of its own
-    steps.setStep(2, 9, true);
+    steps.setSlot(stepSlot(0, 6, true));
+    steps.setSlot(stepSlot(1, 3, false));  // a rest, remembering a pitch of its own
+    steps.setSlot(stepSlot(2, 9, true));
 
     tickAt(steps, 0);
     tickAt(steps, 1);                // the rest
@@ -776,15 +776,15 @@ void aRestKeepsTheNoteItRemembers() {
     StepsNode steps;
     steps.prepare(kRate);
     steps.setParam(0, 2.0f);          // a two-step loop, so step 1 comes round quickly
-    steps.setStep(0, 6, true);
-    steps.setStep(1, 3, false);
+    steps.setSlot(stepSlot(0, 6, true));
+    steps.setSlot(stepSlot(1, 3, false));
 
     tickAt(steps, 0);
     tickAt(steps, 1);                 // the rest
     check(stepNotes(steps).count == 1 && stepNotes(steps).events[0].kind == NoteKind::Off,
           "the rest starts nothing");
 
-    steps.setStep(1, 3, true);        // switch it back on
+    steps.setSlot(stepSlot(1, 3, true));        // switch it back on
     tickAt(steps, 2);                 // step 0
     tickAt(steps, 3);                 // step 1, now sounding
     check(stepNotes(steps).count >= 1 &&
@@ -798,7 +798,7 @@ void aNoteLastsHalfItsStep() {
     std::printf("a note lasts half its step\n");
     StepsNode steps;
     steps.prepare(kRate);
-    steps.setStep(0, 0, true);
+    steps.setSlot(stepSlot(0, 0, true));
 
     // The default 1/8 at 120bpm is 12000 frames, so the note runs for frames 0-5999.
     // Measured now by when its Off arrives rather than by a gate falling, which is the
@@ -822,7 +822,7 @@ void aStoppedTransportHoldsTheNote() {
     std::printf("a stopped transport holds the note\n");
     StepsNode steps;
     steps.prepare(kRate);
-    steps.setStep(0, 0, true);
+    steps.setSlot(stepSlot(0, 0, true));
 
     tickAt(steps, 0);
     idle(steps, 400, false);          // 12800 frames, twice the note, stopped
@@ -840,8 +840,8 @@ void aTickLandsOnItsOwnSample() {
     std::printf("a tick lands on its own sample\n");
     StepsNode steps;
     steps.prepare(kRate);
-    steps.setStep(0, 0, true);
-    steps.setStep(1, 12, true);
+    steps.setSlot(stepSlot(0, 0, true));
+    steps.setSlot(stepSlot(1, 12, true));
 
     tickAt(steps, 0);
     idle(steps, 200);                 // well past the first note's gate
@@ -883,8 +883,8 @@ void aNoteTakesTheScaleOfTheBeatItStartsOn() {
     StepsNode steps;
     steps.prepare(kRate);
     steps.setParam(0, 16.0f);
-    steps.setStep(7, 2, true);
-    steps.setStep(8, 2, true);
+    steps.setSlot(stepSlot(7, 2, true));
+    steps.setSlot(stepSlot(8, 2, true));
 
     tickAt(steps, 7, 0, &chromaticThenMajor());
     check(std::fabs(soundsAs(startedNote(steps), &chromaticThenMajor()) - 2.0f / 12.0f) < 0.0001f,
@@ -910,8 +910,8 @@ void aTripletOnTheSwitchBeatTakesTheNewScale() {
     steps.prepare(kRate);
     steps.setParam(0, 16.0f);
     steps.setParam(2, 7.0f); // 1/8 triplet
-    steps.setStep(11, 2, true);
-    steps.setStep(12, 2, true);
+    steps.setSlot(stepSlot(11, 2, true));
+    steps.setSlot(stepSlot(12, 2, true));
 
     tickAt(steps, 11, 0, &chromaticThenMajor());
     check(std::fabs(soundsAs(startedNote(steps), &chromaticThenMajor()) - 2.0f / 12.0f) < 0.0001f,
@@ -944,8 +944,8 @@ void aKeyChangeLandsOnItsBeat() {
     StepsNode steps;
     steps.prepare(kRate);
     steps.setParam(0, 16.0f);
-    steps.setStep(7, 0, true);
-    steps.setStep(8, 0, true);
+    steps.setSlot(stepSlot(7, 0, true));
+    steps.setSlot(stepSlot(8, 0, true));
 
     tickAt(steps, 7, 0, &cThenG());
     check(std::fabs(soundsAs(startedNote(steps), &cThenG())) < 0.0001f,
@@ -1055,7 +1055,7 @@ void theNotesOutputSaysWhatTheGateSays() {
     std::printf("the notes output says what the gate says\n");
     StepsNode steps;
     steps.prepare(kRate);
-    steps.setStep(0, 5, true);
+    steps.setSlot(stepSlot(0, 5, true));
 
     tickAt(steps, 0);
     check(notesOf(steps).count == 1, "one event on the tick");
@@ -1115,7 +1115,7 @@ void aDroneHoldsItsNoteWithTheTransportStopped() {
     run(drone);
     check(notesOf(drone).count == 0, "an untouched grid says nothing");
 
-    drone.setStep(3, 7, true);
+    drone.setSlot(stepSlot(3, 7, true));
     run(drone);
     check(notesOf(drone).count == 1, "a toggled cell starts one note");
     const NoteEvent on = notesOf(drone).events[0];
@@ -1130,7 +1130,7 @@ void aDroneHoldsItsNoteWithTheTransportStopped() {
     run(drone, false, 100);
     check(notesOf(drone).count == 0, "and says nothing more while it is held");
 
-    drone.setStep(3, 7, false);
+    drone.setSlot(stepSlot(3, 7, false));
     run(drone);
     check(notesOf(drone).count == 1, "untoggling ends it");
     check(notesOf(drone).events[0].kind == NoteKind::Off, "with an off");
@@ -1145,9 +1145,9 @@ void aDroneSoundsSeveralCellsAtOnce() {
     DroneNode drone;
     drone.prepare(kRate);
 
-    drone.setStep(0, 0, true);
-    drone.setStep(1, 4, true);
-    drone.setStep(2, 7, true);
+    drone.setSlot(stepSlot(0, 0, true));
+    drone.setSlot(stepSlot(1, 4, true));
+    drone.setSlot(stepSlot(2, 7, true));
     run(drone);
     check(notesOf(drone).count == 3, "three cells, three notes");
 
@@ -1162,7 +1162,7 @@ void aDroneSoundsSeveralCellsAtOnce() {
 
     // One cell off leaves the others alone, which is what a chord has to do and what a
     // single held gate could never say.
-    drone.setStep(1, 4, false);
+    drone.setSlot(stepSlot(1, 4, false));
     run(drone);
     check(notesOf(drone).count == 1, "one off");
     check(notesOf(drone).events[0].id == ids[1], "for the cell that was untoggled");
@@ -1180,7 +1180,7 @@ void aDroneNoteTakesTheBeatOfTheLastTick() {
     drone.tick(0, 6);
     drone.process(kBlockSize);
 
-    drone.setStep(0, 2, true);
+    drone.setSlot(stepSlot(0, 2, true));
     run(drone, true);
     check(notesOf(drone).count == 1, "the cell starts");
     check(notesOf(drone).events[0].beat == 6, "on the beat the transport last ticked");
@@ -1191,20 +1191,20 @@ void aDroneSaysNothingTwiceForTheSameCell() {
     DroneNode drone;
     drone.prepare(kRate);
 
-    drone.setStep(5, 5, true);
+    drone.setSlot(stepSlot(5, 5, true));
     run(drone);
     check(notesOf(drone).count == 1, "the first toggle starts it");
 
     // Setting a cell that is already on must not re-trigger it. The interface resends a
     // cell whenever anything about it changes, and a note restarted every time a finger
     // moved elsewhere would be a stutter nothing on screen explained.
-    drone.setStep(5, 5, true);
+    drone.setSlot(stepSlot(5, 5, true));
     run(drone);
     check(notesOf(drone).count == 0, "and setting it again starts nothing");
 
-    drone.setStep(5, 5, false);
+    drone.setSlot(stepSlot(5, 5, false));
     run(drone);
-    drone.setStep(5, 5, false);
+    drone.setSlot(stepSlot(5, 5, false));
     run(drone);
     check(notesOf(drone).count == 0, "as untoggling a silent cell ends nothing");
 }
@@ -1213,9 +1213,9 @@ void aDroneIgnoresACellOutsideItsGrid() {
     std::printf("a drone ignores a cell outside its grid\n");
     DroneNode drone;
     drone.prepare(kRate);
-    drone.setStep(-1, 0, true);
-    drone.setStep(DroneNode::kCells, 0, true);
-    drone.setStep(DroneNode::kCells + 99, 0, true);
+    drone.setSlot(stepSlot(-1, 0, true));
+    drone.setSlot(stepSlot(DroneNode::kCells, 0, true));
+    drone.setSlot(stepSlot(DroneNode::kCells + 99, 0, true));
     run(drone);
     check(notesOf(drone).count == 0, "nothing sounds and nothing is written past the end");
 }
@@ -1225,8 +1225,8 @@ void aRestStartsNothing() {
     StepsNode steps;
     steps.prepare(kRate);
     steps.setParam(0, 2.0f); // two steps, so the rest comes round quickly
-    steps.setStep(0, 0, true);
-    steps.setStep(1, 0, false);
+    steps.setSlot(stepSlot(0, 0, true));
+    steps.setSlot(stepSlot(1, 0, false));
 
     tickAt(steps, 0);
     check(notesOf(steps).count == 1, "the sounding step starts a note");
@@ -1239,7 +1239,7 @@ void aTransposeRidesOnTheNote() {
     std::printf("a transpose rides on the note\n");
     StepsNode steps;
     steps.prepare(kRate);
-    steps.setStep(0, 0, true);
+    steps.setSlot(stepSlot(0, 0, true));
     steps.setParam(1, 700.0f);
 
     tickAt(steps, 0);
@@ -2108,7 +2108,7 @@ int countKind(const NoteBuffer &notes, NoteKind kind) {
 void aDotLastsItsLength() {
     std::printf("a dot lasts its length, in steps\n");
     SeqNode dots;
-    dots.setDot(0, 0, 7, Q(3), 1.0f);
+    dots.setSlot(dotSlot(0, 0, 7, Q(3), 1.0f));
     const NoteBuffer first = tickDots(dots, 0);
     check(countKind(first, NoteKind::On) == 1 && first.events[0].degree == 7, "starts on its step");
     const uint32_t id = first.events[0].id;
@@ -2122,8 +2122,8 @@ void aDotIsStruckAtItsVelocity() {
     std::printf("a dot is struck at its own velocity\n");
     const auto same = [](float a, float b) { return std::fabs(a - b) < 1e-5f; };
     SeqNode dots;
-    dots.setDot(0, 0, 0, Q(1), 0.4f);
-    dots.setDot(1, 0, 7, Q(1), 1.0f);
+    dots.setSlot(dotSlot(0, 0, 0, Q(1), 0.4f));
+    dots.setSlot(dotSlot(1, 0, 7, Q(1), 1.0f));
     const NoteBuffer said = tickDots(dots, 0);
     check(said.count == 2, "two notes");
     check(same(said.events[0].velocity, 0.4f), "the quiet one says so");
@@ -2132,8 +2132,8 @@ void aDotIsStruckAtItsVelocity() {
     // Out of range from a hand-edited file or some future interface: clamped rather than
     // trusted, since a velocity above one is an oscillator amplitude above one.
     SeqNode wild;
-    wild.setDot(0, 0, 0, Q(1), 4.0f);
-    wild.setDot(1, 0, 7, Q(1), -1.0f);
+    wild.setSlot(dotSlot(0, 0, 0, Q(1), 4.0f));
+    wild.setSlot(dotSlot(1, 0, 7, Q(1), -1.0f));
     const NoteBuffer clamped = tickDots(wild, 0);
     check(same(clamped.events[0].velocity, 1.0f), "above one is one");
     check(same(clamped.events[1].velocity, 0.0f), "below zero is zero");
@@ -2220,9 +2220,9 @@ void velocityIsHeard() {
 void aColumnOfDotsIsAChord() {
     std::printf("a column of dots is a chord, each note its own length\n");
     SeqNode dots;
-    dots.setDot(0, 0, 0, Q(1), 1.0f);
-    dots.setDot(1, 0, 4, Q(2), 1.0f);
-    dots.setDot(2, 0, 7, Q(4), 1.0f);
+    dots.setSlot(dotSlot(0, 0, 0, Q(1), 1.0f));
+    dots.setSlot(dotSlot(1, 0, 4, Q(2), 1.0f));
+    dots.setSlot(dotSlot(2, 0, 7, Q(4), 1.0f));
     check(countKind(tickDots(dots, 0), NoteKind::On) == 3, "three notes start together");
     check(countKind(tickDots(dots, 1), NoteKind::Off) == 1, "the shortest ends first");
     check(countKind(tickDots(dots, 2), NoteKind::Off) == 1, "then the next");
@@ -2235,8 +2235,8 @@ void aColumnOfDotsIsAChord() {
 void aDotEndsBeforeTheNextStarts() {
     std::printf("a dot ends before the next one at its degree starts\n");
     SeqNode dots;
-    dots.setDot(0, 0, 5, Q(2), 1.0f);
-    dots.setDot(1, 2, 5, Q(1), 1.0f);
+    dots.setSlot(dotSlot(0, 0, 5, Q(2), 1.0f));
+    dots.setSlot(dotSlot(1, 2, 5, Q(1), 1.0f));
     tickDots(dots, 0);
     tickDots(dots, 1);
     const NoteBuffer turn = tickDots(dots, 2);
@@ -2249,7 +2249,7 @@ void dotsLoopAtTheLength() {
     std::printf("dots loop at the sequence's length\n");
     SeqNode dots;
     dots.setParam(0, 4.0f);
-    dots.setDot(0, 1, 2, Q(1), 1.0f);
+    dots.setSlot(dotSlot(0, 1, 2, Q(1), 1.0f));
     int ons = 0;
     for (int64_t count = 0; count < 12; ++count) {
         const NoteBuffer said = tickDots(dots, count);
@@ -2259,7 +2259,7 @@ void dotsLoopAtTheLength() {
         }
     }
     check(ons == 3, "three turns, three notes");
-    dots.setDot(0, 0, 0, 0, 1.0f);
+    dots.setSlot(dotSlot(0, 0, 0, 0, 1.0f));
     int after = 0;
     for (int64_t count = 12; count < 20; ++count) after += countKind(tickDots(dots, count), NoteKind::On);
     check(after == 0, "and a cleared slot plays nothing");
@@ -2268,7 +2268,7 @@ void dotsLoopAtTheLength() {
 void aJumpInTimeEndsWhatWasHeld() {
     std::printf("a jump in time ends what was held\n");
     SeqNode dots;
-    dots.setDot(0, 0, 0, Q(8), 1.0f);
+    dots.setSlot(dotSlot(0, 0, 0, Q(8), 1.0f));
     tickDots(dots, 0);
     check(dots.notesHeld() == 1, "held");
     // The transport reset: the tick eight steps on, which would have ended it, may never
@@ -2337,7 +2337,7 @@ void aDotEndsPartwayThroughAStep() {
     };
 
     SeqNode seq;
-    seq.setDot(0, 0, 0, Q(1) + 2, 1.0f); // a step and a half
+    seq.setSlot(dotSlot(0, 0, 0, Q(1) + 2, 1.0f)); // a step and a half
     check(countKind(tickAt(seq, 0), NoteKind::On) == 1, "starts");
     check(offsIn(seq, stepFrames - kBlockSize) == 0, "sounds all through its first step");
     tickAt(seq, 1);
@@ -2348,13 +2348,13 @@ void aDotEndsPartwayThroughAStep() {
     // Shorter than a step: it has no whole steps at all, so its part starts on the tick it
     // does -- the case that has to be counted out after the starts rather than before them.
     SeqNode half;
-    half.setDot(0, 0, 0, 2, 1.0f);
+    half.setSlot(dotSlot(0, 0, 0, 2, 1.0f));
     check(countKind(tickAt(half, 0), NoteKind::On) == 1, "a half-step note starts");
     check(offsIn(half, stepFrames / 2 - 2 * kBlockSize) == 0, "and holds half a step");
     check(offsIn(half, 4 * kBlockSize) == 1, "then ends, without waiting for a tick");
 
     SeqNode legato;
-    legato.setDot(0, 0, 0, Q(1), 1.0f);
+    legato.setSlot(dotSlot(0, 0, 0, Q(1), 1.0f));
     tickAt(legato, 0);
     check(offsIn(legato, stepFrames - kBlockSize) == 0, "a whole-step note sounds its whole step");
     check(countKind(tickAt(legato, 1), NoteKind::Off) == 1, "and ends on the tick after");
@@ -2363,7 +2363,7 @@ void aDotEndsPartwayThroughAStep() {
 void aDroneTransposeMovesWhatItHolds() {
     std::printf("a drone's transpose moves what it holds\n");
     DroneNode drone;
-    drone.setStep(0, 0, true);
+    drone.setSlot(stepSlot(0, 0, true));
     drone.setTiming(0.0, false, nullptr);
     drone.process(kBlockSize);
     check(drone.noteOutput(0)->count == 1, "holding one note");
@@ -2375,7 +2375,7 @@ void aDroneTransposeMovesWhatItHolds() {
     check(moved.count == 1 && moved.events[0].kind == NoteKind::Change && moved.events[0].cents == -1200.0f,
           "a turned knob sends the held note down an octave, as a glide");
 
-    drone.setStep(1, 7, true);
+    drone.setSlot(stepSlot(1, 7, true));
     drone.setTiming(0.0, false, nullptr);
     drone.process(kBlockSize);
     check(firstOnDegree(*drone.noteOutput(0)) == 7 && drone.noteOutput(0)->events[0].cents == -1200.0f,
@@ -2550,7 +2550,7 @@ void aDroneRetunesItsHeldNotesWhenTheScaleChanges() {
     std::printf("a drone retunes its held notes when the scale changes\n");
     DroneNode drone;
     drone.prepare(kRate);
-    drone.setStep(10, 10, true);
+    drone.setSlot(stepSlot(10, 10, true));
 
     tickDrone(drone, 3, 0, chromaticThenMajor()); // beat 3: the last of 12-TET
     const NoteEvent *on = firstOf(drone, NoteKind::On);
@@ -2576,7 +2576,7 @@ void aDroneSaysNothingForADegreeTheChangeLeavesWhereItWas() {
     std::printf("a drone says nothing for a degree the change leaves where it was\n");
     DroneNode drone;
     drone.prepare(kRate);
-    drone.setStep(0, 0, true); // the tonic is the tonic in both scales
+    drone.setSlot(stepSlot(0, 0, true)); // the tonic is the tonic in both scales
 
     tickDrone(drone, 3, 0, chromaticThenMajor());
     tickDrone(drone, 4, 0, chromaticThenMajor());
@@ -2591,7 +2591,7 @@ void aReplacedScaleListRetunesADroneWithTheTransportStopped() {
     std::printf("a replaced scale list retunes a drone with the transport stopped\n");
     DroneNode drone;
     drone.prepare(kRate);
-    drone.setStep(2, 2, true);
+    drone.setSlot(stepSlot(2, 2, true));
     tickDrone(drone, 4, 0, chromaticThenMajor()); // beat 4, major: degree 2 is E
 
     drone.setTiming(0.0, false, &cThenG()); // same beat, now G: degree 2 is A
@@ -2654,14 +2654,14 @@ void aDroneReportsTheNotesItIsHolding() {
     std::printf("a drone reports the notes it is holding\n");
     DroneNode drone;
     drone.prepare(kRate);
-    drone.setStep(4, 4, true);
-    drone.setStep(9, 9, true);
+    drone.setSlot(stepSlot(4, 4, true));
+    drone.setSlot(stepSlot(9, 9, true));
     tickDrone(drone, 3, 0, chromaticThenMajor());
     uint32_t ids[2] = {};
     const NoteBuffer &started = *drone.noteOutput(0);
     for (int32_t i = 0; i < started.count && i < 2; ++i) ids[i] = started.events[i].id;
 
-    drone.setStep(4, 4, false);
+    drone.setSlot(stepSlot(4, 4, false));
     tickDrone(drone, 4, 0, chromaticThenMajor()); // degree 4 ends; the scale turns to major
 
     NoteBuffer held;
@@ -2686,9 +2686,9 @@ void shape(EnvNode &env, const std::vector<std::array<float, 4>> &segments) {
     for (int32_t i = 0; i < EnvNode::kMaxSegments; ++i) {
         if (i < static_cast<int32_t>(segments.size())) {
             const auto &s = segments[i];
-            env.setSegment(i, s[0], s[1], s[2], s[3] != 0.0f);
+            env.setSlot(segmentSlot(i, s[0], s[1], s[2], s[3] != 0.0f));
         } else {
-            env.setSegment(i, 0.0f, 0.0f, 0.0f, false);
+            env.setSlot(segmentSlot(i, 0.0f, 0.0f, 0.0f, false));
         }
     }
 }
@@ -2824,7 +2824,7 @@ void clearingASlotShortensTheEnvelope() {
         {0.01f, 0.5f, 0.0f, 0.0f},
         {0.01f, 0.0f, 0.0f, 0.0f},
     });
-    env.setSegment(1, 0.0f, 0.0f, 0.0f, false);  // and 2 is now unreachable
+    env.setSlot(segmentSlot(1, 0.0f, 0.0f, 0.0f, false));  // and 2 is now unreachable
 
     const auto on = noteAt(NoteKind::On, 1);
     send(env, on);
@@ -2873,7 +2873,7 @@ void aParkedEnvelopeFollowsItsLevel() {
     send(env, on);
     check(std::fabs(run(env, 60).back() - 0.8f) < 0.01f, "parked at its level");
 
-    env.setSegment(0, 0.001f, 0.2f, 0.0f, true);
+    env.setSlot(segmentSlot(0, 0.001f, 0.2f, 0.0f, true));
     const float oneBlock = run(env, 1).back();
     check(oneBlock > 0.4f, "a block later it has not jumped there, was " + std::to_string(oneBlock));
     check(std::fabs(run(env, 60).back() - 0.2f) < 0.01f, "and it arrives within the glide");

@@ -249,7 +249,7 @@ public:
     void prepare(int32_t sampleRate) override;
     void process(int32_t frames) override;
     void notesCut(int32_t port, int32_t source) override;
-    void setSegment(int32_t slot, float time, float level, float curve, bool sustain) override;
+    void setSlot(const SlotValue &slot) override;
 
     /** Mirrored by MAX_SEGMENTS in PatchCanvas.kt. */
     static constexpr int32_t kMaxSegments = 8;
@@ -277,7 +277,7 @@ private:
     };
 
     struct Segment {
-        /** Seconds. 0 means the slot is unused; see [Node::setSegment]. */
+        /** Seconds. 0 means the slot is unused; see [SegmentSlot]. */
         float time = 0.0f;
         /** Where this segment is going, 0 to 1. Where it starts is wherever the envelope is. */
         float level = 0.0f;
@@ -361,7 +361,7 @@ public:
     uint32_t noteOutputs() const override { return 1u << 0; }
     void process(int32_t frames) override;
     void setParam(int32_t index, float value) override;
-    void setStep(int32_t index, int32_t degree, bool gate) override;
+    void setSlot(const SlotValue &slot) override;
     int32_t position() const override { return step_; }
     Interval interval() const override { return kIntervals[intervalIndex_]; }
     void tick(int32_t offset, int64_t count) override;
@@ -450,8 +450,7 @@ public:
     uint32_t noteOutputs() const override { return 1u << 0; }
     void process(int32_t frames) override;
     void setParam(int32_t index, float value) override;
-    void setDot(int32_t slot, int32_t step, int32_t degree, int32_t length,
-                float velocity) override;
+    void setSlot(const SlotValue &slot) override;
     int32_t position() const override { return step_; }
     Interval interval() const override { return kIntervals[intervalIndex_]; }
     void tick(int32_t offset, int64_t count) override;
@@ -537,7 +536,7 @@ public:
     int32_t outputCount() const override { return 1; }
     uint32_t noteOutputs() const override { return 1u << 0; }
     void process(int32_t frames) override;
-    void setStep(int32_t index, int32_t degree, bool gate) override;
+    void setSlot(const SlotValue &slot) override;
     /** Its one knob: a transpose in cents, as Steps has. Held notes glide to it. */
     void setParam(int32_t index, float value) override;
     Interval interval() const override { return {1, 1}; }

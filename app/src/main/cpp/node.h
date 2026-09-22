@@ -9,6 +9,88 @@
 
 /** Frames processed per inner block. 96-frame bursts divide by this exactly. */
 constexpr int32_t kBlockSize = 32;
+
+/** Which of a node's slot-indexed lists an entry belongs to. Mirrored by SlotKind.kt side. */
+enum class SlotKind : int32_t { Step = 0, Dot = 1, Segment = 2 };
+
+/** One step of a sequence: a degree of the sounding scale, and whether it sounds at all. */
+struct StepSlot {
+    int32_t degree = 0;
+    bool gate = false;
+};
+
+/**
+ * One dot of a dot sequencer: a note at [step] and [degree], lasting [length] quarter steps
+ * and struck at [velocity]. A [length] of 0 vacates the slot.
+ */
+struct DotSlot {
+    int32_t step = 0;
+    int32_t degree = 0;
+    int32_t length = 0;
+    float velocity = 1.0f;
+};
+
+/**
+ * One segment of an envelope: reach [level] over [time] seconds, bent by [curve], holding
+ * there while a note is held when [sustain]. A [time] of 0 vacates the slot, which is how
+ * the envelope learns how many segments it has -- they are contiguous, so the first vacated
+ * slot is the end.
+ *
+ * A segment says where it is *going*, never where it starts: it begins wherever the envelope
+ * already is. That is what lets a note released during the attack fall from the level it
+ * actually reached rather than stepping to a level it never had.
+ */
+struct SegmentSlot {
+    float time = 0.0f;
+    float level = 0.0f;
+    float curve = 0.0f;
+    bool sustain = false;
+};
+
+/**
+ * One entry of one of those lists, tagged, as it crosses to the graph.
+ *
+ * A union rather than the union of all their fields spread flat across Command, which is
+ * what it was: five members (step, length, degree, gate, curve) that only three command
+ * types ever touched, with a segment's *time* riding in `high` -- a field documented as
+ * SetModRange's. Trivially copyable, so it travels through the SPSC queue like the POD it is.
+ */
+struct SlotValue {
+    SlotKind kind = SlotKind::Step;
+    /** Which entry of the list. */
+    int32_t index = 0;
+    union {
+        StepSlot step;
+        DotSlot dot;
+        SegmentSlot segment;
+    };
+
+    SlotValue() : step() {}
+};
+
+/** The three typed ways to build one. Packing by hand at a call site reads as noise. */
+inline SlotValue stepSlot(int32_t index, int32_t degree, bool gate) {
+    SlotValue v;
+    v.kind = SlotKind::Step;
+    v.index = index;
+    v.step = StepSlot{degree, gate};
+    return v;
+}
+inline SlotValue dotSlot(int32_t index, int32_t step, int32_t degree, int32_t length,
+                         float velocity) {
+    SlotValue v;
+    v.kind = SlotKind::Dot;
+    v.index = index;
+    v.dot = DotSlot{step, degree, length, velocity};
+    return v;
+}
+inline SlotValue segmentSlot(int32_t index, float time, float level, float curve, bool sustain) {
+    SlotValue v;
+    v.kind = SlotKind::Segment;
+    v.index = index;
+    v.segment = SegmentSlot{time, level, curve, sustain};
+    return v;
+}
 /**
  * Eight, since poly subpatches: a PolyIn hands one note output to each instance and a
  * PolySum takes one input back, so the port limit is also the voice limit. It was four,
@@ -98,55 +180,23 @@ public:
         (void) value;
     }
     /**
-     * One step of a sequence changed.
+     * One entry of a node's slot-indexed list changed: a step, a dot or a segment.
      *
-     * Separate from setParam because a pattern is not a knob: kMaxParams is 8, which is
-     * the right size for the controls a panel shows and nowhere near a sequence. The note
-     * arrives as a degree, and is resolved against whichever scale is sounding on the
-     * beat it starts -- which only the audio thread can know to the sample.
+     * Separate from setParam because a list is not a knob: kMaxParams is 8, which is the
+     * right size for the controls a panel shows and nowhere near a sequence. Slots are the
+     * interface's list positions and the node keeps them in place, so a change to one entry
+     * is one command.
      *
-     * Audio thread, same rules as setParam.
-     */
-    virtual void setStep(int32_t index, int32_t degree, bool gate) {
-        (void) index;
-        (void) degree;
-        (void) gate;
-    }
-
-    /**
-     * Dot [slot] of a dot sequencer: a note at [step], [degree], lasting [length] steps, or
-     * no dot when [length] is 0. Slots are the interface's list positions; the node keeps
-     * them in place so a change to one dot is one command.
+     * One entry point rather than three, because the three were the same command wearing
+     * different field names all the way down -- an enum value, a post function, an apply
+     * case, a JNI shim and a Kotlin extern each, per list. The payload stays *typed*: a node
+     * reads `slot.dot.velocity`, not an anonymous float, because nodes.cpp is where the DSP
+     * is read and clarity there is worth more than the packing it saves.
      *
      * Audio thread, same rules as setParam.
      */
-    virtual void setDot(int32_t slot, int32_t step, int32_t degree, int32_t length,
-                        float velocity) {
+    virtual void setSlot(const SlotValue &slot) {
         (void) slot;
-        (void) step;
-        (void) degree;
-        (void) length;
-        (void) velocity;
-    }
-
-    /**
-     * Segment [slot] of an envelope: reach [level] over [time] seconds, bent by [curve],
-     * and hold there while a note is held when [sustain]. A [time] of 0 means the slot is
-     * unused, which is how the envelope learns how many segments it has -- they are
-     * contiguous, so the first unused slot is the end.
-     *
-     * A segment says where it is *going*, never where it starts: it begins wherever the
-     * envelope already is. That is what lets a note released during the attack fall from
-     * the level it actually reached rather than stepping to a level it never had.
-     *
-     * Audio thread, same rules as setParam.
-     */
-    virtual void setSegment(int32_t slot, float time, float level, float curve, bool sustain) {
-        (void) slot;
-        (void) time;
-        (void) level;
-        (void) curve;
-        (void) sustain;
     }
 
     /**

@@ -71,38 +71,11 @@ float Graph::paramOf(int64_t id, int32_t index) const {
     return std::numeric_limits<float>::quiet_NaN();
 }
 
-bool Graph::postSetStep(int64_t id, int32_t index, int32_t degree, bool gate) {
+bool Graph::postSetSlot(int64_t id, const SlotValue &slot) {
     Command cmd;
-    cmd.type = CommandType::SetStep;
+    cmd.type = CommandType::SetSlot;
     cmd.id = id;
-    cmd.paramIndex = index;
-    cmd.degree = degree;
-    cmd.gate = gate;
-    return commands_.push(cmd);
-}
-
-bool Graph::postSetDot(int64_t id, int32_t slot, int32_t step, int32_t degree, int32_t length,
-                       float velocity) {
-    Command cmd;
-    cmd.type = CommandType::SetDot;
-    cmd.id = id;
-    cmd.paramIndex = slot;
-    cmd.step = step;
-    cmd.degree = degree;
-    cmd.length = length;
-    cmd.value = velocity;
-    return commands_.push(cmd);
-}
-bool Graph::postSetSegment(int64_t id, int32_t slot, float time, float level, float curve,
-                           bool sustain) {
-    Command cmd;
-    cmd.type = CommandType::SetSegment;
-    cmd.id = id;
-    cmd.paramIndex = slot;
-    cmd.high = time;
-    cmd.value = level;
-    cmd.curve = curve;
-    cmd.gate = sustain;
+    cmd.slot = slot;
     return commands_.push(cmd);
 }
 
@@ -543,28 +516,12 @@ void Graph::applyCommands() {
                 dirty_ = true;
                 break;
             }
-            case CommandType::SetStep: {
+            case CommandType::SetSlot: {
                 const int32_t slot = indexOf(cmd.id);
                 if (slot < 0) break;
-                // The node bounds-checks the index itself, because how many steps a
-                // sequence has is the node's business and not the graph's.
-                nodes_[slot].node->setStep(cmd.paramIndex, cmd.degree, cmd.gate);
-                break;
-            }
-            case CommandType::SetDot: {
-                const int32_t slot = indexOf(cmd.id);
-                if (slot < 0) break;
-                // Bounds-checked by the node, as a step is.
-                nodes_[slot].node->setDot(cmd.paramIndex, cmd.step, cmd.degree, cmd.length,
-                                          cmd.value);
-                break;
-            }
-            case CommandType::SetSegment: {
-                const int32_t slot = indexOf(cmd.id);
-                if (slot < 0) break;
-                // Bounds-checked by the node, as a dot is.
-                nodes_[slot].node->setSegment(cmd.paramIndex, cmd.high, cmd.value, cmd.curve,
-                                              cmd.gate);
+                // Bounds-checked by the node, as a param is: the interface's list can be
+                // longer than the node's room for it and the node is what knows its own.
+                nodes_[slot].node->setSlot(cmd.slot);
                 break;
             }
             case CommandType::SetScales:

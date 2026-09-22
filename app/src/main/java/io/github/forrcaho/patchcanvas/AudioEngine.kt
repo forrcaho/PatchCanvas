@@ -77,16 +77,31 @@ object AudioEngine {
 
     /** One step of a sequence, as a degree of whichever scale is sounding when it plays. */
     fun setStep(id: Long, index: Int, degree: Int, gate: Boolean): Boolean =
-        available && started && nativeSetStep(id, index, degree, gate)
+        slot(SlotKind.STEP, id, index, i0 = degree, flag = gate)
 
     /** One dot of a dot sequencer, by slot; a length of 0 clears it. */
     fun setDot(id: Long, slot: Int, step: Int, degree: Int, length: Int, velocity: Float): Boolean =
-        available && started && nativeSetDot(id, slot, step, degree, length, velocity)
+        slot(SlotKind.DOT, id, slot, i0 = step, i1 = degree, i2 = length, f0 = velocity)
 
     /** One segment of an envelope, by slot; a time of 0 clears it. */
     fun setSegment(
         id: Long, slot: Int, time: Float, level: Float, curve: Float, sustain: Boolean,
-    ): Boolean = available && started && nativeSetSegment(id, slot, time, level, curve, sustain)
+    ): Boolean =
+        slot(SlotKind.SEGMENT, id, slot, f0 = time, f1 = level, f2 = curve, flag = sustain)
+
+    /**
+     * The one crossing every slot-indexed list uses. Private, because the three wrappers
+     * above are how it is meant to be called: the argument names here are the union of what
+     * the kinds carry and say nothing on their own.
+     */
+    @Suppress("LongParameterList")
+    private fun slot(
+        kind: SlotKind, id: Long, index: Int,
+        i0: Int = 0, i1: Int = 0, i2: Int = 0,
+        f0: Float = 0f, f1: Float = 0f, f2: Float = 0f,
+        flag: Boolean = false,
+    ): Boolean = available && started &&
+        nativeSetSlot(id, kind.id, index, i0, i1, i2, f0, f1, f2, flag)
 
     /**
      * Parses a SoundFont and returns its handle, or 0 if it is not one this build reads.
@@ -245,7 +260,6 @@ object AudioEngine {
     ): Boolean
     private external fun nativeConnectMod(srcId: Long, srcPort: Int, dstId: Long, index: Int): Boolean
     private external fun nativeDisconnectMod(srcId: Long, srcPort: Int, dstId: Long, index: Int): Boolean
-    private external fun nativeSetStep(id: Long, index: Int, degree: Int, gate: Boolean): Boolean
     private external fun nativeSetScales(
         degrees: FloatArray,
         sizes: IntArray,
@@ -254,11 +268,11 @@ object AudioEngine {
         roots: FloatArray,
     ): Boolean
     private external fun nativeScaleEntry(): Int
-    private external fun nativeSetDot(
-        id: Long, slot: Int, step: Int, degree: Int, length: Int, velocity: Float,
-    ): Boolean
-    private external fun nativeSetSegment(
-        id: Long, slot: Int, time: Float, level: Float, curve: Float, sustain: Boolean,
+    private external fun nativeSetSlot(
+        id: Long, kind: Int, index: Int,
+        i0: Int, i1: Int, i2: Int,
+        f0: Float, f1: Float, f2: Float,
+        flag: Boolean,
     ): Boolean
     private external fun nativeLoadSoundFont(bytes: ByteArray): Long
     private external fun nativeSoundFontPresets(handle: Long): Array<String>
