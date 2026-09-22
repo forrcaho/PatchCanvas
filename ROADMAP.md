@@ -2733,6 +2733,8 @@ that wants a portamento is a question for a finger, not a test.
 
 ### What is not known yet
 
+> **Answered on 2026-09-21**, by listening to it. See below.
+
 **None of this has been heard.** Every defect that mattered in this project was found by a
 person playing it on hardware with a clean compile and a green suite, and the three things
 most likely to be wrong here are all of that kind: whether the 5ms ramp is audible on
@@ -2743,6 +2745,43 @@ when an `Env` rather than a built-in envelope is holding the note.
 voice deep, actually read better than turning eight knobs on a module that hides its
 polyphony? The argument says yes and the argument is why this exists. It is not the same as
 playing it.
+
+### Heard, on the phone
+
+**2026-09-21. All four sound fine**, which is the sentence this phase was waiting for. A
+patch of four boxes was built for the purpose -- one per question, each self-contained with
+a single audio output, so one is plugged into `Out` at a time:
+
+- **the 5ms ramp**, alone: a sine through a fixed gain of 0.4, half-step notes alternating
+  low C and middle C, nothing else shaping the edge.
+- **four voices against the limiter**: a four-note chord into a four-voice `Poly`, saws at
+  full velocity. The capture peaked at 0.46, which past the 0.6 master gain is 0.76 out of a
+  limiter fed about 2.8 -- roughly 11dB of reduction at the sustain, and it sounds fine.
+- **stealing under an `Env`**: three notes an event into two instances, each chord held past
+  the start of the next.
+- **the legato line**, which steps: one monophonic `Osc`, every note overlapping the next by
+  half a step, so the `Env` never closes and pitch is the only thing that moves. Heard, and
+  not worth a portamento yet.
+
+**An `Env`'s release is silent on a synth, and that is accepted.** Found while building the
+stealing test the obvious way -- short notes, a three-second release, so a steal would land
+on a tail -- and the capture showed the sound stopping dead within one 5ms window of each
+note off, with 480ms of digital zero before the next note. `MonoSynth::process` frees the
+voice the moment its `GateRamp` reaches zero and writes zeros from then on, so the `Amp` has
+nothing left to multiply and `R` shapes nothing. Attack, decay and sustain are real; release
+is not. `Pluck` is the exception, because its own `R` keeps the string rendering past the
+note.
+
+So "shaping is an `Env` inside a poly subpatch" is true with a caveat: an `Env` shapes a note
+while it is *held*, and a tail needs a module that outlives the note. The alternatives were
+an `R` knob on each synth -- an envelope creeping back into the synth, which is the thing
+this phase removed -- and letting something downstream hold the voice open, which nothing in
+the graph can currently say. Both were rejected on 2026-09-21 in favor of documenting it.
+A delay or a reverb is the honest answer, and Phase 11 has both.
+
+The stealing test as first built is worth remembering as a shape: it was a test whose
+premise the engine could not satisfy, and it ran, and it made sound, and it was measuring
+nothing.
 
 ---
 
