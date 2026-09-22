@@ -4660,7 +4660,56 @@ fun PatchCanvas(
                                     if (node >= 0) -1 else envSegmentAt(geo, open, down.position, d)
                                 val grabbed = open.segments.getOrNull(if (node >= 0) node else segment)
                                 var envMoved = false
-                                while (true) {
+                                var lifted = false
+                                var removed = false
+
+                                // The decide phase, under a long-press timer, as the canvas
+                                // loop does it -- the timer wraps this phase rather than
+                                // sitting beside it as a second detector.
+                                //
+                                // Removing a node was a *tap* for one build and it made the
+                                // whole editor feel unreliable: a tap is what a finger does
+                                // when it means to grab something, so segments vanished while
+                                // people were trying to drag them, and a removed node costs
+                                // its time and its curve where a removed dot costs one tap to
+                                // put back. Deliberate gesture, deliberate loss.
+                                try {
+                                    withTimeout(longPressMs) {
+                                        while (true) {
+                                            val event = awaitPointerEvent()
+                                            val change = event.changes.firstOrNull { it.pressed }
+                                            if (change == null) {
+                                                lifted = true
+                                                break
+                                            }
+                                            if ((change.position - down.position).getDistance() > slop) {
+                                                envMoved = true
+                                                break
+                                            }
+                                            change.consume()
+                                        }
+                                    }
+                                } catch (_: PointerEventTimeoutCancellationException) {
+                                    // Compose's own, not kotlinx's TimeoutCancellationException:
+                                    // AwaitPointerEventScope overrides withTimeout and throws
+                                    // PointerEventTimeoutCancellationException. Catching the
+                                    // wrong one compiles, never matches, and lets the exception
+                                    // end the gesture -- so the long press did nothing at all
+                                    // and said nothing about why. The canvas loop above has
+                                    // always caught the right one; this is why.
+                                    //
+                                    // Held still on a node: take it away. Held still anywhere
+                                    // else falls through, so a slow drag on a line still bends it.
+                                    if (node >= 0 && open.removeSegment(node)) {
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        removed = true
+                                    }
+                                }
+                                if (removed) {
+                                    waitForUpRelease()
+                                    return@awaitEachGesture
+                                }
+                                while (!lifted) {
                                     val event = awaitPointerEvent()
                                     val change = event.changes.firstOrNull { it.pressed } ?: break
                                     val travel = change.position - down.position
@@ -4690,21 +4739,19 @@ fun PatchCanvas(
                                     }
                                     change.consume()
                                 }
-                                if (!envMoved) {
-                                    if (node >= 0) {
-                                        open.removeSegment(node)
-                                    } else if (segment >= 0) {
-                                        val times = open.segmentTimes
-                                        val left =
-                                            geo.x(if (segment == 0) 0f else times[segment - 1])
-                                        val right = geo.x(times[segment])
-                                        val at = if (right > left) {
-                                            (down.position.x - left) / (right - left)
-                                        } else {
-                                            0.5f
-                                        }
-                                        open.splitSegment(segment, at)
+                                // A tap adds a node where the line was tapped. A tap on a
+                                // node itself does nothing at all, which is the point: the
+                                // only destructive thing in here costs a deliberate hold.
+                                if (!envMoved && node < 0 && segment >= 0) {
+                                    val times = open.segmentTimes
+                                    val left = geo.x(if (segment == 0) 0f else times[segment - 1])
+                                    val right = geo.x(times[segment])
+                                    val at = if (right > left) {
+                                        (down.position.x - left) / (right - left)
+                                    } else {
+                                        0.5f
                                     }
+                                    open.splitSegment(segment, at)
                                 }
                                 return@awaitEachGesture
                             }
@@ -5938,8 +5985,17 @@ internal const val ENV_NODE_RADIUS = 7f
 /** How near a finger must land to take a node or bend a segment, in dp. */
 internal const val ENV_GRAB = 22f
 
-/** Pixels of vertical drag that bend a segment from straight to fully curved. */
-internal const val ENV_CURVE_TRAVEL = 90f
+/**
+ * Dp of vertical drag that bend a segment from straight to fully curved.
+ *
+ * It was 90, which put the whole range from -1 to +1 inside 439px on the reference device --
+ * against a curve area 631px tall. Any drag anyone actually makes slammed it to a limit and
+ * stuck there, and a control pinned at its maximum looks exactly like a control that is
+ * broken: the report was "the curvature won't move", from a patch whose every segment was
+ * sitting at 1.0. The drag is *relative* to where the curve already was, so a slower rate
+ * costs nothing -- a second drag carries on from the first.
+ */
+internal const val ENV_CURVE_TRAVEL = 200f
 
 /**
  * The time axis an envelope is drawn against: a round number at or above its own length,

@@ -252,6 +252,31 @@ class EnvelopeTest {
     }
 
     /**
+     * Bending a segment takes a deliberate drag, not a flick.
+     *
+     * ENV_CURVE_TRAVEL was 90dp, which put the whole range from -1 to +1 inside 439px on the
+     * reference device against a curve area 631px tall -- so any real drag slammed the curve
+     * to a limit and left it there, and a control pinned at its maximum reads exactly like a
+     * control that is broken. The report was "the curvature won't move", from a patch whose
+     * every segment sat at 1.0.
+     *
+     * Pinned as a *relationship* rather than as a number, because the number is a feel and
+     * will be tuned: what must stay true is that one drag down the editor cannot cross the
+     * whole range. The drag is relative to where the curve already was, so a second drag
+     * carries on and nothing is unreachable.
+     */
+    @Test
+    fun `bending a segment takes more than one drag down the editor`() {
+        val grid = panelGrid(panelRect(frame), frame.density, Types.Env)
+        val curve = envCurveArea(grid, frame.density)
+        val wholeRange = 2f * ENV_CURVE_TRAVEL * frame.density
+        assertTrue(
+            "the range is $wholeRange px against an editor ${curve.height} px tall",
+            wholeRange > curve.height,
+        )
+    }
+
+    /**
      * The way out of a panel is a tap outside it, and the envelope's editor must not be able
      * to eat one.
      *

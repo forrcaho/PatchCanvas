@@ -302,6 +302,14 @@ the reason `AudioEngine`'s three typed wrappers are the only callers. `SlotKind`
 cross-boundary contract like `NodeType` and is asserted against `node.h` the same way; a
 disagreement there would read a segment as a dot rather than merely dropping it.
 
+**A long press in a pointer loop catches Compose's timeout, not kotlinx's.**
+`AwaitPointerEventScope` overrides `withTimeout` and throws
+`PointerEventTimeoutCancellationException`; catching `kotlinx.coroutines.TimeoutCancellationException`
+next to it **compiles, never matches, and lets the exception end the gesture** -- so the long
+press does nothing and says nothing about why. The canvas loop has always caught the right
+one; the envelope's caught the wrong one for a build, and only a log of the exception's class
+name found it.
+
 **A panel editor that returns unconditionally must earn the gesture first.** Every grid's
 loop in the panel ends in `return@awaitEachGesture`, so one reached without a bounds check
 claims the whole screen -- the envelope's did, and swallowed the tap *outside* the panel that
@@ -309,6 +317,23 @@ is the only way to close one, leaving a panel with no door (the breadcrumb is de
 hidden while any panel is open). They share one `inEditor` gate now. The tap-only chips never
 had this problem and do not need it: each carries a rect and none returns without hitting it.
 It is loops that claim.
+
+**Nothing in the envelope editor is destructive on a tap.** A tap on a node used to remove
+it, mirroring the dot grid, and it made the whole editor feel unreliable: a tap is what a
+finger does when it means to *grab* something, so segments vanished while people were trying
+to drag them -- one patch went from six to two without anyone meaning it. A removed dot costs
+one tap to put back and a removed node costs its time and its curve, which is the asymmetry
+that makes the same gesture right in one grid and wrong in the other. Removal is a long press
+now; a tap on a node does nothing at all, and a tap on the *line* still adds one.
+
+**A control whose whole range fits inside one drag reads as broken.** `ENV_CURVE_TRAVEL` was
+90dp, which put the curvature's full -1 to +1 inside 439px against a curve area 631px tall, so
+any real drag slammed it to a limit and left it there. The report was "the curvature won't
+move", from a patch whose every segment was sitting at exactly 1.0 -- a control pinned at its
+maximum looks exactly like a control that is dead. `EnvelopeTest` pins the *relationship*
+rather than the number, since the number is a feel: one drag down the editor must not cross
+the whole range. Curvature is dragged **relative** to where it already was, so a slow rate
+costs nothing -- a second drag carries on from the first.
 
 **An envelope editor's decisions each get their own target, never a mode.** A node carries a
 time and a level and a drag moves both; the sustain and the keypad live in a rail above the

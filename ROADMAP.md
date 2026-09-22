@@ -3222,7 +3222,37 @@ finding exactly. Half of every envelope drawn here is currently unhearable in an
 does not outlive its own note. Delay and reverb are the answer and they are the next thing in
 this phase.
 
-Still open: whether a tap on a node should remove it. It mirrors the dot grid, where a tap
+### Played, and it was flaky, 2026-09-22
+
+**"The controls on Env seem very flaky"**, and underneath it two separate faults, neither of
+which the suite could have seen.
+
+**The curvature would not move**, reported against the segment holding the sustain -- which
+turned out to be a coincidence. Both segments in that patch were at curvature *exactly 1.0*,
+the maximum, so dragging up did nothing and a control pinned at its limit looks exactly like a
+control that is dead. The cause is that `ENV_CURVE_TRAVEL` was 90dp: the full range from -1 to
++1 was 439px against a curve area 631px tall, so **any real drag crossed most of the range**
+and everything ended up saturated. 200dp now. The test pins the relationship rather than the
+number -- one drag down the editor must not cross the whole range -- because the number is a
+feel and will be tuned again, while the relationship is what was actually wrong.
+
+**And the segments were disappearing.** The same patch had gone from six segments to two. A
+tap on a node removed it, which mirrored the dot grid deliberately, and that mirror was wrong:
+a tap is what a finger does when it means to *grab* something, and a removed dot costs one tap
+to put back where a removed node costs its time and its curve. That asymmetry is the answer to
+the question this section left open, and it was answered by use rather than by argument, which
+is what the question was for. Removal is a long press; a tap on a node does nothing.
+
+**The long press then did nothing, silently, and the reason is worth keeping.**
+`AwaitPointerEventScope` overrides `withTimeout` and throws Compose's
+`PointerEventTimeoutCancellationException`, not kotlinx's `TimeoutCancellationException`.
+Catching the wrong one compiles, never matches, and lets the exception end the gesture -- so
+the feature was simply inert. The canvas loop three hundred lines above has always caught the
+right one. Found by logging the exception's class name, after the code read as correct twice.
+
+Open still: the rails not lining up with the nodes, from the session before this one.
+
+Was open, now answered by use: whether a tap on a node should remove it. It mirrors the dot grid, where a tap
 toggles, but a dot costs one tap to put back and a node costs its curve and its time. It was
 not hit by accident once while driving the editor, which is weak evidence and the only kind
 available until it is played.
