@@ -112,16 +112,78 @@ class DotSeqTest {
     fun `dots round-trip through the file, and a file off the grid is clamped onto it`() {
         val (patch, seq) = seq()
         seq.addDot(Dot(0, 0, 4))
-        seq.addDot(Dot(31, -3, 1))
+        seq.addDot(Dot(31, -3, 1, 0.25f))
         val json = patch.toJson()
-        assertTrue(json.contains("\"version\":10"))
+        assertTrue(json.contains("\"version\":13"))
         assertEquals(seq.dots.toList(), patchFromJson(json)!!.modules.first { it.type == Types.Seq }.dots.toList())
 
-        val wild = json.replace("[31,-3,1]", "[99,-3,500]")
+        val wild = json.replace("[31,-3,1,0.25]", "[99,-3,500,7]")
         assertEquals(
-            Dot(DOT_STEPS - 1, -3, DOT_STEPS * DOT_SUBSTEPS),
+            Dot(DOT_STEPS - 1, -3, DOT_STEPS * DOT_SUBSTEPS, 1f),
             patchFromJson(wild)!!.modules.first { it.type == Types.Seq }.dots[1],
         )
+    }
+
+    /**
+     * Format 10 is read as it stands, which is what the rule against migrating actually
+     * says: the refusal is against a *silent conversion*, and a dot that never said how hard
+     * it was struck was struck at full, so reading it that way is not a conversion at all.
+     */
+    @Test
+    fun `a file from before velocity opens, with every note at full`() {
+        val (patch, seq) = seq()
+        seq.addDot(Dot(2, 5, 6, 0.3f))
+        val older = patch.toJson()
+            .replace("\"version\":13", "\"version\":10")
+            .replace("[2,5,6,0.3]", "[2,5,6]")
+        val opened = patchFromJson(older)!!.modules.first { it.type == Types.Seq }
+        assertEquals(listOf(Dot(2, 5, 6, 1f)), opened.dots.toList())
+    }
+
+    @Test
+    fun `a dot's velocity is set by a drag, relative to where it already was`() {
+        val (_, seq) = seq()
+        seq.addDot(Dot(0, 0))
+        assertEquals("a new dot is struck at full", 1f, seq.dots[0].velocity)
+
+        seq.setDotVelocity(0, 0.5f)
+        assertEquals(0.5f, seq.dots[0].velocity)
+
+        // Never to silence: a dot at zero would draw and take its step with no way to tell
+        // it was there, and a dot nobody wants is removed with a tap.
+        seq.setDotVelocity(0, -2f)
+        assertEquals(MIN_VELOCITY, seq.dots[0].velocity)
+        seq.setDotVelocity(0, 9f)
+        assertEquals(1f, seq.dots[0].velocity)
+    }
+
+    @Test
+    fun `a dot moves to another step and degree, and stops at what is in the way`() {
+        val (_, seq) = seq()
+        seq.addDot(Dot(0, 0, 2 * DOT_SUBSTEPS))
+        seq.addDot(Dot(6, 4, DOT_SUBSTEPS))
+
+        assertTrue(seq.moveDot(0, 3, 4))
+        assertEquals(Dot(3, 4, 2 * DOT_SUBSTEPS), seq.dots[0])
+
+        // Two dots at one degree cannot overlap -- the second's start would be heard as
+        // nothing -- so the move is refused and the dot stays where the finger last left it.
+        assertFalse("into the one at step 6", seq.moveDot(0, 5, 4))
+        assertEquals(Dot(3, 4, 2 * DOT_SUBSTEPS), seq.dots[0])
+        assertTrue("but past it is fine", seq.moveDot(0, 7, 4))
+
+        // Off the end of the loop holds at the last step rather than leaving the grid.
+        seq.moveDot(0, 99, 4)
+        assertEquals(dotColumns(seq) - 1, seq.dots[0].step)
+    }
+
+    @Test
+    fun `the lock is view state, and changes no patch`() {
+        val (patch, seq) = seq()
+        seq.addDot(Dot(0, 0))
+        val before = patch.toJson()
+        seq.dotsLocked = true
+        assertEquals("a lock is not part of the instrument", before, patch.toJson())
     }
 
     @Test

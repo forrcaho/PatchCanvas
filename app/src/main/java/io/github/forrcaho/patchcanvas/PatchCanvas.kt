@@ -41,6 +41,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.AwaitPointerEventScope
 import androidx.compose.ui.input.pointer.PointerEventTimeoutCancellationException
@@ -48,9 +49,11 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalFontFamilyResolver
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextMeasurer
@@ -73,6 +76,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.roundToInt
@@ -199,7 +203,7 @@ enum class ParamCurve { LINEAR, EXPONENTIAL, STEPPED }
  * reading it needs no translation from the word "saw". DIVISION is a note length from
  * [INTERVALS], and the one choice a panel shows in its header rather than as a row.
  */
-enum class Choice { NUMBER, WAVE, DIVISION, PRESET, ARP }
+enum class Choice { NUMBER, WAVE, DIVISION, PRESET, ARP, FILTER, SLOPE }
 
 data class Param(
     val name: String,
@@ -308,11 +312,23 @@ data class Param(
 data class Step(val degree: Int, val on: Boolean = true)
 
 /**
- * A note on a dot sequencer's grid: which step it starts on, which degree, and how many
- * steps it lasts. Bespoke's DotSequencer is the shape, and the reason notes are events
- * with a start and an end rather than a gate a sequencer holds for half a step.
+ * A note on a dot sequencer's grid: which step it starts on, which degree, how many
+ * quarter steps it lasts, and how hard it is struck. Bespoke's DotSequencer is the shape,
+ * and the reason notes are events with a start and an end rather than a gate a sequencer
+ * holds for half a step.
+ *
+ * [velocity] is 0 to 1 and defaults to full, which is what every note in the app sounded
+ * at before a dot could say otherwise -- so a file written without it comes back as the
+ * music it was. What it reaches is already there: an `Osc` takes it as amplitude, a
+ * `Pluck` as how hard the string is struck, and an `FM` as both its index and its output,
+ * so on an FM velocity has always meant brightness. Only the sources never chose it.
  */
-data class Dot(val step: Int, val degree: Int, val length: Int = DOT_SUBSTEPS)
+data class Dot(
+    val step: Int,
+    val degree: Int,
+    val length: Int = DOT_SUBSTEPS,
+    val velocity: Float = 1f,
+)
 
 /**
  * What an exposed parameter sweeps between when something modulates it, in its own units.
@@ -473,15 +489,44 @@ object Types {
     private val EXP = ParamCurve.EXPONENTIAL
     private val STEP = ParamCurve.STEPPED
 
+    /**
+     * One filter with four kinds and two slopes, rather than four modules.
+     *
+     * The knobs are the reason: `type` and `slope` are stepped, and a stepped row of
+     * sixteen options or fewer draws as buttons, so all of it is four rows -- one short of
+     * where a panel goes to two columns. The crowding that splitting would have avoided
+     * does not happen, and splitting would have made changing a filter's character a
+     * repatch rather than a tap, which is the wrong trade for the decision people change
+     * most. Order mirrors FilterNode::setParam.
+     */
     val Filter = ModuleType(
-        "Filter", listOf(Port("in", A)), listOf(Port("out", A)),
+        // The notes port is second, so the audio jack every saved patch already names keeps
+        // its place. It is also the first input of its kind on a module that takes audio:
+        // a module that wants to follow the note declares a note input, beside the older
+        // rule that one wanting audio-rate modulation declares an audio one.
+        "Filter", listOf(Port("in", A), Port("notes", N)), listOf(Port("out", A)),
         Color(0xFF6D908B),
         params = listOf(
             // Hertz outright. This was once where a cable's zero sat, with a cutoff jack
             // moving it in octaves from there; with the jack gone it is an ordinary knob,
             // and a modulator sweeps it through the range exposed on the knob itself.
             Param("cutoff", 20f, 18000f, 1000f, "Hz", EXP),
-            Param("res", 0f, 0.95f, 0.3f, "", LIN),
+            // To 1.0, where it stopped at 0.95: the SVF's damping reaches zero there and
+            // the filter rings until something stops it. Not self-oscillation -- with no
+            // input it stays silent -- and safe to reach only because FilterNode now gives
+            // the filter a drive, without which the old maximum already had 39x of gain
+            // sitting on the cutoff. See FilterNode::prepare.
+            Param("res", 0f, 1f, 0.3f, "", LIN),
+            Param("type", 0f, (FILTER_TYPES.size - 1).toFloat(), 0f, "", STEP, Choice.FILTER),
+            Param("slope", 0f, (SLOPES.size - 1).toFloat(), 0f, "", STEP, Choice.SLOPE, short = "slp"),
+            // How much of the note's pitch the cutoff follows. At 100 it keeps a fixed
+            // ratio to the fundamental, and that ratio is the knob's own hertz against
+            // middle C -- 785Hz is the third harmonic -- so "a saw filtered three above
+            // itself" is two settings rather than a cable per note. Default 0, so every
+            // filter that already exists is the filter it was. Last, because appending
+            // leaves the other four at the indices the engine and the promoted knobs
+            // already name.
+            Param("track", 0f, 100f, 0f, "%", LIN, short = "trk"),
         ),
     )
     /**
@@ -1003,6 +1048,50 @@ class PatchModule(
         val dot = dots.getOrNull(index) ?: return
         if (dot.length != length) dots[index] = dot.copy(length = length.coerceIn(1, DOT_STEPS * DOT_SUBSTEPS))
     }
+
+    fun setDotVelocity(index: Int, velocity: Float) {
+        val dot = dots.getOrNull(index) ?: return
+        val held = velocity.coerceIn(MIN_VELOCITY, 1f)
+        // Never to silence: a dot dragged to nothing would still draw and still take its
+        // step, and the only way to find out it was there would be to drag it back up.
+        if (dot.velocity != held) dots[index] = dot.copy(velocity = held)
+    }
+
+    /**
+     * Moves dot [index] to [step] and [degree], unless another dot is in the way.
+     *
+     * Refused rather than clamped when the target overlaps: the finger goes on moving and
+     * the dot stays where it was until the way is clear, which reads as the dot declining
+     * to pass rather than as a jump to somewhere nobody aimed at. Two dots at one degree
+     * cannot overlap for the same reason [dotRoom] exists -- the second's start would be
+     * heard as nothing.
+     */
+    fun moveDot(index: Int, step: Int, degree: Int): Boolean {
+        val dot = dots.getOrNull(index) ?: return false
+        val column = step.coerceIn(0, dotColumns(this) - 1)
+        if (dot.step == column && dot.degree == degree) return true
+        val blocked = dots.withIndex().any { (other, it) ->
+            other != index && it.degree == degree &&
+                column < it.step + it.stepsSpanned && it.step < column + dot.stepsSpanned
+        }
+        if (blocked) return false
+        dots[index] = dot.copy(step = column, degree = degree)
+        return true
+    }
+
+    /**
+     * Whether this sequencer's dots are pinned where they are.
+     *
+     * The lock on the panel, and the whole of what it does: with it on, a vertical drag on a
+     * dot has no position to change and sets the dot's velocity instead. It is stated as a
+     * lock rather than as a velocity mode because that is the honest description of it --
+     * "what a vertical drag means" is a fact about the tool, "whether a dot can move" is a
+     * fact about the dots, and the second one is what a finger is asking about.
+     *
+     * View state, like [gridBottom] and which panel is open: not saved, not undone. A mode
+     * you left on last week is not part of the instrument.
+     */
+    var dotsLocked by mutableStateOf(false)
 
     /**
      * The parameters given a jack, by index, and what each sweeps between.
@@ -1635,6 +1724,50 @@ private fun scaleDetail(scale: Scale): String {
 
 private val scaleAccent = Color(0xFF6FA8E5)
 
+/**
+ * The lock chip: a padlock, lit when the dots are pinned.
+ *
+ * Drawn rather than lettered, and the shackle is what says the state -- closed and centered
+ * over the body when locked, lifted and hinged to one side when not. The fill says it too,
+ * as every other chip's does, but the shackle is the part that reads at arm's length.
+ */
+private fun DrawScope.drawLockChip(rect: Rect, d: Float, locked: Boolean, accent: Color) {
+    val corner = CornerRadius(7f * d, 7f * d)
+    drawRoundRect(if (locked) accent else ChipFill, rect.topLeft, rect.size, corner)
+    drawRoundRect(ChipEdge, rect.topLeft, rect.size, corner, style = Stroke(width = 1.5f * d))
+
+    val ink = if (locked) Color(0xFF14171C) else Color(0xFFC3CBD6)
+    val bodyW = 14f * d
+    val bodyH = 10f * d
+    // The body sits low in the chip, leaving the top third to the shackle.
+    val body = Rect(
+        Offset(rect.center.x - bodyW / 2f, rect.center.y - bodyH / 2f + 3f * d),
+        Size(bodyW, bodyH),
+    )
+    drawRoundRect(ink, body.topLeft, body.size, CornerRadius(2f * d, 2f * d))
+    val shackle = 7f * d
+    // Unlocked, the shackle hangs from the body's right corner and is open on the left,
+    // which is the difference a glance catches.
+    val centerX = if (locked) body.center.x else body.right - 1.5f * d
+    drawArc(
+        color = ink,
+        startAngle = 180f,
+        sweepAngle = 180f,
+        useCenter = false,
+        topLeft = Offset(centerX - shackle / 2f, body.top - shackle - 1f * d),
+        size = Size(shackle, shackle),
+        style = Stroke(width = 2f * d, cap = StrokeCap.Round),
+    )
+    // Its legs, down to the body: two when closed, one when it is standing open.
+    val legTop = body.top - shackle / 2f - 1f * d
+    drawLine(ink, Offset(centerX + shackle / 2f, legTop), Offset(centerX + shackle / 2f, body.top),
+        strokeWidth = 2f * d, cap = StrokeCap.Round)
+    if (locked) {
+        drawLine(ink, Offset(centerX - shackle / 2f, legTop), Offset(centerX - shackle / 2f, body.top),
+            strokeWidth = 2f * d, cap = StrokeCap.Round)
+    }
+}
+
 /** A chip: a label in a rounded box, lit while whatever it opens is open. */
 private fun DrawScope.drawChip(
     rect: Rect,
@@ -1803,6 +1936,23 @@ internal fun panelIntervalChip(panel: Rect, d: Float): Rect {
     return Rect(
         Offset(panel.right - width - 14f * d, panel.top + (PatchModule.PANEL_HEADER * d - height) / 2f),
         Size(width, height),
+    )
+}
+
+/**
+ * The lock, immediately left of a dot sequencer's interval chip.
+ *
+ * Derived from that chip rather than measured from the panel's edge, so the two cannot
+ * drift apart when either moves. Square and drawn as a glyph rather than a word, which is
+ * also why it is the one chip that does not read [Frame.fontScale]: there is no label in
+ * it to outgrow the box.
+ */
+internal fun panelLockChip(panel: Rect, d: Float): Rect {
+    val interval = panelIntervalChip(panel, d)
+    val width = 40f * d
+    return Rect(
+        Offset(interval.left - 10f * d - width, interval.top),
+        Size(width, interval.height),
     )
 }
 
@@ -3873,6 +4023,9 @@ fun PatchCanvas(
 ) {
     val density = LocalDensity.current
     val layoutDirection = LocalLayoutDirection.current
+    // Safe to capture in the gesture loop's closure: it delegates to the view, like a
+    // callback, rather than being a value that goes stale -- see rememberUpdatedState below.
+    val haptics = LocalHapticFeedback.current
     val camera = remember(density.density) { Camera(density.density) }
     var interaction by remember { mutableStateOf<Interaction>(Interaction.Idle) }
 
@@ -4176,6 +4329,18 @@ fun PatchCanvas(
                                 intervalMenu = true
                                 return@awaitEachGesture
                             }
+
+                            // The lock, beside it. A tap-only target like the chips, and the
+                            // one thing on this panel that changes what a drag means rather
+                            // than changing the patch -- so it sends the engine nothing.
+                            if (open.type.grid == GridKind.DOTS &&
+                                panelLockChip(panel, frame.density).contains(down.position)
+                            ) {
+                                waitForUpRelease()
+                                open.dotsLocked = !open.dotsLocked
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                return@awaitEachGesture
+                            }
                             // The reading before anything under it. It is a tap-only target,
                             // like the chips: a number is typed, never dragged, and the bar
                             // for dragging is in the same row a finger's width below.
@@ -4263,19 +4428,38 @@ fun PatchCanvas(
                             val rowHeight = gridArea.height / window.rows
                             var moved = false
 
-                            // A dot sequencer's grid: a drag that starts on a dot stretches
-                            // it, one that starts on an empty cell scrolls, and a tap adds a
-                            // dot or takes one away. Its own loop, since none of it is a
-                            // Steps cell's toggle.
+                            // A dot sequencer's grid: a drag that starts on a dot either
+                            // stretches it or takes it somewhere, one that starts on an empty
+                            // cell scrolls, and a tap adds a dot or takes one away. Its own
+                            // loop, since none of it is a Steps cell's toggle.
+                            //
+                            // Which of the two a drag on a dot is gets decided once, on the
+                            // first move, from the direction it went -- the same way the
+                            // canvas loop decides what a gesture is, and for the same reason:
+                            // a drag that keeps changing its mind halfway is unusable. Across
+                            // is the length, since a length is a distance along the grid;
+                            // down the grid is the degree, since that is what the rows are.
+                            // With the dots locked there is no position to change, so a
+                            // vertical drag sets how hard the note is struck instead.
                             if (cell != null && open.type.grid == GridKind.DOTS) {
                                 val (column, degree) = cell
                                 val hit = open.dotAt(column, degree)
                                 val columns = dotColumns(open)
+                                val startVelocity = open.dots.getOrNull(hit)?.velocity ?: 1f
+                                // Where in the dot the finger landed, so a long one carried
+                                // by its third step does not jump to put its start under the
+                                // finger. It is held by the part that was grabbed.
+                                val grabbed = column - (open.dots.getOrNull(hit)?.step ?: column)
+                                var lengthwise = false
                                 while (true) {
                                     val event = awaitPointerEvent()
                                     val change = event.changes.firstOrNull { it.pressed } ?: break
-                                    if ((change.position - down.position).getDistance() > slop) moved = true
-                                    if (moved && hit >= 0) {
+                                    val travel = change.position - down.position
+                                    if (!moved && travel.getDistance() > slop) {
+                                        moved = true
+                                        lengthwise = abs(travel.x) >= abs(travel.y)
+                                    }
+                                    if (moved && hit >= 0 && lengthwise) {
                                         // In quarter steps, so a drag can end a note partway
                                         // through a cell -- which is the whole of what the
                                         // retired gate knob did, said per note.
@@ -4283,6 +4467,23 @@ fun PatchCanvas(
                                         val dot = open.dots[hit]
                                         val from = dot.step * DOT_SUBSTEPS
                                         open.setDotLength(hit, (under - from + 1).coerceIn(1, open.dotRoom(hit)))
+                                    } else if (moved && hit >= 0 && open.dotsLocked) {
+                                        // Relative to where the dot already was, so a pass
+                                        // over a phrase never jumps to wherever the finger
+                                        // happens to have landed. Up is louder.
+                                        open.setDotVelocity(
+                                            hit,
+                                            startVelocity - travel.y / (VELOCITY_TRAVEL * frame.density),
+                                        )
+                                    } else if (moved && hit >= 0) {
+                                        // Both axes once it is moving: the drag was vertical
+                                        // to begin with, but a dot being carried to another
+                                        // degree usually wants a different step too.
+                                        panelCellAt(
+                                            panel, frame.density, open, change.position, gridScale,
+                                        )?.let { (toColumn, toDegree) ->
+                                            open.moveDot(hit, toColumn - grabbed, toDegree)
+                                        }
                                     } else if (moved) {
                                         val rows = (change.position.y - down.position.y) / rowHeight
                                         open.gridBottom = window.scrolledBy(rows.roundToInt())
@@ -5495,7 +5696,17 @@ private fun DrawScope.drawDotGrid(
                 Offset(left + inset, area.top + row * cellH + inset),
                 Size(maxOf(right - left - inset * 2f, substep / 2f), cellH - inset * 2f),
             )
-            drawRoundRect(accent, rect.topLeft, rect.size, CornerRadius(cellH / 3f, cellH / 3f))
+            val corner = CornerRadius(cellH / 3f, cellH / 3f)
+            // How hard it is struck, as how much of it is filled -- Bespoke's DotSequencer
+            // shows velocity this way and it is the right answer here too: the dot keeps its
+            // full outline, so a quiet note is still a note at that step rather than a
+            // smaller thing that has to be aimed at. Filled from the bottom, because that is
+            // the direction the drag that sets it goes.
+            drawRoundRect(accent.copy(alpha = 0.3f), rect.topLeft, rect.size, corner)
+            val fill = rect.height * dot.velocity.coerceIn(0f, 1f)
+            clipRect(rect.left, rect.bottom - fill, rect.right, rect.bottom) {
+                drawRoundRect(accent, rect.topLeft, rect.size, corner)
+            }
             if (sounding) {
                 drawRoundRect(
                     GridPlaying, rect.topLeft, rect.size, CornerRadius(cellH / 3f, cellH / 3f),
@@ -5711,34 +5922,21 @@ private fun DrawScope.drawChoices(
         // Dark ink on the lit button, light on the rest: the accent colors are bright
         // enough that a white glyph on top of one disappears.
         val ink = if (on) Color(0xFF14171C) else Color(0xFFB7C0CE)
-        when (param.choice) {
-            Choice.WAVE -> drawWave(box, d, i, ink)
-            Choice.DIVISION -> {
-                val text = measurer.measure(INTERVALS.getOrNull(i)?.label.orEmpty(), PanelValueStyle)
-                drawText(
-                    text,
-                    color = ink,
-                    topLeft = Offset(
-                        box.center.x - text.size.width / 2f,
-                        box.center.y - text.size.height / 2f,
-                    ),
-                )
+        if (param.choice == Choice.WAVE) {
+            drawWave(box, d, i, ink)
+        } else {
+            val word = when (param.choice) {
+                Choice.DIVISION -> INTERVALS.getOrNull(i)?.label.orEmpty()
+                Choice.ARP -> ARP_MODES.getOrNull(i).orEmpty()
+                Choice.FILTER -> FILTER_TYPES.getOrNull(i).orEmpty()
+                Choice.SLOPE -> SLOPES.getOrNull(i).orEmpty()
+                Choice.NUMBER -> (param.min + i).toInt().toString()
+                // Never a row: a preset is chosen from its own page, off the header, and a
+                // waveform is drawn rather than named a few lines above.
+                Choice.WAVE, Choice.PRESET -> ""
             }
-            // Never a row: a preset is chosen from its own page, off the header.
-            Choice.PRESET -> {}
-            Choice.ARP -> {
-                val text = measurer.measure(ARP_MODES.getOrNull(i).orEmpty(), PanelValueStyle)
-                drawText(
-                    text,
-                    color = ink,
-                    topLeft = Offset(
-                        box.center.x - text.size.width / 2f,
-                        box.center.y - text.size.height / 2f,
-                    ),
-                )
-            }
-            Choice.NUMBER -> {
-                val text = measurer.measure((param.min + i).toInt().toString(), PanelValueStyle)
+            if (word.isNotEmpty()) {
+                val text = measurer.measure(word, PanelValueStyle)
                 drawText(
                     text,
                     color = ink,
@@ -6508,8 +6706,38 @@ internal const val DOT_STEPS = 32
  */
 internal const val DOT_SUBSTEPS = 4
 
+/**
+ * The quietest a dot can be dragged to.
+ *
+ * Not zero: a silent dot draws and takes its step like any other, so the only way to learn
+ * it was there would be to drag it back up. A dot you do not want is removed with a tap.
+ */
+internal const val MIN_VELOCITY = 0.05f
+
+/**
+ * How far a finger travels, in dp, to take a dot's velocity across its whole range.
+ *
+ * A fixed distance rather than a share of the grid, because the grid's height is however
+ * many rows a scale happens to show and the drag should not get coarser on a long scale.
+ * 120dp is about a comfortable thumb swing on the reference device, and the drag is
+ * relative to where the dot already was, so a long pass over a phrase never jumps.
+ */
+internal const val VELOCITY_TRAVEL = 120f
+
 /** An Arp's modes, as its buttons say them. Mirrors ArpNode::step. */
 internal val ARP_MODES = listOf("up", "down", "up/dn", "rand")
+
+/**
+ * A Filter's kinds, in the order FilterNode::Type has them -- which is also the order the
+ * file stores, so this list is appended to and never reordered.
+ *
+ * "notch" rather than "band reject", because the buttons are 60dp wide and everyone who
+ * reaches for one calls it a notch.
+ */
+internal val FILTER_TYPES = listOf("low", "high", "band", "notch")
+
+/** How steeply a Filter rolls off: one pole pair, or two of them in series. */
+internal val SLOPES = listOf("12dB", "24dB")
 
 /** A Euclid's longest pattern. Mirrors EuclidNode::kMaxSteps. */
 internal const val EUCLID_STEPS = 32
@@ -7092,6 +7320,12 @@ private fun DrawScope.drawPanel(
         else module.params.getOrElse(intervalParam) { DEFAULT_INTERVAL.toFloat() }.roundToInt()
     INTERVALS.getOrNull(chosenInterval)?.let {
         drawChip(panelIntervalChip(panel, d), d, it.label, intervalMenu, scaleAccent, measurer)
+    }
+
+    // Only where there are dots to pin: it is the lock on their position, not a panel
+    // ornament, and no other grid has anything for it to mean.
+    if (module.type.grid == GridKind.DOTS) {
+        drawLockChip(panelLockChip(panel, d), d, module.dotsLocked, scaleAccent)
     }
 
     if (sf != null) {

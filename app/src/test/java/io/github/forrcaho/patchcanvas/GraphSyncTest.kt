@@ -24,7 +24,10 @@ private sealed interface Cmd {
     data class ConnectMod(val src: Long, val srcPort: Int, val dst: Long, val index: Int) : Cmd
     data class DisconnectMod(val src: Long, val srcPort: Int, val dst: Long, val index: Int) : Cmd
     data class SetFont(val id: Long, val font: Long) : Cmd
-    data class SetDot(val id: Long, val slot: Int, val step: Int, val degree: Int, val length: Int) : Cmd
+    data class SetDot(
+        val id: Long, val slot: Int, val step: Int, val degree: Int, val length: Int,
+        val velocity: Float = 1f,
+    ) : Cmd
 }
 
 private class Recorder : GraphCommands {
@@ -53,8 +56,8 @@ private class Recorder : GraphCommands {
     }
     override fun setTempo(bpm: Float) { log += Cmd.SetTempo(bpm) }
     override fun setFont(id: Long, font: Long) { log += Cmd.SetFont(id, font) }
-    override fun setDot(id: Long, slot: Int, step: Int, degree: Int, length: Int) {
-        log += Cmd.SetDot(id, slot, step, degree, length)
+    override fun setDot(id: Long, slot: Int, step: Int, degree: Int, length: Int, velocity: Float) {
+        log += Cmd.SetDot(id, slot, step, degree, length, velocity)
     }
     override fun setModRange(id: Long, index: Int, low: Float, high: Float, exponential: Boolean) {
         log += Cmd.SetModRange(id, index, low, high, exponential)
@@ -1291,12 +1294,22 @@ class DotSyncTest {
         sync.sync(patch)
         assertEquals(listOf(Cmd.SetDot(seq.id, 1, 4, 7, 3)), rec.log.filterIsInstance<Cmd.SetDot>())
 
+        // How hard it is struck is part of the dot, so it crosses the same way and for the
+        // same reason: the engine is told the slot that changed and nothing else.
+        rec.log.clear()
+        seq.setDotVelocity(1, 0.4f)
+        sync.sync(patch)
+        assertEquals(
+            listOf(Cmd.SetDot(seq.id, 1, 4, 7, 3, 0.4f)),
+            rec.log.filterIsInstance<Cmd.SetDot>(),
+        )
+
         // The first goes: the second moves to slot 0, and slot 1 is cleared.
         rec.log.clear()
         seq.removeDot(0)
         sync.sync(patch)
         assertEquals(
-            listOf(Cmd.SetDot(seq.id, 0, 4, 7, 3), Cmd.SetDot(seq.id, 1, 0, 0, 0)),
+            listOf(Cmd.SetDot(seq.id, 0, 4, 7, 3, 0.4f), Cmd.SetDot(seq.id, 1, 0, 0, 0)),
             rec.log.filterIsInstance<Cmd.SetDot>(),
         )
 

@@ -105,7 +105,8 @@ public:
     /** One step of a sequence, as a degree of the patch's scales. */
     bool postSetStep(int64_t id, int32_t index, int32_t degree, bool gate);
     /** One dot of a dot sequencer, by slot; a length of 0 clears the slot. */
-    bool postSetDot(int64_t id, int32_t slot, int32_t step, int32_t degree, int32_t length);
+    bool postSetDot(int64_t id, int32_t slot, int32_t step, int32_t degree, int32_t length,
+                    float velocity);
     /**
      * Replaces the patch's scales with [list], which the graph takes ownership of. Built
      * by the caller off the audio thread and swapped in whole; the list it replaces comes
@@ -184,7 +185,7 @@ private:
         NodeType nodeType = NodeType::Unknown;
         Node *node = nullptr;
         int32_t paramIndex = 0;
-        /** SetParam's value, and the low end of SetModRange's. */
+        /** SetParam's value, the low end of SetModRange's, and SetDot's velocity. */
         float value = 0.0f;
         /** SetModRange only: the high end, and whether the sweep between them is geometric. */
         float high = 0.0f;

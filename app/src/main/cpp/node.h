@@ -120,11 +120,13 @@ public:
      *
      * Audio thread, same rules as setParam.
      */
-    virtual void setDot(int32_t slot, int32_t step, int32_t degree, int32_t length) {
+    virtual void setDot(int32_t slot, int32_t step, int32_t degree, int32_t length,
+                        float velocity) {
         (void) slot;
         (void) step;
         (void) degree;
         (void) length;
+        (void) velocity;
     }
 
     /**

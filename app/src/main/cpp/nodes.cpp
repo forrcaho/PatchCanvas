@@ -29,6 +29,12 @@ constexpr float kTuneRange = 2400.0f;
 /** A figure in degrees, mirroring DEFAULT_PATTERN in PatchCanvas.kt. */
 constexpr int32_t kPattern[8] = {0, 3, 7, 10, 12, 10, 7, 3};
 
+/** What saturates a filter's resonance; see FilterNode::prepare for the measurements. */
+constexpr float kResonanceDrive = 0.02f;
+
+/** How fast a tracked cutoff slides to a new note, in octaves per block. */
+constexpr float kTrackGlide = 0.05f;
+
 } // namespace
 
 void NullNode::process(int32_t frames) {
@@ -41,24 +47,79 @@ void NullNode::process(int32_t frames) {
 
 void FilterNode::prepare(int32_t sampleRate) {
     Node::prepare(sampleRate);
-    svf_.Init(static_cast<float>(sampleRate));
-    svf_.SetRes(0.3f);
-    svf_.SetDrive(0.0f);
+    for (daisysp::Svf *svf : {&svf_, &svf2_}) {
+        svf->Init(static_cast<float>(sampleRate));
+        svf->SetRes(0.3f);
+        // Not zero, which is what this was, and the difference is not subtle. The SVF's
+        // only limit on its resonance is a cubic term scaled by the drive, so at a drive
+        // of zero a sine sitting on the cutoff comes out 39x louder at the old maximum
+        // res of 0.95, and 1255x at 1.0 -- measured, not feared. Any drive at all
+        // saturates that peak, and the measured cost is nothing: an impulse still rings
+        // 12ms at res 0.5, 71ms at 0.9 and past three seconds at 1.0 whatever the drive
+        // is, so what the knob *sounds* like is untouched and only the blowup goes.
+        //
+        // 0.02 rather than more, because a resonant filter is supposed to have a peak:
+        // it leaves about 2.6x at the top of the range where 0.5 flattens it to 1.1 and
+        // the knob stops doing anything audible at its own peak.
+        svf->SetDrive(kResonanceDrive);
+    }
+}
+
+float FilterNode::chosen(daisysp::Svf &svf) const {
+    switch (type_) {
+        case kHigh: return svf.High();
+        case kBand: return svf.Band();
+        case kNotch: return svf.Notch();
+        case kLow:
+        default: return svf.Low();
+    }
 }
 
 void FilterNode::process(int32_t frames) {
     float *o = out(0);
     const float *in = input(0);
 
+    // The note the cutoff follows, taken before the samples rather than during them: the
+    // last note to start in this block wins, as it does on a monophonic synth, and a Change
+    // moves it too so a drone that follows the scale drags the cutoff with it. Resolved by
+    // pitchOf, the one place a degree becomes a pitch -- so the filter learns no more about
+    // a semitone than a synth does.
+    const NoteBuffer &notes = notesIn(1);
+    for (int32_t i = 0; i < notes.count; ++i) {
+        const NoteEvent &event = notes.events[i];
+        if (event.kind == NoteKind::On || event.kind == NoteKind::Change) {
+            trackTarget_ = pitchOf(event, scales_);
+        }
+    }
+    // Toward it rather than to it; see trackOctaves_. One pole per block, which at a
+    // 32-frame block settles inside about ten milliseconds -- under a note's own 5ms
+    // opening twice over, and slow enough that the octaves arrive as a slide rather than
+    // as an edge.
+    const float remaining = trackTarget_ - trackOctaves_;
+    trackOctaves_ += std::min(std::max(remaining, -kTrackGlide), kTrackGlide);
+
     // Once per block, which is what is left once the cutoff jack has gone: cutoffHz_ only
     // moves when the knob does or a modulator writes it, and the graph applies a modulator
     // once per block anyway. The per-sample read that was here existed so that audio-rate
     // filter modulation worked through the jack; a module that wants audio rate declares
     // an audio input instead.
-    svf_.SetFreq(clampf(cutoffHz_, 20.0f, 18000.0f));
+    //
+    // Tracking multiplies whatever the knob and its modulator arrived at, so an Env
+    // sweeping the cutoff still sweeps it -- around the note rather than around middle C.
+    // A note landing mid-block moves the cutoff at the next one, which is under a
+    // millisecond and an order below the 5ms a note takes to open anyway.
+    const float hz = clampf(cutoffHz_ * std::exp2(track_ * trackOctaves_), 20.0f, 18000.0f);
+    svf_.SetFreq(hz);
+    svf2_.SetFreq(hz);
     for (int32_t i = 0; i < frames; ++i) {
         svf_.Process(in[i]);
-        o[i] = svf_.Low();
+        const float first = chosen(svf_);
+        // The second stage runs on the first's output whether it is used or not; see the
+        // note on svf2_. Two of the same filter in series is where the steeper slope comes
+        // from, and it is also why the resonant peak is sharper there -- the two peaks
+        // multiply, which is what a 24dB filter does.
+        svf2_.Process(first);
+        o[i] = steep_ ? chosen(svf2_) : first;
     }
 }
 
@@ -68,7 +129,25 @@ void FilterNode::setParam(int32_t index, float value) {
         // it in octaves from there as a hardware cutoff input does; with the jack gone, a
         // modulator writes it directly through the range stored on the knob.
         case 0: cutoffHz_ = clampf(value, 20.0f, 18000.0f); break;
-        case 1: svf_.SetRes(clampf(value, 0.0f, 0.95f)); break;
+        case 1: {
+            // To 1.0 now, where it stopped at 0.95. The SVF's damping reaches zero there
+            // and the filter rings until something stops it -- which is the top of the
+            // knob and worth having, and is *not* self-oscillation: with no input at all
+            // it stays silent, because nothing here can make the damping negative.
+            const float res = clampf(value, 0.0f, 1.0f);
+            svf_.SetRes(res);
+            svf2_.SetRes(res);
+            // SetRes recomputes drive_ from pre_drive_, so neither needs setting again.
+            break;
+        }
+        case 2:
+            type_ = static_cast<int32_t>(clampf(value, 0.0f, static_cast<float>(kTypeCount - 1)) + 0.5f);
+            break;
+        case 3: steep_ = clampf(value, 0.0f, 1.0f) >= 0.5f; break;
+        // Percent on the knob, a fraction here. At 100 the cutoff keeps a fixed ratio to
+        // the note -- the ratio being whatever the knob's hertz are against middle C, so
+        // 785Hz is the third harmonic -- and at 0 the filter is what it always was.
+        case 4: track_ = clampf(value, 0.0f, 100.0f) / 100.0f; break;
         default: break;
     }
 }
@@ -410,11 +489,12 @@ void StepsNode::setParam(int32_t index, float value) {
 
 // ---------------------------------------------------------------- Seq
 
-void SeqNode::setDot(int32_t slot, int32_t step, int32_t degree, int32_t length) {
+void SeqNode::setDot(int32_t slot, int32_t step, int32_t degree, int32_t length, float velocity) {
     if (slot < 0 || slot >= kMaxDots) return;
     dotStep_[slot] = std::max(0, std::min(step, kSteps - 1));
     dotDegree_[slot] = degree;
     dotLength_[slot] = std::max(0, std::min(length, kSteps * kDotSubsteps));
+    dotVelocity_[slot] = clampf(velocity, 0.0f, 1.0f);
 }
 
 void SeqNode::tick(int32_t offset, int64_t count) {
@@ -471,7 +551,7 @@ void SeqNode::onTick(NoteBuffer &notes, uint16_t offset, int64_t count) {
         on.degree = dotDegree_[d];
         on.beat = beat;
         on.cents = transposeCents_;
-        on.velocity = 1.0f;
+        on.velocity = dotVelocity_[d];
         if (!notes.push(on)) break;
         // Whole steps in ticks, the part step in frames. A length under one step has no
         // whole steps at all, so its part starts on this very tick -- which is why the
@@ -556,16 +636,19 @@ void OscVoice::init(float sampleRate) {
     gate.init(sampleRate);
 }
 
-void OscVoice::strike(float hz, float velocity, bool stolen) {
+void OscVoice::strike(float hz, float strength, bool stolen) {
     osc.SetFreq(hz);
-    osc.SetAmp(velocity);
-    // Nothing to do for a stolen voice: the ramp is already open and stays open, which
+    // Through the ramp rather than into the oscillator's own amplitude. SetAmp here was a
+    // step the moment a note landed on a voice still sounding, which is what two abutting
+    // notes at different velocities are -- see GateRamp.
+    velocity = strength;
+    // Nothing else to do for a stolen voice: the ramp is already open and stays open, which
     // is what "taken while still sounding" should sound like. See GateRamp.
     (void) stolen;
 }
 
 float OscVoice::render(bool open, bool &finished) {
-    const float amplitude = gate.process(open, finished);
+    const float amplitude = gate.process(open, velocity, finished);
     if (finished) return 0.0f;
     return osc.Process() * amplitude;
 }
@@ -715,7 +798,9 @@ void FmVoice::strike(float frequency, float strength, bool stolen) {
 }
 
 float FmVoice::render(bool open, bool &finished) {
-    const float amplitude = gate.process(open, finished);
+    // Velocity rides the ramp here too, for the same reason it does on an Osc: applied
+    // straight to the output it stepped whenever a note took a sounding voice.
+    const float amplitude = gate.process(open, velocity, finished);
     if (finished) return 0.0f;
     constexpr float kTwoPi = 6.28318530718f;
     // The amplitude is no longer in here. It was Chowning's brass -- brighter as louder --
@@ -730,7 +815,7 @@ float FmVoice::render(bool open, bool &finished) {
     carrier -= std::floor(carrier);
     modulator += modulatorStep;
     modulator -= std::floor(modulator);
-    return sample * amplitude * velocity;
+    return sample * amplitude;
 }
 
 void FmNode::prepare(int32_t sampleRate) {

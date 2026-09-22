@@ -102,7 +102,7 @@ interface GraphCommands {
     /** Gives SF node [id] a synth over the loaded font [font], a native handle. */
     fun setFont(id: Long, font: Long)
     /** Dot [slot] of dot sequencer [id]; a length of 0 clears the slot. */
-    fun setDot(id: Long, slot: Int, step: Int, degree: Int, length: Int)
+    fun setDot(id: Long, slot: Int, step: Int, degree: Int, length: Int, velocity: Float)
     fun collectGarbage()
 }
 
@@ -179,9 +179,9 @@ object EngineCommands : GraphCommands {
         AudioEngine.setTempo(bpm)
     }
 
-    override fun setDot(id: Long, slot: Int, step: Int, degree: Int, length: Int) {
-        trace { "dot $id[$slot] = step $step degree $degree for $length" }
-        AudioEngine.setDot(id, slot, step, degree, length)
+    override fun setDot(id: Long, slot: Int, step: Int, degree: Int, length: Int, velocity: Float) {
+        trace { "dot $id[$slot] = step $step degree $degree for $length at $velocity" }
+        AudioEngine.setDot(id, slot, step, degree, length, velocity)
     }
 
     override fun setFont(id: Long, font: Long) {
@@ -354,9 +354,11 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
         dots.forEach { (id, list) ->
             val previous = if (id in fresh) null else syncedDots[id]
             list.forEachIndexed { slot, dot ->
-                if (previous?.getOrNull(slot) != dot) commands.setDot(id, slot, dot.step, dot.degree, dot.length)
+                if (previous?.getOrNull(slot) != dot) {
+                    commands.setDot(id, slot, dot.step, dot.degree, dot.length, dot.velocity)
+                }
             }
-            for (slot in list.size until (previous?.size ?: 0)) commands.setDot(id, slot, 0, 0, 0)
+            for (slot in list.size until (previous?.size ?: 0)) commands.setDot(id, slot, 0, 0, 0, 1f)
         }
 
         // The scale list, whole, when it or the bar length changes: entries last bars and

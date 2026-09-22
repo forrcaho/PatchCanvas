@@ -5,13 +5,21 @@ audio_analyze.py reports level, pitch and spectrum. This answers a different que
 where are the clicks, and are they periodic?
 
 A click is a step the signal could not have made on its own, so the threshold is derived
-from the signal's own slope rather than picked -- a saw steps hard once per cycle by
-design, and a fixed number would either flag that or miss a real glitch on a quieter
-patch.
+from the signal's own slope rather than picked -- a fixed number would miss a real glitch
+on a quiet patch and flag an ordinary edge on a loud one.
 
-The alignment check is the useful part. Clicks landing on multiples of the inner block
-(32), the device burst (96) or the stream buffer (192) point at the engine's plumbing;
-clicks at irregular offsets point at the DSP.
+That threshold does *not* excuse a waveform whose edges are the point. A sawtooth steps
+full scale once a cycle by design, and a rare large step is exactly what an outlier test
+reports: run this on a saw and it will say hundreds of discontinuities, every one of them
+the waveform. This file used to claim otherwise in this docstring, which cost an afternoon
+of chasing a filter that was innocent. So the periodicity check below exists to say which
+kind of periodic a run of events is, and the verdicts are the part to read:
+
+  * evenly spaced and landing on multiples of the inner block (32), the device burst (96)
+    or the stream buffer (192) -- the engine's plumbing;
+  * evenly spaced at an audio rate and *not* on those boundaries -- almost certainly the
+    waveform's own edges, so pick a smoother source and measure again;
+  * irregular -- the DSP, which is the case worth chasing.
 
     python3 tools/find_clicks.py capture.wav
     python3 tools/find_clicks.py capture.wav --sigma 8 --png /tmp/clicks.png
@@ -40,7 +48,15 @@ def decode(path):
 
 
 def find(samples, rate, sigma):
-    """Indices where the first difference is an outlier against its own distribution."""
+    """Indices of the first sample *after* a step that is an outlier against its own
+    distribution.
+
+    After, not before, and that off-by-one was a real bug for the life of this file: a step
+    arriving at sample n shows up in the difference array at n-1, so the boundary check
+    below was asking whether n-1 was a multiple of 32 and getting 31 every time. It
+    reported 0% aligned for a click placed exactly on a block boundary -- which is to say
+    the alignment diagnostic, the one thing this script exists for, could never fire.
+    """
     diff = np.abs(np.diff(samples))
     if diff.size == 0:
         return np.array([], dtype=int), 0.0
@@ -55,7 +71,37 @@ def find(samples, rate, sigma):
         return hits, threshold
     # Collapse runs: one click smeared over a few samples is one event.
     keep = np.concatenate(([True], np.diff(hits) > rate // 1000))
-    return hits[keep], threshold
+    # +1: the sample the signal jumped *to*, which is the one whose offset means something.
+    return hits[keep] + 1, threshold
+
+
+def periodicity(gaps, rate, on_boundary):
+    """One line on what an evenly spaced run of events most likely is.
+
+    Events at a steady period are either the plumbing, the waveform, or a repeating figure
+    in the music. Which one is decided by the period itself and by the boundary check: the
+    inner block repeats at 1500Hz on a 48k stream, squarely inside the range a note can
+    sound at, so neither number settles it alone.
+    """
+    median = float(np.median(gaps))
+    if median <= 0:
+        return "verdict: too few events to say"
+    # Even, as a share of the period. A waveform's edges are exact; a click chasing notes
+    # drifts by however much the music does.
+    spread = float(np.median(np.abs(gaps - median))) / median
+    if spread > 0.05:
+        return ("verdict: irregular spacing -- this implicates the DSP, "
+                "which is the case worth chasing")
+    hz = rate / median
+    if on_boundary:
+        return (f"verdict: evenly spaced at {hz:.0f}Hz and on a buffer boundary -- "
+                "the plumbing, not the DSP")
+    if 20.0 <= hz <= 5000.0:
+        return (f"verdict: evenly spaced at {hz:.0f}Hz, in the range a note sounds at -- "
+                "most likely the waveform's own edges rather than clicks. A saw or a "
+                "square reads this way by design; measure again with a sine source")
+    return (f"verdict: evenly spaced at {hz:.1f}Hz, too {'slow' if hz < 20 else 'fast'} "
+            "for a waveform edge -- something in the patch repeats at that rate")
 
 
 def main():
@@ -83,7 +129,7 @@ def main():
 
         times = hits / rate
         for t, i in list(zip(times, hits))[:20]:
-            step = abs(audio[i + 1, ch] - audio[i, ch])
+            step = abs(audio[i, ch] - audio[i - 1, ch])
             print(f"    {t:8.4f}s  sample {i:>8}  step {step:.4f}")
         if len(hits) > 20:
             print(f"    ... and {len(hits) - 20} more")
@@ -94,13 +140,17 @@ def main():
                   f"max {gaps.max()} samples "
                   f"({gaps.min() / rate * 1000:.1f}–{gaps.max() / rate * 1000:.1f} ms)")
             # The diagnostic that matters: does the timing implicate the plumbing?
+            on_boundary = False
             for name, period in (("inner block", 32), ("device burst", 96),
                                  ("stream buffer", 192)):
                 aligned = np.count_nonzero(hits % period == 0)
                 share = aligned / len(hits)
                 verdict = "  <-- aligned" if share > 0.5 else ""
+                if share > 0.5:
+                    on_boundary = True
                 print(f"    on a {name} boundary ({period}): "
                       f"{aligned}/{len(hits)} ({share:.0%}){verdict}")
+            print("  " + periodicity(gaps, rate, on_boundary))
 
     if args.png and total:
         import matplotlib

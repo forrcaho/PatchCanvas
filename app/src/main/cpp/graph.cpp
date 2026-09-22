@@ -81,7 +81,8 @@ bool Graph::postSetStep(int64_t id, int32_t index, int32_t degree, bool gate) {
     return commands_.push(cmd);
 }
 
-bool Graph::postSetDot(int64_t id, int32_t slot, int32_t step, int32_t degree, int32_t length) {
+bool Graph::postSetDot(int64_t id, int32_t slot, int32_t step, int32_t degree, int32_t length,
+                       float velocity) {
     Command cmd;
     cmd.type = CommandType::SetDot;
     cmd.id = id;
@@ -89,6 +90,7 @@ bool Graph::postSetDot(int64_t id, int32_t slot, int32_t step, int32_t degree, i
     cmd.step = step;
     cmd.degree = degree;
     cmd.length = length;
+    cmd.value = velocity;
     return commands_.push(cmd);
 }
 
@@ -541,7 +543,8 @@ void Graph::applyCommands() {
                 const int32_t slot = indexOf(cmd.id);
                 if (slot < 0) break;
                 // Bounds-checked by the node, as a step is.
-                nodes_[slot].node->setDot(cmd.paramIndex, cmd.step, cmd.degree, cmd.length);
+                nodes_[slot].node->setDot(cmd.paramIndex, cmd.step, cmd.degree, cmd.length,
+                                          cmd.value);
                 break;
             }
             case CommandType::SetScales:

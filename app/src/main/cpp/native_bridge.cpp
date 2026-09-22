@@ -144,8 +144,9 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetStep(JNIEnv *, jobject,
 JNIEXPORT jboolean JNICALL
 Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetDot(JNIEnv *, jobject, jlong id,
                                                              jint slot, jint step, jint degree,
-                                                             jint length) {
-    return engine().graph().postSetDot(id, slot, step, degree, length) ? JNI_TRUE : JNI_FALSE;
+                                                             jint length, jfloat velocity) {
+    return engine().graph().postSetDot(id, slot, step, degree, length, velocity) ? JNI_TRUE
+                                                                                 : JNI_FALSE;
 }
 
 /**

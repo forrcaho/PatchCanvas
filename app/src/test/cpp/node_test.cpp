@@ -203,6 +203,305 @@ void filterCutoffFollowsItsKnob() {
     check(peak(narrow) < peak(wide) * 0.5f, "and a low cutoff takes the top off the noise");
 }
 
+/** A sine at [hz] through a filter set up by [setUp], as the largest sample it produces. */
+float filterGainAt(float hz, const std::function<void(FilterNode &)> &setUp) {
+    FilterNode filter;
+    filter.prepare(kRate);
+    setUp(filter);
+    std::array<float, kBlockSize> tone{};
+    float worst = 0.0f;
+    int32_t frame = 0;
+    // A second of it: long enough for the filter's own ring to settle, so what is left is
+    // the steady-state gain rather than the transient of the tone starting.
+    for (int block = 0; block < kRate / kBlockSize; ++block) {
+        for (int32_t i = 0; i < kBlockSize; ++i, ++frame) {
+            tone[i] = std::sin(6.2831853f * hz * static_cast<float>(frame) / kRate);
+        }
+        filter.setInput(0, tone.data());
+        filter.process(kBlockSize);
+        if (block > 8) {
+            for (int32_t i = 0; i < kBlockSize; ++i) worst = std::max(worst, std::fabs(filter.output(0)[i]));
+        }
+    }
+    return worst;
+}
+
+/** Each kind keeps what it is named for and takes away the rest. */
+void aFilterHasFourKinds() {
+    std::printf("a filter keeps what its kind is named for\n");
+    constexpr float kCutoff = 1000.0f;
+    const auto kind = [](int type) {
+        return [type](FilterNode &f) {
+            f.setParam(0, kCutoff);
+            f.setParam(1, 0.2f); // out of the resonant peak's way
+            f.setParam(2, static_cast<float>(type));
+        };
+    };
+    const float low = 100.0f;
+    const float high = 8000.0f;
+
+    const float lowPassLow = filterGainAt(low, kind(FilterNode::kLow));
+    const float lowPassHigh = filterGainAt(high, kind(FilterNode::kLow));
+    check(lowPassLow > 0.5f && lowPassHigh < lowPassLow * 0.2f, "low passes the low");
+
+    const float highPassLow = filterGainAt(low, kind(FilterNode::kHigh));
+    const float highPassHigh = filterGainAt(high, kind(FilterNode::kHigh));
+    check(highPassHigh > 0.5f && highPassLow < highPassHigh * 0.2f, "high passes the high");
+
+    const float bandAt = filterGainAt(kCutoff, kind(FilterNode::kBand));
+    check(bandAt > filterGainAt(low, kind(FilterNode::kBand)) * 2.0f &&
+                  bandAt > filterGainAt(high, kind(FilterNode::kBand)) * 2.0f,
+          "band keeps the middle and drops both ends");
+
+    // The notch is the one that is easiest to get subtly wrong -- an SVF's notch output is
+    // the one that needed its own correction upstream -- so it is checked at the cutoff
+    // against both sides rather than against a threshold.
+    const float notchAt = filterGainAt(kCutoff, kind(FilterNode::kNotch));
+    check(notchAt < filterGainAt(low, kind(FilterNode::kNotch)) * 0.5f &&
+                  notchAt < filterGainAt(high, kind(FilterNode::kNotch)) * 0.5f,
+          "and notch drops the middle and keeps both ends");
+}
+
+void theSteeperSlopeIsSteeper() {
+    std::printf("the steeper slope rolls off faster, and only past the cutoff\n");
+    const auto at = [](bool steep) {
+        return [steep](FilterNode &f) {
+            f.setParam(0, 1000.0f);
+            f.setParam(1, 0.2f);
+            f.setParam(2, static_cast<float>(FilterNode::kLow));
+            f.setParam(3, steep ? 1.0f : 0.0f);
+        };
+    };
+    // Two octaves up, where 12dB and 24dB are far enough apart to be unambiguous.
+    const float gentle = filterGainAt(4000.0f, at(false));
+    const float steep = filterGainAt(4000.0f, at(true));
+    check(steep < gentle * 0.5f, "two octaves up, the steeper one is much quieter");
+
+    // And well below it both are open, so the slope is not simply a volume knob.
+    const float gentleLow = filterGainAt(100.0f, at(false));
+    const float steepLow = filterGainAt(100.0f, at(true));
+    check(steepLow > gentleLow * 0.8f, "well below the cutoff both pass the signal");
+}
+
+/**
+ * The resonance is bounded, which it was not.
+ *
+ * The SVF's only limit on its resonance is a cubic term scaled by the drive, and the drive
+ * was zero: a sine sitting exactly on the cutoff came out 39x at the old maximum res of
+ * 0.95 and 1255x at 1.0. Nothing caught it because nothing had ever pointed a tone at the
+ * cutoff and looked at the number. Out's limiter would have held the output, which is the
+ * point -- it would have held it as a brick wall over whatever else was playing.
+ */
+void resonanceIsBoundedAtEveryKindAndSlope() {
+    std::printf("resonance is bounded, at every kind and slope\n");
+    for (int type = 0; type < FilterNode::kTypeCount; ++type) {
+        for (int steep = 0; steep <= 1; ++steep) {
+            const float gain = filterGainAt(1000.0f, [type, steep](FilterNode &f) {
+                f.setParam(0, 1000.0f);
+                f.setParam(1, 1.0f); // as resonant as the knob goes
+                f.setParam(2, static_cast<float>(type));
+                f.setParam(3, static_cast<float>(steep));
+            });
+            check(std::isfinite(gain), "finite at type " + std::to_string(type));
+            // Room for a real resonant peak -- a filter without one is not resonant -- and
+            // nowhere near the 39x that shipped.
+            check(gain < 8.0f, "and bounded at type " + std::to_string(type) +
+                                       " slope " + std::to_string(steep) +
+                                       ", was " + std::to_string(gain));
+        }
+    }
+}
+
+/** What the top of the res knob is for, and what it is not. */
+void fullResonanceRingsButDoesNotOscillate() {
+    std::printf("at full resonance a filter rings, and silence stays silent\n");
+    const auto ringMs = [](float res) {
+        FilterNode filter;
+        filter.prepare(kRate);
+        filter.setParam(0, 400.0f);
+        filter.setParam(1, res);
+        std::array<float, kBlockSize> in{};
+        in[0] = 1.0f; // one impulse, then nothing
+        float first = 0.0f;
+        int32_t last = 0;
+        for (int block = 0; block < 3 * kRate / kBlockSize; ++block) {
+            filter.setInput(0, in.data());
+            filter.process(kBlockSize);
+            for (int32_t i = 0; i < kBlockSize; ++i) {
+                const float out = std::fabs(filter.output(0)[i]);
+                if (block == 0) first = std::max(first, out);
+                if (out > first * 0.01f) last = block * kBlockSize + i;
+            }
+            in[0] = 0.0f;
+        }
+        return 1000.0f * static_cast<float>(last) / kRate;
+    };
+    check(ringMs(0.5f) < 100.0f, "a middling resonance rings briefly");
+    check(ringMs(0.9f) > ringMs(0.5f), "more of it rings longer");
+    check(ringMs(1.0f) > 1000.0f, "and at the top it rings on and on");
+
+    // It is not an oscillator: nothing here can make the damping negative, so with no
+    // input at all there is nothing to ring.
+    FilterNode silent;
+    silent.prepare(kRate);
+    silent.setParam(0, 400.0f);
+    silent.setParam(1, 1.0f);
+    std::array<float, kBlockSize> nothing{};
+    silent.setInput(0, nothing.data());
+    const auto rendered = run(silent, 200);
+    check(peak(rendered) == 0.0f, "and silence in is silence out");
+}
+
+/**
+ * The cutoff follows the note, which nothing in the app could do before this.
+ *
+ * Measured as a ratio rather than as hertz: what tracking promises is that the filter sits
+ * the same distance above every note, so the test is that an octave up moves the cutoff an
+ * octave up -- which is the property, where a number in hertz would only be this note.
+ */
+void theCutoffFollowsTheNote() {
+    std::printf("a filter's cutoff follows the note it is given\n");
+    // Where the corner actually is, found by asking which of two tones survives: a tone an
+    // octave under the corner passes, one an octave over it does not.
+    const auto passes = [](float tone, int32_t degree, float track) {
+        FilterNode filter;
+        filter.prepare(kRate);
+        filter.setParam(0, 1000.0f);
+        filter.setParam(1, 0.2f);
+        filter.setParam(4, track);
+        // Built here rather than with the noteOn helper, which the file declares further
+        // down among the voice tests.
+        NoteBuffer notes;
+        NoteEvent on;
+        on.id = 1;
+        on.kind = NoteKind::On;
+        on.degree = degree;
+        notes.push(on);
+        filter.setNoteInput(1, &notes);
+        filter.setTiming(0.0, false, nullptr);
+        std::array<float, kBlockSize> in{};
+        float worst = 0.0f;
+        int32_t frame = 0;
+        for (int block = 0; block < kRate / kBlockSize; ++block) {
+            for (int32_t i = 0; i < kBlockSize; ++i, ++frame) {
+                in[i] = std::sin(6.2831853f * tone * static_cast<float>(frame) / kRate);
+            }
+            filter.setInput(0, in.data());
+            filter.process(kBlockSize);
+            // Well past the slide: a tracked cutoff moves at a fixed rate in octaves per
+            // block, so four octaves takes eighty of them, and measuring from block eight
+            // would read the filter on its way rather than where it arrived.
+            if (block > 200) {
+                for (int32_t i = 0; i < kBlockSize; ++i) {
+                    worst = std::max(worst, std::fabs(filter.output(0)[i]));
+                }
+            }
+            // Only the first block carries the note; the pitch is held from then on.
+            static const NoteBuffer kNone{};
+            filter.setNoteInput(1, &kNone);
+        }
+        return worst;
+    };
+
+    // Untracked, the corner stays at the knob whatever note arrives.
+    check(passes(4000.0f, 0, 0.0f) < 0.2f, "without tracking a tone above the cutoff is cut");
+    check(passes(4000.0f, 24, 0.0f) < 0.2f, "and it stays cut two octaves up the keyboard");
+
+    // Tracked, two octaves up the keyboard takes the corner two octaves up with it, so the
+    // same 4kHz tone is now under it.
+    check(passes(4000.0f, 24, 100.0f) > 0.5f, "with tracking the same tone is let through");
+    // And the ratio holds the other way: a tone that passed at middle C is cut two octaves
+    // down, because the corner went down with the note.
+    check(passes(700.0f, 0, 100.0f) > 0.5f, "a tone under the corner passes at middle C");
+    check(passes(700.0f, -24, 100.0f) < 0.2f, "and is cut two octaves down");
+
+    // Half tracking is half the distance, in octaves: two octaves of note move the corner
+    // one. 4kHz is two octaves over a 1kHz corner, so at half tracking it is still out.
+    check(passes(4000.0f, 24, 50.0f) < 0.4f, "half tracking moves the corner half as far");
+}
+
+/**
+ * A tracked cutoff slides to the new note rather than jumping to it.
+ *
+ * It jumped, first. A four-octave line through a resonant tracked filter clicked five times
+ * in ten seconds on the phone and not at all with the tracking off -- found by capture
+ * rather than by ear, which is the only reason it is not in the roadmap as a bug. A
+ * modulator moves a cutoff a little every block; a note moves it octaves in one.
+ */
+void aTrackedCutoffSlidesRatherThanJumping() {
+    std::printf("a tracked cutoff slides to the note rather than jumping\n");
+    FilterNode filter;
+    filter.prepare(kRate);
+    filter.setParam(0, 800.0f);
+    filter.setParam(1, 0.6f);  // resonant, where a coefficient jump is loudest
+    filter.setParam(4, 100.0f);
+
+    std::array<float, kBlockSize> in{};
+    int32_t frame = 0;
+    std::vector<float> all;
+    const auto play = [&](int blocks, const NoteBuffer *notes) {
+        static const NoteBuffer kNone{};
+        for (int b = 0; b < blocks; ++b) {
+            for (int32_t i = 0; i < kBlockSize; ++i, ++frame) {
+                in[i] = std::sin(6.2831853f * 300.0f * static_cast<float>(frame) / kRate);
+            }
+            filter.setInput(0, in.data());
+            filter.setNoteInput(1, b == 0 && notes != nullptr ? notes : &kNone);
+            filter.setTiming(0.0, false, nullptr);
+            filter.process(kBlockSize);
+            const float *o = filter.output(0);
+            all.insert(all.end(), o, o + kBlockSize);
+        }
+    };
+
+    NoteBuffer low;
+    NoteEvent down;
+    down.id = 1;
+    down.kind = NoteKind::On;
+    down.degree = -24;
+    low.push(down);
+    play(400, &low);
+    const std::size_t settled = all.size();
+
+    NoteBuffer high;
+    NoteEvent up;
+    up.id = 2;
+    up.kind = NoteKind::On;
+    up.degree = 24;
+    high.push(up);
+    play(400, &high);
+
+    // Measured against the level around it, not outright. A resonant cutoff sweeping past
+    // the tone makes the tone louder, and a louder sine has bigger steps between samples
+    // for no bad reason at all -- the first cut of this test failed on exactly that. What
+    // a click is, is a step out of proportion to the waveform carrying it.
+    const auto worstRatio = [&all](std::size_t from, std::size_t to) {
+        float worst = 0.0f;
+        constexpr std::size_t kWindow = 256;
+        for (std::size_t at = from; at + kWindow < to; at += kWindow / 2) {
+            float step = 0.0f;
+            float level = 0.0f;
+            for (std::size_t i = at + 1; i < at + kWindow; ++i) {
+                step = std::max(step, std::fabs(all[i] - all[i - 1]));
+                level = std::max(level, std::fabs(all[i]));
+            }
+            if (level > 1e-4f) worst = std::max(worst, step / level);
+        }
+        return worst;
+    };
+    const float steady = worstRatio(settled - 8000, settled - 100);
+    const float crossing = worstRatio(settled, settled + 8000);
+    check(steady > 0.0f, "the tone is getting through");
+    // Two, which sits between what this measures with the rate limit (1.17x, and what is
+    // left of that is the resonance retuning rather than any edge) and what it measured
+    // when the cutoff jumped to the note (8.9x). An exponential glide read 2.15x, which is
+    // why it is a rate limit: smoothing moves a quarter of the distance in the first block,
+    // and a quarter of four octaves is a whole octave of coefficient in one step.
+    check(crossing < steady * 2.0f,
+          "and four octaves of tracking costs no step out of proportion to it, was " +
+                  std::to_string(crossing / steady) + "x");
+}
+
 void envFollowsTheNotesItIsHolding() {
     std::printf("env follows the notes it is holding\n");
     EnvNode env;
@@ -1809,7 +2108,7 @@ int countKind(const NoteBuffer &notes, NoteKind kind) {
 void aDotLastsItsLength() {
     std::printf("a dot lasts its length, in steps\n");
     SeqNode dots;
-    dots.setDot(0, 0, 7, Q(3));
+    dots.setDot(0, 0, 7, Q(3), 1.0f);
     const NoteBuffer first = tickDots(dots, 0);
     check(countKind(first, NoteKind::On) == 1 && first.events[0].degree == 7, "starts on its step");
     const uint32_t id = first.events[0].id;
@@ -1819,12 +2118,111 @@ void aDotLastsItsLength() {
     check(countKind(end, NoteKind::Off) == 1 && end.events[0].id == id, "and ends as the fourth begins");
 }
 
+void aDotIsStruckAtItsVelocity() {
+    std::printf("a dot is struck at its own velocity\n");
+    const auto same = [](float a, float b) { return std::fabs(a - b) < 1e-5f; };
+    SeqNode dots;
+    dots.setDot(0, 0, 0, Q(1), 0.4f);
+    dots.setDot(1, 0, 7, Q(1), 1.0f);
+    const NoteBuffer said = tickDots(dots, 0);
+    check(said.count == 2, "two notes");
+    check(same(said.events[0].velocity, 0.4f), "the quiet one says so");
+    check(same(said.events[1].velocity, 1.0f), "and the other is full");
+
+    // Out of range from a hand-edited file or some future interface: clamped rather than
+    // trusted, since a velocity above one is an oscillator amplitude above one.
+    SeqNode wild;
+    wild.setDot(0, 0, 0, Q(1), 4.0f);
+    wild.setDot(1, 0, 7, Q(1), -1.0f);
+    const NoteBuffer clamped = tickDots(wild, 0);
+    check(same(clamped.events[0].velocity, 1.0f), "above one is one");
+    check(same(clamped.events[1].velocity, 0.0f), "below zero is zero");
+}
+
+/**
+ * The click velocity brought with it, and the reason the level lives in GateRamp.
+ *
+ * Two notes that abut -- the second's On in the same block as the first's Off, which is what
+ * a sequencer sends when a dot is a whole step long -- leave the gate ramp open on purpose,
+ * because closing and reopening it is the step the ramp exists to avoid. Velocity as an
+ * oscillator amplitude, set outright at the strike, then put that step back: the waveform
+ * jumped by the whole difference between the two velocities. Found on the phone as clicking
+ * between notes that went away when every note was at full, which is the tell -- equal
+ * velocities have no difference to step.
+ */
+void abuttingNotesAtDifferentVelocitiesDoNotStep() {
+    std::printf("a second note at another velocity does not step the waveform\n");
+    const auto worstStep = [](float first, float second) {
+        OscNode osc;
+        osc.prepare(kRate);
+        osc.setParam(0, 3.0f); // a sine, where a step in the level has nowhere to hide
+
+        NoteBuffer on;
+        NoteEvent start = noteOn(1, 0);
+        start.velocity = first;
+        on.push(start);
+        osc.setNoteInput(0, &on);
+        osc.setTiming(0.0, false, nullptr);
+        run(osc, 1);
+        std::vector<float> all = voiceIdle(osc, 20);
+
+        // Ends before starts, in one buffer, exactly as SeqNode orders them.
+        NoteBuffer turn;
+        turn.push(noteOff(1));
+        NoteEvent next = noteOn(2, 0);
+        next.velocity = second;
+        turn.push(next);
+        osc.setNoteInput(0, &turn);
+        osc.setTiming(0.0, false, nullptr);
+        const std::vector<float> across = run(osc, 1);
+        all.insert(all.end(), across.begin(), across.end());
+        const std::vector<float> after = voiceIdle(osc, 20);
+        all.insert(all.end(), after.begin(), after.end());
+        return maxStep(all);
+    };
+
+    // The waveform's own largest step at this pitch, which is the floor for any of this.
+    const float steady = worstStep(1.0f, 1.0f);
+    check(steady < 0.05f, "two notes at one velocity are smooth");
+    check(worstStep(1.0f, 0.4f) < steady * 1.5f, "and so is a quieter note after a loud one");
+    check(worstStep(0.2f, 1.0f) < steady * 1.5f, "and a loud one after a quiet one");
+}
+
+/**
+ * What velocity is worth having: the same note, quieter.
+ *
+ * Measured out of an Osc rather than asserted from the event, because velocity reaches the
+ * sound through OscVoice::strike and nowhere else -- if that ever stops setting the
+ * amplitude, this fails while every event in the graph still carries the right number.
+ */
+void velocityIsHeard() {
+    std::printf("a quieter note is a quieter sound\n");
+    const auto peakAt = [](float velocity) {
+        OscNode osc;
+        osc.prepare(kRate);
+        NoteBuffer notes;
+        NoteEvent on = noteOn(1, 0);
+        on.velocity = velocity;
+        notes.push(on);
+        osc.setNoteInput(0, &notes);
+        osc.setTiming(0.0, false, nullptr);
+        run(osc, 1);
+        // Past the 5ms gate ramp, and long enough to catch a peak of the waveform rather
+        // than wherever one block happened to land -- see voiceAfter.
+        return peak(voiceIdle(osc, 16));
+    };
+    const float full = peakAt(1.0f);
+    const float half = peakAt(0.5f);
+    check(full > 0.5f, "a full note sounds");
+    check(half < full * 0.6f && half > full * 0.4f, "and half the velocity is about half of it");
+}
+
 void aColumnOfDotsIsAChord() {
     std::printf("a column of dots is a chord, each note its own length\n");
     SeqNode dots;
-    dots.setDot(0, 0, 0, Q(1));
-    dots.setDot(1, 0, 4, Q(2));
-    dots.setDot(2, 0, 7, Q(4));
+    dots.setDot(0, 0, 0, Q(1), 1.0f);
+    dots.setDot(1, 0, 4, Q(2), 1.0f);
+    dots.setDot(2, 0, 7, Q(4), 1.0f);
     check(countKind(tickDots(dots, 0), NoteKind::On) == 3, "three notes start together");
     check(countKind(tickDots(dots, 1), NoteKind::Off) == 1, "the shortest ends first");
     check(countKind(tickDots(dots, 2), NoteKind::Off) == 1, "then the next");
@@ -1837,8 +2235,8 @@ void aColumnOfDotsIsAChord() {
 void aDotEndsBeforeTheNextStarts() {
     std::printf("a dot ends before the next one at its degree starts\n");
     SeqNode dots;
-    dots.setDot(0, 0, 5, Q(2));
-    dots.setDot(1, 2, 5, Q(1));
+    dots.setDot(0, 0, 5, Q(2), 1.0f);
+    dots.setDot(1, 2, 5, Q(1), 1.0f);
     tickDots(dots, 0);
     tickDots(dots, 1);
     const NoteBuffer turn = tickDots(dots, 2);
@@ -1851,7 +2249,7 @@ void dotsLoopAtTheLength() {
     std::printf("dots loop at the sequence's length\n");
     SeqNode dots;
     dots.setParam(0, 4.0f);
-    dots.setDot(0, 1, 2, Q(1));
+    dots.setDot(0, 1, 2, Q(1), 1.0f);
     int ons = 0;
     for (int64_t count = 0; count < 12; ++count) {
         const NoteBuffer said = tickDots(dots, count);
@@ -1861,7 +2259,7 @@ void dotsLoopAtTheLength() {
         }
     }
     check(ons == 3, "three turns, three notes");
-    dots.setDot(0, 0, 0, 0);
+    dots.setDot(0, 0, 0, 0, 1.0f);
     int after = 0;
     for (int64_t count = 12; count < 20; ++count) after += countKind(tickDots(dots, count), NoteKind::On);
     check(after == 0, "and a cleared slot plays nothing");
@@ -1870,7 +2268,7 @@ void dotsLoopAtTheLength() {
 void aJumpInTimeEndsWhatWasHeld() {
     std::printf("a jump in time ends what was held\n");
     SeqNode dots;
-    dots.setDot(0, 0, 0, Q(8));
+    dots.setDot(0, 0, 0, Q(8), 1.0f);
     tickDots(dots, 0);
     check(dots.notesHeld() == 1, "held");
     // The transport reset: the tick eight steps on, which would have ended it, may never
@@ -1939,7 +2337,7 @@ void aDotEndsPartwayThroughAStep() {
     };
 
     SeqNode seq;
-    seq.setDot(0, 0, 0, Q(1) + 2); // a step and a half
+    seq.setDot(0, 0, 0, Q(1) + 2, 1.0f); // a step and a half
     check(countKind(tickAt(seq, 0), NoteKind::On) == 1, "starts");
     check(offsIn(seq, stepFrames - kBlockSize) == 0, "sounds all through its first step");
     tickAt(seq, 1);
@@ -1950,13 +2348,13 @@ void aDotEndsPartwayThroughAStep() {
     // Shorter than a step: it has no whole steps at all, so its part starts on the tick it
     // does -- the case that has to be counted out after the starts rather than before them.
     SeqNode half;
-    half.setDot(0, 0, 0, 2);
+    half.setDot(0, 0, 0, 2, 1.0f);
     check(countKind(tickAt(half, 0), NoteKind::On) == 1, "a half-step note starts");
     check(offsIn(half, stepFrames / 2 - 2 * kBlockSize) == 0, "and holds half a step");
     check(offsIn(half, 4 * kBlockSize) == 1, "then ends, without waiting for a tick");
 
     SeqNode legato;
-    legato.setDot(0, 0, 0, Q(1));
+    legato.setDot(0, 0, 0, Q(1), 1.0f);
     tickAt(legato, 0);
     check(offsIn(legato, stepFrames - kBlockSize) == 0, "a whole-step note sounds its whole step");
     check(countKind(tickAt(legato, 1), NoteKind::Off) == 1, "and ends on the tick after");
@@ -2287,6 +2685,12 @@ int main() {
     oscPlaysTheRequestedPitch();
     oscStaysBandLimited();
     filterCutoffFollowsItsKnob();
+    aFilterHasFourKinds();
+    theSteeperSlopeIsSteeper();
+    resonanceIsBoundedAtEveryKindAndSlope();
+    fullResonanceRingsButDoesNotOscillate();
+    theCutoffFollowsTheNote();
+    aTrackedCutoffSlidesRatherThanJumping();
     envFollowsTheNotesItIsHolding();
     envSustainsUnderAChordAndWaitsForTheLastNote();
     envEndsTheNotesOfASourceThatWasUnpatched();
@@ -2333,6 +2737,9 @@ int main() {
     anSfGlidesAndLetsGo();
     anSfWithoutItsFontIsSilent();
     aDotLastsItsLength();
+    aDotIsStruckAtItsVelocity();
+    abuttingNotesAtDifferentVelocitiesDoNotStep();
+    velocityIsHeard();
     aColumnOfDotsIsAChord();
     aDotEndsBeforeTheNextStarts();
     dotsLoopAtTheLength();

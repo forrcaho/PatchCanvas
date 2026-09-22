@@ -173,15 +173,60 @@ private:
 /** State-variable filter, lowpass tap. */
 class FilterNode : public Node {
 public:
-    int32_t inputCount() const override { return 1; }  // in
+    /** Mirrors FILTER_TYPES in PatchCanvas.kt, and the order is the file's. */
+    enum Type { kLow = 0, kHigh, kBand, kNotch, kTypeCount };
+
+    int32_t inputCount() const override { return 2; }  // in, notes
     int32_t outputCount() const override { return 1; }
+    /**
+     * The first node here to take audio and notes at once, which the graph needed nothing
+     * new for: it already dispatches per port on this mask.
+     */
+    uint32_t noteInputs() const override { return 1u << 1; }
     void prepare(int32_t sampleRate) override;
     void process(int32_t frames) override;
     void setParam(int32_t index, float value) override;
 
 private:
+    /** Whichever of the four outputs the type asks for; they are all computed anyway. */
+    float chosen(daisysp::Svf &svf) const;
+
     daisysp::Svf svf_;
+    /**
+     * The second pole pair, for the steeper slope. Always run, even at 12dB where its
+     * output is discarded: a filter whose state has been frozen since the last time the
+     * slope changed would resume from a stale sample, which is a step at the one moment
+     * nothing is meant to happen. Two double-sampled biquads per filter is cheap.
+     */
+    daisysp::Svf svf2_;
     float cutoffHz_ = 1000.0f;
+    int32_t type_ = kLow;
+    bool steep_ = false;
+    /** How much of the note's pitch the cutoff follows: 0 none, 1 all of it. */
+    float track_ = 0.0f;
+    /**
+     * The note the cutoff is tracking, in octaves from middle C, and it is *held*.
+     *
+     * A filter that snapped back to its knob when a note ended would zip the cutoff at
+     * every note off, which is audible where the tracking itself is not. Nothing has
+     * arrived yet means zero, which is middle C, which is where the knob's own hertz sit.
+     */
+    float trackTarget_ = 0.0f;
+    /**
+     * Where the glide to [trackTarget_] has got to.
+     *
+     * The cutoff cannot simply jump to the new note, which is what it did first and which
+     * the capture caught: a four-octave line clicked five times in ten seconds with
+     * tracking on and not at all with it off. A modulator moves a cutoff in small steps
+     * every block; a note moves it octaves in one, and at any resonance worth having that
+     * is a step in the output.
+     *
+     * Glided in octaves rather than in hertz, because that is the domain the ear hears a
+     * cutoff move in -- a fixed rate in hertz would crawl at the bottom and leap at the
+     * top. Per block, since that is how often a coefficient is recomputed anyway; per
+     * sample would mean a sinf and a powf each one.
+     */
+    float trackOctaves_ = 0.0f;
 };
 
 /**
@@ -343,7 +388,8 @@ public:
     uint32_t noteOutputs() const override { return 1u << 0; }
     void process(int32_t frames) override;
     void setParam(int32_t index, float value) override;
-    void setDot(int32_t slot, int32_t step, int32_t degree, int32_t length) override;
+    void setDot(int32_t slot, int32_t step, int32_t degree, int32_t length,
+                float velocity) override;
     int32_t position() const override { return step_; }
     Interval interval() const override { return kIntervals[intervalIndex_]; }
     void tick(int32_t offset, int64_t count) override;
@@ -384,6 +430,8 @@ private:
     int32_t dotDegree_[kMaxDots] = {};
     /** In quarter steps; 0 for an empty slot. */
     int32_t dotLength_[kMaxDots] = {};
+    /** 0 to 1, how hard the note is struck. */
+    float dotVelocity_[kMaxDots] = {};
 
     Held held_[kMaxHeld] = {};
     int32_t heldCount_ = 0;
@@ -483,9 +531,11 @@ private:
 struct OscVoice {
     daisysp::Oscillator osc;
     GateRamp gate;
+    /** How hard this note was struck. Applied by [gate], which glides to it; see GateRamp. */
+    float velocity = 1.0f;
 
     void init(float sampleRate);
-    void strike(float hz, float velocity, bool stolen);
+    void strike(float hz, float strength, bool stolen);
     void setFreq(float hz) { osc.SetFreq(hz); }
     float render(bool open, bool &finished);
 };

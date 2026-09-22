@@ -27,7 +27,7 @@ inline float pitchOf(const NoteEvent &event, const ScaleList *scales) {
 }
 
 /**
- * A note's on/off with the click taken off it, and nothing else.
+ * A note's on/off with the click taken off it, and how hard it was struck. Nothing else.
  *
  * What is left of the envelope on a synth that no longer has one. Shaping a note is an
  * Env's job now, inside a poly subpatch where there is one Env per note -- an envelope
@@ -40,33 +40,55 @@ inline float pitchOf(const NoteEvent &event, const ScaleList *scales) {
  * enough that the edge is not broadband, short enough that a staccato sixteenth still
  * sounds staccato. It is not 30ms like a crossfade because a crossfade happens under a
  * note you are already playing and this *is* the note starting.
+ *
+ * **The level belongs in here with the gate**, which velocity taught the hard way. A voice
+ * used to take its velocity as an oscillator amplitude, set outright at the strike -- fine
+ * for a note that starts from silence, and a hard step for one that takes a voice already
+ * sounding. Two notes that abut, or a steal, then jumped the waveform by the whole
+ * difference between the two velocities: at 0.4 against 1.0 that is a step of 0.22 where
+ * the waveform's own largest is 0.014. Heard on the phone as clicking between notes, and
+ * gone when every note was at full -- which is the tell, since equal velocities have no
+ * difference to step. A gate that ramps and a level that does not is not a declicked voice.
  */
 struct GateRamp {
     void init(float sampleRate) {
         step_ = 1.0f / std::max(1.0f, 0.005f * sampleRate);
         position_ = 0.0f;
+        level_ = 1.0f;
     }
 
     /**
-     * One sample of gain, 0 to 1. [finished] once a released note has reached silence --
-     * which is also the whole of "this voice is free", since there is nothing else left
-     * ringing.
+     * One sample of gain, 0 to [level]. [finished] once a released note has reached
+     * silence -- which is also the whole of "this voice is free", since there is nothing
+     * else left ringing.
      *
      * Nothing restarts the ramp. A voice that finished is already at zero, so a fresh note
      * rises from silence; a voice stolen while still sounding carries on from where it is,
      * up if it was held and back up if it was releasing, because dropping it to zero first
      * is precisely the step this exists to avoid.
+     *
+     * [level] is taken outright while the gate is shut and glided to otherwise, at the same
+     * rate as the gate. A silent voice has nothing to step -- whatever the level is, it is
+     * multiplied by a gate at zero -- so a new note gets its velocity exactly, from its
+     * first sample, and only a note landing on a voice that is still sounding pays the 5ms.
      */
-    float process(bool gate, bool &finished) {
+    float process(bool gate, float level, bool &finished) {
+        if (position_ <= 0.0f) {
+            level_ = level;
+        } else {
+            level_ += std::min(std::max(level - level_, -step_), step_);
+        }
         position_ = gate ? std::min(1.0f, position_ + step_) : std::max(0.0f, position_ - step_);
         if (!gate && position_ <= 0.0f) finished = true;
-        return position_ * position_ * (3.0f - 2.0f * position_);
+        return position_ * position_ * (3.0f - 2.0f * position_) * level_;
     }
 
 private:
     float step_ = 1.0f / 240.0f;
-    /** 0 to 1, linear; the gain returned is the smoothstep of it. */
+    /** 0 to 1, linear; the gain returned is the smoothstep of it, times [level_]. */
     float position_ = 0.0f;
+    /** How hard the note sounding was struck, glided rather than stepped. */
+    float level_ = 1.0f;
 };
 
 /**

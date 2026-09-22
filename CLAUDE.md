@@ -132,10 +132,20 @@ nothing, quieter than it was left, reporting success. So `upgrade` is a version 
 nothing more; the migration ladder that walked 1 to 4 went with the formats it served.
 Format 6 added subpatches, 7 the knobs promoted to a subpatch's edge, and 8 new modules with their
 dots and fonts, none taking anything away, so 8 read 7, 6 and 5 as they stood -- the rule is against silent conversion, not
-against a change that needs none. That additive run ended at 9, and **10 reads nothing but
-10**: 9 stores a dot's length in whole steps where this build reads quarter steps, so every
+against a change that needs none. That additive run ended at 9, and **10 read nothing but
+10**: 9 stores a dot's length in whole steps where 10 reads quarter steps, so every
 note would come back a quarter of its length -- a sequence that still loads, still plays, and
-is not the music that was written, which is the exact failure refusing exists to prevent. **Adding a module type bumps the version** even though
+is not the music that was written, which is the exact failure refusing exists to prevent.
+**11, 12 and 13 all read 10**, so `READABLE` in `PatchStore.kt` is a set rather than a single
+number. Each is additive in the strict sense -- a default that restates what the file already
+sounded like, never a conversion. A dot that never said how hard it was struck was struck at
+full (11); a `Filter` that names neither type nor slope was a 12dB lowpass (12); a `Filter`
+with no `track` knob, and no cable into a note port it did not have, was following nothing
+(13). The direction that needs no rule is the other one -- a 10 build refuses an 11 file on
+the version alone, which is what stops it dropping every velocity and autosaving. **A knob or
+a port added to an existing module bumps the version too**, for that same reason: knobs are
+keyed by name and port indices are positional, so an 11 build would read a bandpass, ignore
+the two knobs it does not know, and autosave it as a lowpass. **Adding a module type bumps the version** even though
 nothing needs converting: an older build reads an unknown type as retired, skips it, and
 autosaves the patch without it -- the bump makes that build refuse the file instead. What
 makes that affordable is that `PatchStore.load` moves a refused file to
@@ -188,6 +198,37 @@ the project has left it: CV and gate are now *modulation* and *pulse*, which are
 voltages and do not interchange, so `patchesTo` is like-to-like and a mismatch is refused.
 Audio-rate modulation does not need the loophole — a module that wants it declares an
 audio input, and `MODULATION` is applied once per block and could not carry it anyway.
+**A module that wants to follow the note declares a note input**, which is the same rule
+again and is how `Filter` tracks pitch: notes used to reach only the things that sound them,
+so nothing in the app could make anything follow pitch at all. A general module turning notes
+into modulation is the more composable answer and is still open; it lost here on precision,
+since the tracking ratio would live in a bracket dragged on the target and one imprecise drag
+gives 97% tracking, which drifts across the keyboard and reads as a tuning bug.
+
+**A filter's resonance is bounded by its drive, and the drive is not optional.**
+`daisysp::Svf`'s only limit on resonance is a cubic term scaled by that drive, which
+`FilterNode::prepare` set to zero for the life of the module: measured with a sine sitting on
+the cutoff, the old maximum of 0.95 gave **39x** and 1.0 gave 1255x. `Out`'s limiter would
+have held it, which is the problem -- as a brick wall over whatever else was playing. The
+drive is 0.02, which costs nothing musically because it saturates the steady-state peak and
+leaves the ring: an impulse rings 12ms at res 0.5 and past three seconds at 1.0, and those
+numbers do not move with the drive at all. **This made existing patches tamer** and no version
+check protects against it. The knob now reaches 1.0, where it stopped at 0.95, and that is
+still not self-oscillation -- nothing here can make the damping negative, so a filter at full
+resonance with no input is silent. The four kinds cost nothing because `Svf` computes all
+four outputs every sample anyway; the steeper slope is a second `Svf` in series and **runs
+even at 12dB**, where its output is discarded, because one resuming from a sample frozen
+since the last slope change is a step at the one moment nothing is meant to happen.
+
+**A tracked cutoff slides, and a jump is not a glide.** A note moves a cutoff octaves in one
+block where a modulator moves it a little, and the first version caught that as five
+discontinuities in ten seconds. The fix is a rate limit in octaves per block (0.05, so an
+octave takes about 13ms), not an exponential smooth, which was tried and measured worse: a
+smooth moves a quarter of the distance in the *first* block, and a quarter of four octaves is
+a whole octave of coefficient in one step. Against a steady tone the step out of proportion to
+the waveform went 8.9x jumping, 2.15x smoothed, 1.17x rate-limited. What remains is one event
+per pass at res 0.6 and none at res 0.0, which is a resonator being retuned -- what a swept
+resonant filter *is*, and a question for an ear rather than for `find_clicks.py`.
 
 **Anything a node needs that is too big to build on the audio thread is a `Resource`**,
 built on the interface's thread and handed across with `postSetResource`; what it replaces
@@ -218,6 +259,8 @@ name settled the worst collision in the project -- "voice" meant both the module
 the eight slots inside it -- and it has since settled itself: there are no slots any more,
 so "voice" means one note's worth of sound and nothing else. `Filter` lost its cutoff jack and `Steps` its pitch
 and gate outputs, so a sequencer says a note once rather than the same thing three ways.
+The note port `Filter` has now is not that jack coming back: the cutoff is modulated by
+exposing the parameter, like every other knob, and the note port says which pitch to follow.
 Node ids 1, 7 and 8 are retired and never reused; `Osc` is id 10, where `Voice` was. **A
 module can come back; its id cannot.** `Amp` is the VCA again, at id 21, because with the
 envelopes out of the synths the pair you reach for is `Env` and the thing `Env` opens, and
@@ -227,7 +270,12 @@ there is no such thing here.
 
 **No synth has an envelope.** `Osc` has one knob and `FM` three; what is left of the ADSR
 is a 5ms gate ramp (`GateRamp` in `synth.h`) that keeps a note from starting or stopping
-with a step in it. An envelope built into a synth was *one envelope for every voice it had*
+with a step in it. **A note's velocity rides that ramp, and must**: a voice taken by a
+second note keeps its ramp open on purpose, so a velocity applied straight to the
+oscillator's amplitude stepped the waveform by the whole difference between the two notes --
+0.22 where the waveform's own largest step is 0.014, heard as clicking between abutting
+notes and gone when every note was at full. The ramp takes a level outright while the gate
+is shut, since a silent voice has nothing to step, and glides to it otherwise. An envelope built into a synth was *one envelope for every voice it had*
 and could be patched to nothing else -- which is why an `Env` on FM's modulation index was
 impossible, and why this redesign happened. Shaping is an `Env` inside a poly subpatch,
 where there is one per note. `FM` lost Chowning's brightness-follows-loudness with it:
@@ -305,6 +353,19 @@ against, which is why a subpatch can show knobs its own type never declared. A s
 past the highest number in use anywhere in the patch -- on a `PatchModule.name` that every
 module has and that falls back to the type's name, so a file written before names still
 draws "Subpatch".
+
+**A dot carries its own velocity, and the lock is what a vertical drag means.** Every voice
+already consumed velocity -- an `Osc` as amplitude, a `Pluck` as strike accent, an `FM` as
+both index and output, so on an FM it has always meant brightness -- and every source wrote
+1.0, so the feature was a number nobody could choose. A drag on a dot decides its axis once,
+on the first move, as the canvas loop does: across is the length, down the grid is the
+degree. The lock chip on the panel pins the dots in place, which leaves a vertical drag
+nothing to move and it sets velocity instead, drawn as how much of the dot is filled. That
+it is stated as a *lock* rather than as a velocity mode is the whole reason it reads: "can a
+dot move" is a fact about the dots, where "what does a vertical drag mean" is a fact about
+the tool, and only the first is something a finger is already asking. A long-press per note
+was the alternative and was rejected on the arithmetic -- sixteen notes is sixteen
+long-presses, six seconds of waiting before any of the drags.
 
 **A dot's length is its duration, in quarter steps.** `Seq` had a `gate` knob for one day:
 it took Steps' place in the Add menu, a dot's length was whole steps, nothing could be
@@ -388,10 +449,21 @@ python3 ~/musicode/rust/cursive/tools/audio_analyze.py /tmp/c.wav --png /tmp/s.p
 ```
 
 `find_clicks.py` reports whether events land on the inner block (32), device burst (96) or
-stream buffer (192) — on a boundary implicates the plumbing, irregular implicates the DSP.
-Two clean captures have now shown the engine innocent of clicks that were real to the ear;
-the reference device listens over **Bluetooth A2DP**, where packet loss sounds exactly
-like that.
+stream buffer (192) — on a boundary implicates the plumbing, irregular implicates the DSP,
+and it now prints that as a verdict rather than leaving it to be read off the gaps.
+**Measure with a sine source.** A saw or a square steps full scale once a cycle by design
+and the outlier test reports every one of them: a four-octave saw line read as 39
+discontinuities, all of them the waveform, which cost an afternoon of suspecting a filter
+that was innocent. The verdict line now says so when a run is evenly spaced at an audible
+rate.
+
+**The alignment check was off by one until 2026-09-21 and could never fire.** Hits index the
+*difference* array, so a step arriving at sample n was reported at n-1 and the modulo test
+asked whether n-1 was a multiple of 32 — it answered 31, every time, for the life of the
+file. Anything that read 0% aligned before that date read it for that reason. Two clean
+captures have also shown the engine innocent of clicks that were real to the ear; the
+reference device listens over **Bluetooth A2DP**, where packet loss sounds exactly like
+that. The tool is a good witness about plumbing and a poor one about filters.
 
 **`latencyMs` from the engine is the AAudio stream's, not end to end.** Bluetooth adds
 100ms or more it cannot see. Exclusive MMAP at a 96-frame burst is real, but it is the

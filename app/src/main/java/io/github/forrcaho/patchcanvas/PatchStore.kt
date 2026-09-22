@@ -31,8 +31,27 @@ import java.io.File
  * index after the first moved; Poly and Amp arrived. Nothing older can be read.
  * 10: a dot's length is in quarter steps, and Seq lost its gate knob. A 9 reads as a
  * quarter of the music it is.
+ * 11: a dot says how hard it is struck. Additive, and a 10 still reads: a dot without a
+ * velocity comes back at full, which is what every note in the app sounded at.
+ * 12: a Filter says its type and its slope. Additive in the same way -- a filter that names
+ * neither was a 12dB lowpass, which is what it comes back as -- so 11 and 10 still read.
+ * The bump is for the other direction: knobs are keyed by name, so an 11 build would read
+ * a bandpass, ignore the two knobs it does not know, and autosave it as a lowpass.
+ * 13: a Filter takes notes and tracks them. Additive again -- no track knob is no tracking,
+ * and a port appended leaves every saved cable's index where it was. The bump is for the
+ * older build, which would read a cable into a port it does not have, skip it quietly, and
+ * autosave the patch without it.
  */
-private const val FORMAT_VERSION = 10
+private const val FORMAT_VERSION = 13
+
+/**
+ * The older formats this build reads as they stand. See [upgrade].
+ *
+ * Each entry is a change that needs no conversion, only a default that restates what the
+ * file already sounded like. Anything that would have to be *converted* is not on this list
+ * and never will be.
+ */
+private val READABLE = setOf(10, 11, 12, FORMAT_VERSION)
 private const val TAG = "PatchStore"
 
 fun Patch.toJson(): String {
@@ -177,10 +196,24 @@ private fun stepsOf(module: PatchModule): JSONArray {
     return out
 }
 
-/** A dot sequencer's dots, each as [step, degree, length]: three numbers, positional. */
+/**
+ * A dot sequencer's dots, each as [step, degree, length, velocity]: positional.
+ *
+ * The velocity is written even when it is full, so the file says what it means rather than
+ * leaving a reader to know the default -- and so a byte-for-byte round trip holds, which is
+ * what stops History recording a load as an edit.
+ */
 private fun dotsOf(module: PatchModule): JSONArray {
     val out = JSONArray()
-    module.dots.forEach { out.put(JSONArray().put(it.step).put(it.degree).put(it.length)) }
+    module.dots.forEach {
+        // Through the float's own toString, because widening 0.3f to a double writes
+        // 0.30000001192092896 into a file people read with `cat`. Both round-trip back to
+        // the same float; only one of them is legible.
+        out.put(
+            JSONArray().put(it.step).put(it.degree).put(it.length)
+                .put(it.velocity.toString().toDouble()),
+        )
+    }
     return out
 }
 
@@ -196,6 +229,9 @@ private fun restoreDots(module: PatchModule, stored: JSONArray?) {
                 d.optInt(1),
                 // In quarter steps since format 10; see DOT_SUBSTEPS.
                 d.optInt(2, DOT_SUBSTEPS).coerceIn(1, DOT_STEPS * DOT_SUBSTEPS),
+                // Absent in a format 10 file, where every note was struck at full.
+                d.optDouble(3, 1.0).toFloat().takeIf { it.isFinite() }
+                    ?.coerceIn(MIN_VELOCITY, 1f) ?: 1f,
             ),
         )
     }
@@ -411,7 +447,7 @@ private fun upgrade(root: JSONObject): JSONObject? {
     // inside it. A 9 stores a dot's length in whole steps where this build reads quarter
     // steps, so every note would come back a quarter of its length -- a sequence that still
     // loads, still plays and is not the music that was written.
-    if (version != FORMAT_VERSION) {
+    if (version !in READABLE) {
         Log.w(TAG, "unsupported patch version $version")
         return null
     }

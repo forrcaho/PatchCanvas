@@ -2785,6 +2785,377 @@ nothing.
 
 ---
 
+## Phase 11 -- The catalog fills in
+
+**Decided 2026-09-21**, from playing Phase 10 rather than from a plan. Nothing here is
+structural: the poly subpatch answered the question it was built for, and what is left is
+that the module set and the note model are thin in places a patch runs into at once. In
+order, and the order is deliberate -- smallest first, then the cheap gap, then the one
+that needs iterating on hardware:
+
+### Velocity in Seq
+
+**Built 2026-09-21, and smaller than it looked, because the engine has carried velocity all
+along.** `OscVoice` sets its amplitude from it, `PluckVoice` uses it as the strike accent,
+and `FmVoice` scales both the index and the output by it -- so on an FM, velocity already
+meant brightness. What was missing was at the other end: every note source in `nodes.cpp`
+wrote `on.velocity = 1.0f` and nothing ever chose otherwise. So the work was a fourth number
+on `Dot`, one line in `SeqNode`, a field on the `SetDot` command, a gesture, and a format
+bump.
+
+**The engine needed no new field.** `Command` already carries a `value` that `SetDot` did
+not use -- it is `SetParam`'s value and `SetModRange`'s low end -- so velocity rides in it
+and the struct is the size it was.
+
+**The gesture was the open part, and the lock is what settled it.** A drag on a dot already
+set its length, from anywhere on the dot, and there was no way to move a dot at all -- you
+removed it and placed another, losing its length. Three things now want a drag and a finger
+has two axes. What was built:
+
+- **A drag decides its axis once, on the first move**, the way the canvas loop decides what
+  a gesture is, and for the same reason: a drag that changes its mind halfway is unusable.
+  Across is the length, since a length is a distance along the grid; down the grid is the
+  degree, since that is what the rows are. A tie goes to the length, which is the commoner
+  edit and is what the gesture did before.
+- **Once it is moving, both axes move it.** The drag was vertical to begin with, but a dot
+  carried to another degree usually wants a different step too. It is held by the part that
+  was grabbed, so a long dot taken by its third step does not jump to put its start under
+  the finger, and a move into another dot at that degree is *refused* rather than clamped --
+  the dot stays put until the way is clear, which reads as declining to pass rather than as
+  a jump nobody aimed at.
+- **The lock chip pins the dots**, and with nothing to move, a vertical drag sets velocity
+  instead -- drawn as how much of the dot is filled, from the bottom, which is the direction
+  the drag goes. Bespoke's DotSequencer shows velocity that way and it is right: the dot
+  keeps its full outline, so a quiet note is still a note at that step rather than a smaller
+  thing to aim at.
+
+**Forrest's, and the reason it works:** it is stated as a *lock*, not as a velocity mode.
+"Can a dot move" is a fact about the dots; "what does a vertical drag mean" is a fact about
+the tool, and only the first is something a finger is already asking. The mode is the same
+either way -- the name is what makes it legible, and the padlock says it without a word.
+
+**A long-press per note was the first proposal and lost on arithmetic.** Press, wait,
+buzz, then drag, per note -- sixteen notes is sixteen long-presses and about six seconds of
+waiting before any of the drags, and setting accents across a phrase is exactly the pass
+that makes velocity worth having. A chip costs one tap for the whole pass. The long-press
+can still be added on top later for a single accent without taking anything away.
+
+**Format 11, and it reads 10.** A dot gains a fourth number. That is additive in the strict
+sense -- a dot that never said how hard it was struck was struck at full, so reading it at
+full is a restatement rather than a conversion -- which is the distinction the refusal rule
+has always drawn. The direction that needs no rule is the other one: a format 10 build
+refuses an 11 file on the version alone, which is what stops it dropping every velocity and
+autosaving the patch without them.
+
+Velocity is written through the float's own `toString`, because widening `0.3f` to a double
+puts `0.30000001192092896` in a file that people read with `cat`. Both come back as the
+same float; only one of them is legible.
+
+**Verified on the phone**: the lock draws its state, a locked vertical drag fills the dot
+and the velocity reaches the engine (`PatchSync` logs `dot 128[2] = step 2 degree 6 for 6 at
+0.45230705`), an unlocked one carries the dot to another degree, and a horizontal one still
+sets the length. The patch it was tried on was a format 10 file, so that path was exercised
+by accident and works.
+
+**And then it clicked, which no test had asked about.** Forrest, playing it: clicking
+between the notes of ear test 1 once their velocities differed, and gone the moment every
+note was back at full. That last half is the whole diagnosis -- equal velocities have no
+difference to step, so the click was in the *difference*, not in the velocity.
+
+`OscVoice::strike` set the velocity as the oscillator's own amplitude, outright. For a note
+starting from silence that is correct and inaudible. For a note landing on a voice that is
+still sounding it is a hard step -- and two abutting notes are exactly that, because a dot a
+whole step long ends on the tick the next one starts, `SeqNode` sends the Off and the On in
+one block, and `MonoSynth` reopens the gate in the same sample it closed it. The ramp never
+descends, by design: closing and reopening it is the step it exists to avoid. So the
+waveform jumped by the whole difference between the two velocities. Reproduced in
+`graph_test` on the real chain -- Seq into Osc into Amp into Out, dots a whole step long at
+alternating velocities -- as jumps of up to **0.22** at every step boundary, against a
+waveform whose own largest step is **0.014**. At equal velocities: no jump over 0.02
+anywhere.
+
+**So the level moved into `GateRamp`, where the gate already was.** It takes a level outright
+while the gate is shut -- a silent voice has nothing to step, since whatever the level is it
+is multiplied by zero, so a new note still gets its velocity exactly from its first sample --
+and glides to it at the ramp's own rate otherwise. Only a note landing on a sounding voice
+pays the 5ms. `OscVoice` no longer touches `SetAmp` and `FmVoice` no longer multiplies its
+output by velocity; both hand it to the ramp. After: 0.0138 where it was 0.22, which is the
+waveform's own slope and nothing else.
+
+**What it says about the design**, and the reason it is written down rather than just fixed:
+a gate that ramps and a level that does not is not a declicked voice. `GateRamp`'s job was
+stated as "not sounding a step when a gate opens or closes", and velocity arrived as a second
+thing that could step at exactly the same moments. Anything else a synth ever multiplies its
+output by belongs on the same ramp.
+
+The one discontinuity deliberately left: an `FM`'s index still steps at a strike, since
+`brightness` resets to 1 there and `depth` is `index * velocity * brightness`. That is the
+index envelope restarting, which is what it is for, and a step in timbre at a
+phase-continuous point is not what a step in amplitude is. It has not been heard.
+
+**Confirmed by ear on the phone, 2026-09-21**: the same patch that clicked does not. Which
+is the pattern this file keeps recording -- the suite was green and the compile was clean
+through every minute this bug existed, and the person playing it found it in one sentence.
+The second half of that sentence, "gone when every note was at full", is what made it a
+five-minute diagnosis instead of an afternoon.
+
+### Filter: every type, and a slope
+
+**Built 2026-09-21.** Four kinds -- low, high, band, notch -- and two slopes, in one module
+rather than four. The knobs are the reason: `type` and `slope` are stepped with a handful of
+options each, and a stepped row of sixteen or fewer draws as buttons (`Param.buttons`), so
+the whole thing is four rows -- one short of where a panel goes to two columns. The
+crowding that splitting would have avoided does not happen. Splitting would also have made
+changing a filter's character a repatch rather than a tap, which is the wrong trade for the
+decision people change most often.
+
+Not the header: it holds one chip, at the panel's right, and both `panelIntervalChip` and
+`panelPresetChip` are written to that one position. A second chip is machinery this did not
+need when there were rows to spare.
+
+**The kinds were nearly free and the slope was not.** `daisysp::Svf` computes `Low()`,
+`High()`, `Band()` and `Notch()` every sample and `FilterNode` read one and discarded three,
+so `type` is a switch over outputs that already existed. The slope is a second `Svf` in
+series -- 24dB is two pole pairs -- and it runs *always*, even at 12dB where its output is
+thrown away. A filter whose state had been frozen since the last slope change would resume
+from a stale sample, which is a step at the one moment nothing is meant to happen; two
+double-sampled biquads per filter is cheap enough not to think about it again.
+
+**And the resonance turned out to be a hazard that had already shipped.** The SVF's only
+limit on its resonance is a cubic term scaled by its drive, and `FilterNode::prepare` set
+that drive to zero. Measured, with a sine sitting exactly on the cutoff:
+
+| drive | gain at res 0.3 | at 0.9 | at 0.95 (the old maximum) | at 1.0 |
+| --- | --- | --- | --- | --- |
+| **0.00, as shipped** | 1.9x | 19x | **39x** | 1255x |
+| 0.02 | 1.8x | 2.6x | 2.6x | 2.6x |
+| 0.50 | 1.1x | 1.1x | 1.1x | 1.1x |
+
+Nothing had caught it because nothing had ever pointed a tone at the cutoff and read the
+number: every filter test until now used noise and asked whether the top came off. `Out`'s
+limiter would have held the output, which is precisely the problem -- it would have held it
+as a brick wall over whatever else was playing.
+
+**What made the fix easy was that the drive costs nothing musically.** An impulse rings
+12ms at res 0.5, 71ms at 0.9 and past three seconds at 1.0, and those numbers do not move
+with the drive at all: it saturates the steady-state peak and leaves the ring, which is what
+resonance actually sounds like. So 0.02, which keeps about 2.6x at the top -- a resonant
+filter is supposed to have a peak, and 0.5 flattens it to 1.1 where the knob stops doing
+anything audible at its own resonance.
+
+**This changes how existing patches sound**, which is worth saying plainly because no
+version check protects against it: a patch with its resonance up will be tamer than it was.
+At the default 0.3 the cubic term is negligible and nothing moves. It is the right trade --
+39x was not a filter setting, it was a fault waiting for a bass note -- but it is a change
+to music that already existed, and this file is where that gets recorded rather than
+discovered.
+
+**The res knob now reaches 1.0**, where it stopped at 0.95, because the damping reaches zero
+there and the filter rings until something stops it. That is the top of the knob and worth
+having. It is **not** self-oscillation and the tests say so: nothing here can make the
+damping negative, so with no input a filter at full resonance is silent.
+
+**Format 12**, additive like 11 before it: a filter that names neither type nor slope was a
+12dB lowpass, which is what it comes back as. The bump is for the other direction -- knobs
+are keyed by name, so an 11 build would read a bandpass, ignore the two knobs it does not
+know, and autosave it as a lowpass.
+
+**On the phone**: the panel is four rows in one column as predicted, with the buttons
+legible at font scale 1.5, and the four voices played through a filter at 400Hz peaked at
+0.404 with the res knob at its new top against 0.407 at 0.3 -- more energy at the resonance,
+as a resonant filter should give, and the same peak, with nothing near the limiter and
+`find_clicks.py` reporting zero discontinuities on either channel. Which is the measurement
+that matters: at the old drive of zero that capture would have arrived as a brick wall.
+
+What is pinned on the desk is that each kind keeps what it is named for, that the steeper
+slope is much quieter two octaves up and no quieter below the cutoff, that the resonance is
+finite and bounded at every kind and slope, and that full resonance rings past a second
+while silence in is silence out. All four mutation-checked; reverting the drive alone
+reports 3137x. **What no test can say is whether the four kinds are musical**, which is a
+knob and an ear.
+
+### The cutoff follows the note
+
+**Asked for on 2026-09-21, from playing the filter**: a sawtooth wants filtering at some
+multiple of its own fundamental, not at a fixed frequency. Which turned out to name a gap
+rather than a feature -- **nothing in the app could make anything follow pitch.** Notes
+reach the things that sound them and nowhere else.
+
+**The Filter takes notes.** It declares a `notes` port beside its audio one -- the first
+node here to take both, which the graph needed nothing new for, since it already dispatches
+per port on the note mask -- and a `track` knob says how much of the note's distance from
+middle C the cutoff follows. At 100% the cutoff holds a fixed ratio to the fundamental, and
+that ratio is the knob's own hertz against middle C: 785Hz is the third harmonic. The pitch
+is resolved by `pitchOf`, the same one line a synth uses, so the filter learns no more about
+a semitone than anything else does.
+
+The rule this sets, beside the one it already had: **a module that wants audio-rate
+modulation declares an audio input; a module that wants to follow the note declares a note
+input.** The alternative was a general module turning notes into modulation -- one thing
+filling the gap for every parameter at once, which is the more composable answer and is
+still open. It lost here on precision: the tracking ratio would live in a bracket dragged on
+the target, exact only when its octave span matched, so one imprecise drag gives 97%
+tracking, which drifts across the keyboard and reads as a tuning bug.
+
+**It works, and the measurement is the point of it.** A four-octave line through a fixed
+filter comes out with its loudness varying 1.74x from note to note, because the low ones
+keep their harmonics and the high ones lose their fundamental. Tracked, the same line varies
+**1.06x** -- the filter sits the same distance above every note, which is the whole promise.
+
+**Format 13**, additive like 12 and 11 before it: no `track` knob is no tracking, and a port
+appended leaves every saved cable's index where it was, so 12, 11 and 10 all still read. The
+bump is for the other direction again -- a 12 build would read a cable into a note port it
+does not have, skip it quietly, and autosave the patch without it. Which makes the rule
+broader than the one written down for a new module type: **a knob or a port added to an
+existing module bumps the version too**, because knobs are keyed by name and port indices are
+positional, and an older build drops what it cannot name either way.
+
+**The cutoff slides rather than jumping**, and the first version did not. A modulator moves
+a cutoff a little every block; a note moves it octaves in one, and the capture caught that
+as five discontinuities in ten seconds where the untracked line had none. The fix is a rate
+limit -- a fixed number of octaves per block, 0.05, so a leap of an octave takes about
+13ms -- and not an exponential glide, which was tried first and measured worse: smoothing
+moves a quarter of the distance in the *first* block, and a quarter of four octaves is a
+whole octave of coefficient in one step. Offline, against a steady tone, the step out of
+proportion to the waveform went 8.9x jumping, 2.15x smoothed, 1.17x rate-limited.
+
+**What is left is resonance, and it may not be a defect at all.** With the rate limit in
+place the capture still reports one event per pass of the sequence, and the controls say
+what it is:
+
+| | discontinuities in 10s |
+| --- | --- |
+| tracked, res 0.6 | 5 |
+| tracked, res 0.0 | 0 |
+| no filter at all | 0 |
+
+So it is resonance plus a moving cutoff, not the tracking rate: a resonator holding energy
+at one frequency and being retuned produces a transient, which is what a swept resonant
+filter *is*. An analog one does the same, and the app has always had the same case in an LFO
+on a resonant cutoff. Whether it reads as a click or as a filter sweeping is a question for
+an ear, and `find_clicks.py` cannot answer it -- as this phase already learned twice over,
+once when it flagged a sawtooth's own edges as five discontinuities a cycle, and once when
+two clean captures were wrong about clicks that were real.
+
+### The tool was lying, in two ways
+
+**2026-09-21, found while chasing the tracked filter.** `find_clicks.py` is what this
+project reaches for when something might be clicking, and it misled the whole investigation
+twice before it was read properly.
+
+**Its docstring claimed a robustness it did not have**: that deriving the threshold from the
+signal's own slope meant a sawtooth's once-a-cycle edge would not be flagged. The opposite
+is true -- a rare large step is exactly what an outlier test reports -- and a four-octave
+saw line duly read as 39 discontinuities, every one of them the waveform, spaced 92 samples
+apart at the note's own frequency. The gaps were printed all along; nothing drew the
+conclusion. It now does, as a verdict: evenly spaced at an audible rate and off the buffer
+boundaries means the waveform, and the line says to measure again with a sine.
+
+**And the alignment check had never once fired.** Hits index the *difference* array, so a
+step arriving at sample n is reported at n-1, and `hits % 32 == 0` was asking whether n-1
+was a multiple of 32 -- which answers 31, always. A click placed deliberately on a block
+boundary reported 0% aligned. That check is the reason the file exists, it is the thing
+CLAUDE.md calls the useful part, and it has been answering a question about the wrong sample
+since it was written. Caught by building a synthetic capture with clicks at known offsets
+and finding the tool disagreed with the fixture.
+
+Re-run against every capture from this phase, the fix changes no conclusion -- the tracked
+filter's residual events are still 0/5 on a block boundary, so they are the resonance and
+not the plumbing. Which is the outcome to want from a tool fix and not the one to assume
+from it.
+
+**The ladder is still to come**, and deliberately after this: a second filter *character*,
+where resonance thins the bass and the saturation is part of the sound. It needs more of
+DaisySP vendored -- with the LGPL half kept out and `rand()` audited -- and it is a
+listening project rather than a switch, which is a better thing to start once this one has
+been played.
+
+### The Env, redone: segments, curvature, and a shape you can see
+
+**The one that may not work, and so the one to try on hardware early.** What is wanted is
+closer to Surge XT's MSEG than to an ADSR: segments rather than four fixed stages, curvature
+per segment, and a release that is optional -- an envelope that simply ends is a perfectly
+good envelope for a percussive patch, and with the release finding above it costs nothing on
+a synth anyway.
+
+**The hooks exist.** An envelope editor is another `GridKind` in the open panel, which is a
+view that already owns the whole screen, has hit testing and drawing for `Seq`'s dots and
+`Drone`'s cells, and is where a grid belongs. And the number keypad is already there, which
+answers the thing that kills envelope editors on a phone: nobody can drag a node to 12ms,
+and everybody can tap it and type 12.
+
+**Bespoke's is hard to control and it is worth saying why**, because the failure is
+copyable. A node carries its time, its level and its curvature, which is three quantities
+on one draggable point -- so the control that sets one of them is a mode, and a mode on a
+target the size of a fingertip is a coin toss. Surge splits them: a node is time and
+level, and curvature is a separate drag on the *segment between* two nodes. Different
+targets rather than different modes, which is what makes it survive a finger. Copy the
+split before inventing anything.
+
+Open, and only a finger answers it: how many segments fit across a phone in landscape before
+the nodes are closer together than a fingertip, and whether the answer is a scroll, a zoom,
+or a cap.
+
+### The fm port comes back to Osc
+
+**Now that an `Osc` is one voice again**, the objection that retired it is gone: it used to
+send the sum of eight voices, so one feeding another bent every note of a chord by the same
+mixture. One voice feeding one voice is what FM means.
+
+**The old port had no index at all, which is why the relationship never made sense.** Phase
+3's `OscNode` was `hz = baseHz_ * exp2(pitch[i]) + fm[i] * 100.0` -- a hardcoded hundred
+hertz per unit of input, with the depth welded shut. There was nothing to understand.
+
+**The `FM` module's index is a different quantity again.** `FmVoice::render` is phase
+modulation -- `sin(2π·carrier + depth·sin(2π·modulator))`, with `depth = index · velocity ·
+brightness` -- and its modulator is a *unit* sine, so in there the modulator's amplitude and
+the index are the same number. They come apart only when the modulator arrives down a cable
+carrying an amplitude of its own, which is exactly the port's case.
+
+**So the port carries one knob, `index`, in the same radians as FM's, defined as what a
+full-scale ±1.0 input means.** A modulator at half amplitude then gives half the index,
+which is both what an ear expects and what an `Amp` in front of it reads. No separate trim:
+a "0dB index" slider and an `index` knob are the same control named twice. The alternative
+-- hertz per unit, as the old code did -- makes the timbre drift with pitch, because the
+index is Δf over the modulator's frequency and a fixed deviation in hertz is a different
+index at every note. Phase modulation is pitch-invariant for free, which is why `FM`
+sounds consistent across the keyboard without doing anything about it.
+
+**An `Osc` has no tune knob, and that is a separate gap this exposes.** Its only parameter
+is `wave`, so there is no way to vibrato one at all: a slow modulator into a phase-modulation
+port shifts phase rather than pitch, so it produces no vibrato for its trouble. A `tune` in
+cents, exposable like any other parameter, is the other half of this and a separate feature.
+
+### Noise, and then delay and reverb
+
+White, pink and brown, from one module with a `type`. The DaisySP caveat applies before any
+of it is vendored: anything calling `rand()` is edited first, because Bionic's takes a mutex
+and the audio thread cannot.
+
+Delay and reverb are last and least decided. `delayline.h` is already vendored --
+`Pluck`'s string is built on it -- so a delay is mostly a question of what its controls
+are and whether its time follows the transport. One constraint comes with it:
+`DelayLine`'s length is a template parameter, so the longest delay there can be is chosen
+at build time and a node carries that buffer whether it uses it or not. A reverb is the
+only thing in this phase with a real choice of algorithm in it, and choosing it from a
+listening test beats choosing it from a paper.
+
+**Both of them also answer the release question from Phase 10**, which is the other reason
+they are here: a tail that outlives its note is exactly a module that keeps sounding after
+the note ends, and neither of these needs a synth to be told anything.
+
+### What this costs the file format
+
+**More than one bump, and they are cheap.** Velocity is a fourth number on a dot, which
+changes what `toJson` emits; `Noise`, `Delay` and `Reverb` are new module types, and the
+rule is that adding one bumps the version even though nothing needs converting -- an older
+build reads an unknown type as retired, skips it, and autosaves the patch without it. The
+new `Env` changes what an envelope *is* in the file, which is the only one of these that
+would be tempting to convert silently, and must not be: an ADSR read as four segments with
+the wrong curvature is a patch that loads, plays, and is not the sound that was saved.
+
+---
+
 ## Testing
 
 28 tests as of Phase 1, against a suite that previously had a `junit` dependency and
