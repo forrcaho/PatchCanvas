@@ -1182,6 +1182,18 @@ class PatchModule(
      * the A/D/S/R default, silently and only for the module you had just been editing.
      * Cleared before it copies because an envelope is born with that default in it.
      */
+    /**
+     * Every slot-indexed list the engine is told about, for comparing a module against
+     * itself a frame ago.
+     *
+     * One property so `MainActivity`'s sync flow has a single entry for all of them. That
+     * flow is the seam CLAUDE.md records as having silently killed two whole features --
+     * knobs and the step grid both updated the model, saved to disk and never reached the
+     * engine -- and it fails by *omission*, which is the failure a list cannot have.
+     */
+    val slotLists: List<List<Any>>
+        get() = listOf(steps.toList(), dots.toList(), segments.toList())
+
     fun copyGridFrom(from: PatchModule) {
         dots.clear()
         dots.addAll(from.dots)
@@ -4590,6 +4602,24 @@ fun PatchCanvas(
                             // slides against the grid it is supposed to be moving.
                             val gridArea = panelGrid(panel, frame.density, open.type)
 
+                            // Where this panel's editor -- whichever kind it is -- is allowed to
+                            // claim a touch.
+                            //
+                            // One gate for all of them, and it is not tidiness. Each editor below
+                            // ends in an unconditional `return@awaitEachGesture`, so an editor
+                            // reached without a bounds check claims the entire screen: the
+                            // envelope's did, for one build, and swallowed the tap *outside* the
+                            // panel that is the only way to close one. The breadcrumb is hidden
+                            // while a panel is open, so there was no other door. **An editor that
+                            // returns unconditionally has to earn the gesture first**, and having
+                            // one name for "earned it" is what stops the next editor forgetting.
+                            //
+                            // The tap-only targets above do not need this: each is a chip with a
+                            // rect of its own and none of them return without hitting it. What is
+                            // dangerous is a loop that claims.
+                            val inEditor = open.type.grid != GridKind.NONE &&
+                                gridArea.contains(down.position)
+
                             // An envelope's editor, which is not a grid of cells and has its
                             // own loop for that reason -- as the dot grid does below.
                             //
@@ -4598,15 +4628,8 @@ fun PatchCanvas(
                             // and a level and a drag moves both; hanging the sustain and the
                             // keypad on that same node as well is what makes an envelope
                             // editor unusable with a finger, so they are elsewhere entirely.
-                            //
-                            // Scoped to the grid, and that is not a tidiness: this loop ends in
-                            // an unconditional return, so without the bounds check it swallowed
-                            // every touch on the screen -- including the tap *outside* the panel
-                            // that is the only way to close one. The panel became a room with no
-                            // door. Anything that returns unconditionally has to earn the
-                            // gesture first.
                             if (open.type.grid == GridKind.ENVELOPE && !onHistory && knob == null &&
-                                gridArea.contains(down.position)
+                                inEditor
                             ) {
                                 val d = frame.density
                                 val count = open.segments.size
@@ -4706,7 +4729,7 @@ fun PatchCanvas(
                             // down the grid is the degree, since that is what the rows are.
                             // With the dots locked there is no position to change, so a
                             // vertical drag sets how hard the note is struck instead.
-                            if (cell != null && open.type.grid == GridKind.DOTS) {
+                            if (cell != null && inEditor && open.type.grid == GridKind.DOTS) {
                                 val (column, degree) = cell
                                 val hit = open.dotAt(column, degree)
                                 val columns = dotColumns(open)

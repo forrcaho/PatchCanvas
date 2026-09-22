@@ -227,6 +227,44 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
     private var syncedDots = emptyMap<Long, List<Dot>>()
     private var syncedSegments = emptyMap<Long, List<EnvSegment>>()
 
+    /**
+     * One slot-indexed list, diffed against what the engine was last told, and the new
+     * shadow to keep.
+     *
+     * Steps, dots and segments were three near-identical copies of this, and the copies had
+     * already drifted: the steps one compared against `syncedSteps[id]` where the other two
+     * compared against null for a node in [fresh]. Unreachable, because a module's type is a
+     * `val` and an id is never reused by a different type -- but it is the drift, not the
+     * bug, that is the point. A fourth list would have been a fourth copy and a fourth
+     * chance, and the ones before it each cost a real defect somewhere on this path.
+     *
+     * [applies] picks the modules that have this list; [clear] is null for a fixed-length
+     * one, whose slots are never vacated.
+     */
+    private fun <T> diffSlots(
+        sounding: List<EngineNode>,
+        fresh: Set<Long>,
+        previousAll: Map<Long, List<T>>,
+        applies: (ModuleType) -> Boolean,
+        read: (PatchModule) -> List<T>,
+        send: (Long, Int, T) -> Unit,
+        clear: ((Long, Int) -> Unit)?,
+    ): Map<Long, List<T>> {
+        val now = sounding.filter { it.module?.type?.let(applies) == true }
+            .associate { it.id to read(it.module!!) }
+        now.forEach { (id, list) ->
+            // Everything for a node that was just made: the engine's copy knows none of it.
+            val previous = if (id in fresh) null else previousAll[id]
+            list.forEachIndexed { slot, value ->
+                if (previous?.getOrNull(slot) != value) send(id, slot, value)
+            }
+            if (clear != null) {
+                for (slot in list.size until (previous?.size ?: 0)) clear(id, slot)
+            }
+        }
+        return now
+    }
+
     /** Forget what the engine has, so the next sync re-sends everything. */
     fun invalidate() {
         syncedNodes = emptyMap()
@@ -343,52 +381,37 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
             }
         }
 
-        // Sequences, on the same terms as knobs: only what changed, and everything for
-        // a node that was just added. As degrees: the engine resolves each note against
-        // the scale sounding on the beat it starts, so a change of scale resends the list
-        // below and not a single step.
-        val steps = sounding
-            .filter { (it.module?.type?.stepCount ?: 0) > 0 }
-            .associate { it.id to it.module!!.steps.toList() }
-        steps.forEach { (id, sequence) ->
-            val previous = syncedSteps[id]
-            sequence.forEachIndexed { index, step ->
-                if (previous == null || previous.getOrNull(index) != step) {
-                    commands.setStep(id, index, step.degree, step.on)
-                }
-            }
-        }
-
-        // Dots, by slot: what changed, a cleared slot for each one that went, and all of them
-        // for a node that was just made.
-        val dots = sounding.filter { it.module?.type?.grid == GridKind.DOTS }
-            .associate { it.id to it.module!!.dots.toList() }
-        dots.forEach { (id, list) ->
-            val previous = if (id in fresh) null else syncedDots[id]
-            list.forEachIndexed { slot, dot ->
-                if (previous?.getOrNull(slot) != dot) {
-                    commands.setDot(id, slot, dot.step, dot.degree, dot.length, dot.velocity)
-                }
-            }
-            for (slot in list.size until (previous?.size ?: 0)) commands.setDot(id, slot, 0, 0, 0, 1f)
-        }
-
-        // Envelope segments, by slot, exactly as dots are: what changed, and a cleared slot
-        // for each one that went. A time of 0 is the clear, and because segments are
-        // contiguous the engine reads the first cleared slot as the end of the envelope.
-        val segments = sounding.filter { it.module?.type?.grid == GridKind.ENVELOPE }
-            .associate { it.id to it.module!!.segments.toList() }
-        segments.forEach { (id, list) ->
-            val previous = if (id in fresh) null else syncedSegments[id]
-            list.forEachIndexed { slot, seg ->
-                if (previous?.getOrNull(slot) != seg) {
-                    commands.setSegment(id, slot, seg.time, seg.level, seg.curve, seg.sustain)
-                }
-            }
-            for (slot in list.size until (previous?.size ?: 0)) {
-                commands.setSegment(id, slot, 0f, 0f, 0f, false)
-            }
-        }
+        // The slot-indexed lists, all three through one pass. A sequence's steps are as
+        // degrees: the engine resolves each note against the scale sounding on the beat it
+        // starts, so a change of scale resends the list below and not a single step.
+        val steps = diffSlots(
+            sounding, fresh, syncedSteps,
+            applies = { it.stepCount > 0 },
+            read = { it.steps.toList() },
+            send = { id, slot, step -> commands.setStep(id, slot, step.degree, step.on) },
+            // Fixed length: a sequencer always has every step, so none is ever vacated.
+            clear = null,
+        )
+        val dots = diffSlots(
+            sounding, fresh, syncedDots,
+            applies = { it.grid == GridKind.DOTS },
+            read = { it.dots.toList() },
+            send = { id, slot, dot ->
+                commands.setDot(id, slot, dot.step, dot.degree, dot.length, dot.velocity)
+            },
+            clear = { id, slot -> commands.setDot(id, slot, 0, 0, 0, 1f) },
+        )
+        val segments = diffSlots(
+            sounding, fresh, syncedSegments,
+            applies = { it.grid == GridKind.ENVELOPE },
+            read = { it.segments.toList() },
+            send = { id, slot, seg ->
+                commands.setSegment(id, slot, seg.time, seg.level, seg.curve, seg.sustain)
+            },
+            // A time of 0 vacates the slot, and because segments are contiguous the engine
+            // reads the first vacated one as the end of the envelope.
+            clear = { id, slot -> commands.setSegment(id, slot, 0f, 0f, 0f, false) },
+        )
 
         // The scale list, whole, when it or the bar length changes: entries last bars and
         // beats, and the engine counts only beats.

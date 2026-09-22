@@ -180,9 +180,9 @@ class MainActivity : ComponentActivity() {
                     patch.modules.map { it.params.toList() },
                     // A plain map replaced whole, so it compares by content as it stands.
                     patch.modules.map { it.modRanges },
-                    patch.modules.map { it.steps.toList() },
-                    patch.modules.map { it.dots.toList() },
-                    patch.modules.map { it.segments.toList() },
+                    // Steps, dots and segments together: see PatchModule.slotLists, which is
+                    // the one place a new slot-indexed list has to be named for this flow.
+                    patch.modules.map { it.slotLists },
                     patch.scales,
                     patch.beatsPerBar,
                     patch.tempo,
