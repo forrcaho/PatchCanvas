@@ -41,8 +41,16 @@ import java.io.File
  * and a port appended leaves every saved cable's index where it was. The bump is for the
  * older build, which would read a cable into a port it does not have, skip it quietly, and
  * autosave the patch without it.
+ * 14: an Env is segments, and **14 reads nothing but 14**. The additive run ends here. An
+ * envelope's four knobs are gone and what replaced them is not a renaming of them: A, D and
+ * R were one-pole *time constants* toward targets they never reach, where a segment runs a
+ * stated distance in a stated time. The mapping exists -- a release from sustain S really
+ * lasts R*ln(1 + 100S), which is about four times the knob -- and using it would be a
+ * conversion and not a restatement, which is exactly the line 10 was drawn on. An ADSR read
+ * as four segments with the wrong curvature is a patch that loads, plays, and is not the
+ * sound that was saved.
  */
-private const val FORMAT_VERSION = 13
+private const val FORMAT_VERSION = 14
 
 /**
  * The older formats this build reads as they stand. See [upgrade].
@@ -51,7 +59,7 @@ private const val FORMAT_VERSION = 13
  * file already sounded like. Anything that would have to be *converted* is not on this list
  * and never will be.
  */
-private val READABLE = setOf(10, 11, 12, FORMAT_VERSION)
+private val READABLE = setOf(FORMAT_VERSION)
 private const val TAG = "PatchStore"
 
 fun Patch.toJson(): String {
@@ -66,6 +74,7 @@ fun Patch.toJson(): String {
             .put("steps", stepsOf(m))
             .put("mod", modOf(m))
         if (m.type.grid == GridKind.DOTS) entry.put("dots", dotsOf(m))
+        if (m.type.grid == GridKind.ENVELOPE) entry.put("segments", segmentsOf(m))
         // Absent at the top level, so a patch with no subpatches writes exactly what format 5 did.
         m.name?.let { entry.put("name", it) }
         m.font?.let { entry.put("font", it) }
@@ -237,6 +246,58 @@ private fun restoreDots(module: PatchModule, stored: JSONArray?) {
     }
 }
 
+/**
+ * An envelope's segments, each as [time, level, curve, sustain]: positional, like a dot.
+ *
+ * The floats go through their own toString for the same reason velocity does -- widening
+ * 0.3f to a double writes 0.30000001192092896 into a file people read with `cat` -- and the
+ * sustain is written as 0 or 1 rather than a bool so the row is four numbers and nothing
+ * has to know which position changes type.
+ */
+private fun segmentsOf(module: PatchModule): JSONArray {
+    val out = JSONArray()
+    module.segments.forEach {
+        out.put(
+            JSONArray()
+                .put(it.time.toString().toDouble())
+                .put(it.level.toString().toDouble())
+                .put(it.curve.toString().toDouble())
+                .put(if (it.sustain) 1 else 0),
+        )
+    }
+    return out
+}
+
+private fun restoreSegments(module: PatchModule, stored: JSONArray?) {
+    if (stored == null || module.type.grid != GridKind.ENVELOPE) return
+    val read = mutableListOf<EnvSegment>()
+    for (i in 0 until minOf(stored.length(), MAX_SEGMENTS)) {
+        val d = stored.optJSONArray(i) ?: continue
+        if (d.length() < 4) continue
+        val time = d.optDouble(0, Double.NaN).toFloat()
+        val level = d.optDouble(1, Double.NaN).toFloat()
+        val curve = d.optDouble(2, Double.NaN).toFloat()
+        if (!time.isFinite() || !level.isFinite() || !curve.isFinite()) continue
+        read.add(
+            EnvSegment(
+                time.coerceIn(SEGMENT_MIN_TIME, SEGMENT_MAX_TIME),
+                level.coerceIn(0f, 1f),
+                curve.coerceIn(-1f, 1f),
+                d.optInt(3) != 0,
+            ),
+        )
+    }
+    // An envelope with no readable segment keeps the default rather than becoming a module
+    // that outputs nothing -- and one segment is the floor the editor enforces too.
+    if (read.isEmpty()) return
+    module.segments.clear()
+    // At most one sustain, which the model guarantees and a hand-edited file may not.
+    val first = read.indexOfFirst { it.sustain }
+    read.forEachIndexed { i, seg ->
+        module.segments.add(if (seg.sustain && i != first) seg.copy(sustain = false) else seg)
+    }
+}
+
 /** Exposed parameters, keyed by name like the knobs, each as its low and high. */
 private fun modOf(module: PatchModule): JSONObject {
     val out = JSONObject()
@@ -354,6 +415,7 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
             // module on the same default figure it used to have compiled in.
             restoreSteps(module, m.optJSONArray("steps"))
             restoreDots(module, m.optJSONArray("dots"))
+            restoreSegments(module, m.optJSONArray("segments"))
             // Before the cables, which can only land on a parameter already exposed.
             restoreMod(module, m.optJSONObject("mod"))
             patch.adopt(module)

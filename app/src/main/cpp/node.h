@@ -130,6 +130,26 @@ public:
     }
 
     /**
+     * Segment [slot] of an envelope: reach [level] over [time] seconds, bent by [curve],
+     * and hold there while a note is held when [sustain]. A [time] of 0 means the slot is
+     * unused, which is how the envelope learns how many segments it has -- they are
+     * contiguous, so the first unused slot is the end.
+     *
+     * A segment says where it is *going*, never where it starts: it begins wherever the
+     * envelope already is. That is what lets a note released during the attack fall from
+     * the level it actually reached rather than stepping to a level it never had.
+     *
+     * Audio thread, same rules as setParam.
+     */
+    virtual void setSegment(int32_t slot, float time, float level, float curve, bool sustain) {
+        (void) slot;
+        (void) time;
+        (void) level;
+        (void) curve;
+        (void) sustain;
+    }
+
+    /**
      * Where a sequencer has got to, or -1 for everything that is not one.
      *
      * Read on the audio thread only, by the graph, which republishes it through an

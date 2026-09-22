@@ -156,31 +156,104 @@ void FilterNode::setParam(int32_t index, float value) {
 
 void EnvNode::prepare(int32_t sampleRate) {
     Node::prepare(sampleRate);
-    adsr_.Init(static_cast<float>(sampleRate));
-    // Fixed until Phase 5. A short attack and a moderate decay make a plucked shape,
-    // which is the one that shows most clearly whether a gate is arriving.
-    adsr_.SetAttackTime(0.005f);
-    adsr_.SetDecayTime(0.12f);
-    adsr_.SetSustainLevel(0.6f);
-    adsr_.SetReleaseTime(0.25f);
+    holdGlide_ = 1.0f - expf(-1.0f / (0.005f * static_cast<float>(sampleRate)));
+    // The shape that arrives before the interface has said anything, and the one every
+    // Env has had: a short attack, a moderate decay, a sustain and a release. It is here
+    // so a node that is added and heard in the same block is not silent.
+    setSegment(0, 0.005f, 1.0f, 0.6f, false);
+    setSegment(1, 0.12f, 0.6f, 0.6f, true);
+    setSegment(2, 0.25f, 0.0f, 0.6f, false);
 }
-
+void EnvNode::rescan() {
+    segCount_ = 0;
+    while (segCount_ < kMaxSegments && seg_[segCount_].time > 0.0f) ++segCount_;
+    sustainIndex_ = -1;
+    for (int32_t i = 0; i < segCount_; ++i) {
+        if (seg_[i].sustain) {
+            sustainIndex_ = i;
+            break;
+        }
+    }
+    if (index_ >= segCount_) {
+        // The envelope was shortened out from under itself. Stop where it is rather than
+        // reading a slot that is no longer there; the level it holds is the one it reached.
+        running_ = false;
+        holding_ = false;
+    }
+}
+void EnvNode::setSegment(int32_t slot, float time, float level, float curve, bool sustain) {
+    if (slot < 0 || slot >= kMaxSegments) return;
+    seg_[slot].time = time <= 0.0f ? 0.0f : (time < kMinTime ? kMinTime : time);
+    seg_[slot].level = clampf(level, 0.0f, 1.0f);
+    seg_[slot].curve = clampf(curve, -1.0f, 1.0f);
+    seg_[slot].sustain = sustain;
+    rescan();
+}
+void EnvNode::enter(int32_t index) {
+    index_ = index;
+    phase_ = 0.0f;
+    from_ = value_;
+    const Segment &s = seg_[index];
+    rate_ = 1.0f / (s.time * static_cast<float>(sampleRate_));
+    // The bend, as a running exponential. a is the curve over a span that reaches a
+    // recognisable exponential at the ends without the middle going slack.
+    shapeA_ = 6.0f * s.curve;
+    // Straight enough that the exponential form would be 0/0, so it is taken as straight.
+    shapeScale_ = fabsf(shapeA_) < 1e-3f ? 0.0f : 1.0f / (1.0f - expf(-shapeA_));
+}
+void EnvNode::advance() {
+    if (index_ + 1 >= segCount_) {
+        // Past the last segment the envelope simply stops, holding whatever it arrived at.
+        // For the usual shape that is zero; for one that ends high it is a level that stays
+        // until the next note, which is what an envelope with no release means.
+        running_ = false;
+        holding_ = false;
+        return;
+    }
+    enter(index_ + 1);
+}
 void EnvNode::start(const NoteEvent &event) {
-    if (heldCount_ >= kHeld) return;
-    held_[heldCount_].id = event.id;
-    held_[heldCount_].source = event.source;
-    ++heldCount_;
+    if (heldCount_ < kHeld) {
+        held_[heldCount_].id = event.id;
+        held_[heldCount_].source = event.source;
+        ++heldCount_;
+    }
+    // Legato: a second note over a held one leaves the envelope where it is. Only the
+    // first note of a phrase strikes, and it strikes from wherever the output sits, so a
+    // note landing on a tail does not step.
+    if (heldCount_ == 1 && segCount_ > 0) {
+        running_ = true;
+        holding_ = false;
+        enter(0);
+    }
 }
-
 void EnvNode::release(uint32_t id, int32_t source) {
     for (int32_t i = 0; i < heldCount_; ++i) {
         if (held_[i].id != id || held_[i].source != source) continue;
         held_[i] = held_[heldCount_ - 1];
         --heldCount_;
+        break;
+    }
+    if (heldCount_ == 0) letGo();
+}
+void EnvNode::letGo() {
+    // An envelope with no sustain segment is not listening -- it runs to its end whatever
+    // happens, which is what makes a release optional.
+    if (sustainIndex_ < 0) return;
+    if (!running_ && !holding_) return;
+    if (index_ > sustainIndex_) return;  // already past it, so already releasing
+    holding_ = false;
+    if (sustainIndex_ + 1 >= segCount_) {
+        // Sustain on the last segment: there is nothing after it to release into, so the
+        // envelope stops at the level it is holding rather than hanging open forever.
+        running_ = false;
         return;
     }
+    // From wherever it actually reached, not from the sustain level it may never have
+    // touched: a note let go during the attack falls from there.
+    running_ = true;
+    enter(sustainIndex_ + 1);
 }
-
 void EnvNode::notesCut(int32_t port, int32_t source) {
     (void) port; // one note input, so there is nothing to tell apart
     for (int32_t i = heldCount_ - 1; i >= 0; --i) {
@@ -188,8 +261,8 @@ void EnvNode::notesCut(int32_t port, int32_t source) {
         held_[i] = held_[heldCount_ - 1];
         --heldCount_;
     }
+    if (heldCount_ == 0) letGo();
 }
-
 void EnvNode::process(int32_t frames) {
     float *o = out(0);
     const NoteBuffer &notes = notesIn(0);
@@ -204,19 +277,26 @@ void EnvNode::process(int32_t frames) {
             if (event.kind == NoteKind::Off) release(event.id, event.source);
             ++next;
         }
-        // Held rather than struck: the gate is open while anything is down, so an
-        // overlapping note sustains the envelope instead of restarting it.
-        o[i] = adsr_.Process(heldCount_ > 0);
-    }
-}
-
-void EnvNode::setParam(int32_t index, float value) {
-    switch (index) {
-        case 0: adsr_.SetAttackTime(clampf(value, 0.001f, 5.0f)); break;
-        case 1: adsr_.SetDecayTime(clampf(value, 0.001f, 5.0f)); break;
-        case 2: adsr_.SetSustainLevel(clampf(value, 0.0f, 1.0f)); break;
-        case 3: adsr_.SetReleaseTime(clampf(value, 0.001f, 10.0f)); break;
-        default: break;
+        if (holding_) {
+            // Parked, but still following the level: see holdGlide_.
+            value_ += (seg_[index_].level - value_) * holdGlide_;
+        } else if (running_) {
+            phase_ += rate_;
+            if (phase_ >= 1.0f) {
+                value_ = seg_[index_].level;
+                if (seg_[index_].sustain && heldCount_ > 0) {
+                    holding_ = true;
+                } else {
+                    advance();
+                }
+            } else {
+                const float shaped = shapeScale_ == 0.0f
+                    ? phase_
+                    : (1.0f - expf(-shapeA_ * phase_)) * shapeScale_;
+                value_ = from_ + (seg_[index_].level - from_) * shaped;
+            }
+        }
+        o[i] = value_;
     }
 }
 

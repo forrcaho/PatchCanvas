@@ -4,6 +4,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -114,7 +115,7 @@ class DotSeqTest {
         seq.addDot(Dot(0, 0, 4))
         seq.addDot(Dot(31, -3, 1, 0.25f))
         val json = patch.toJson()
-        assertTrue(json.contains("\"version\":13"))
+        assertTrue(json.contains("\"version\":14"))
         assertEquals(seq.dots.toList(), patchFromJson(json)!!.modules.first { it.type == Types.Seq }.dots.toList())
 
         val wild = json.replace("[31,-3,1,0.25]", "[99,-3,500,7]")
@@ -125,19 +126,28 @@ class DotSeqTest {
     }
 
     /**
-     * Format 10 is read as it stands, which is what the rule against migrating actually
-     * says: the refusal is against a *silent conversion*, and a dot that never said how hard
-     * it was struck was struck at full, so reading it that way is not a conversion at all.
+     * The additive run that let 11, 12 and 13 all read a 10 file ended at 14.
+     *
+     * This test read a version-10 file and asserted every dot came back at full, which was
+     * right for as long as velocity was the only thing that had changed. Format 14 makes an
+     * envelope segments, and an ADSR cannot be restated as segments -- only converted -- so
+     * 14 reads nothing but 14 and the older file is refused whole. Kept as a refusal rather
+     * than deleted, because "this version is not read" is the assertion that stops the
+     * additive habit creeping back in.
+     *
+     * Asserted for every version this build used to accept, so raising FORMAT_VERSION
+     * without thinking about the ladder fails here.
      */
     @Test
-    fun `a file from before velocity opens, with every note at full`() {
+    fun `a file from before segments is refused, not converted`() {
         val (patch, seq) = seq()
         seq.addDot(Dot(2, 5, 6, 0.3f))
-        val older = patch.toJson()
-            .replace("\"version\":13", "\"version\":10")
-            .replace("[2,5,6,0.3]", "[2,5,6]")
-        val opened = patchFromJson(older)!!.modules.first { it.type == Types.Seq }
-        assertEquals(listOf(Dot(2, 5, 6, 1f)), opened.dots.toList())
+        val current = patch.toJson()
+        assertNotNull("the current version still opens", patchFromJson(current))
+        listOf(10, 11, 12, 13).forEach { version ->
+            val older = current.replace("\"version\":14", "\"version\":$version")
+            assertNull("format $version must be refused", patchFromJson(older))
+        }
     }
 
     @Test

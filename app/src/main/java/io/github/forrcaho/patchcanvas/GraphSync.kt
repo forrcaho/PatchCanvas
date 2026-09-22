@@ -103,6 +103,9 @@ interface GraphCommands {
     fun setFont(id: Long, font: Long)
     /** Dot [slot] of dot sequencer [id]; a length of 0 clears the slot. */
     fun setDot(id: Long, slot: Int, step: Int, degree: Int, length: Int, velocity: Float)
+
+    /** Segment [slot] of envelope [id]; a time of 0 clears the slot. */
+    fun setSegment(id: Long, slot: Int, time: Float, level: Float, curve: Float, sustain: Boolean)
     fun collectGarbage()
 }
 
@@ -184,6 +187,13 @@ object EngineCommands : GraphCommands {
         AudioEngine.setDot(id, slot, step, degree, length, velocity)
     }
 
+    override fun setSegment(
+        id: Long, slot: Int, time: Float, level: Float, curve: Float, sustain: Boolean,
+    ) {
+        trace { "seg $id[$slot] = ${time}s to $level curve $curve${if (sustain) " sustain" else ""}" }
+        AudioEngine.setSegment(id, slot, time, level, curve, sustain)
+    }
+
     override fun setFont(id: Long, font: Long) {
         trace { "font $id = $font" }
         AudioEngine.setNodeFont(id, font)
@@ -215,6 +225,7 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
     private var syncedTempo: Float? = null
     private var syncedFonts = emptyMap<Long, Long>()
     private var syncedDots = emptyMap<Long, List<Dot>>()
+    private var syncedSegments = emptyMap<Long, List<EnvSegment>>()
 
     /** Forget what the engine has, so the next sync re-sends everything. */
     fun invalidate() {
@@ -228,6 +239,7 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
         syncedTempo = null
         syncedFonts = emptyMap()
         syncedDots = emptyMap()
+        syncedSegments = emptyMap()
     }
 
     /**
@@ -361,6 +373,23 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
             for (slot in list.size until (previous?.size ?: 0)) commands.setDot(id, slot, 0, 0, 0, 1f)
         }
 
+        // Envelope segments, by slot, exactly as dots are: what changed, and a cleared slot
+        // for each one that went. A time of 0 is the clear, and because segments are
+        // contiguous the engine reads the first cleared slot as the end of the envelope.
+        val segments = sounding.filter { it.module?.type?.grid == GridKind.ENVELOPE }
+            .associate { it.id to it.module!!.segments.toList() }
+        segments.forEach { (id, list) ->
+            val previous = if (id in fresh) null else syncedSegments[id]
+            list.forEachIndexed { slot, seg ->
+                if (previous?.getOrNull(slot) != seg) {
+                    commands.setSegment(id, slot, seg.time, seg.level, seg.curve, seg.sustain)
+                }
+            }
+            for (slot in list.size until (previous?.size ?: 0)) {
+                commands.setSegment(id, slot, 0f, 0f, 0f, false)
+            }
+        }
+
         // The scale list, whole, when it or the bar length changes: entries last bars and
         // beats, and the engine counts only beats.
         if (syncedScales != patch.scales || syncedBeatsPerBar != patch.beatsPerBar) {
@@ -382,6 +411,7 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
         syncedTempo = patch.tempo
         syncedFonts = wanted
         syncedDots = dots
+        syncedSegments = segments
 
         // Whatever the audio thread retired during the last block is ours to free.
         commands.collectGarbage()

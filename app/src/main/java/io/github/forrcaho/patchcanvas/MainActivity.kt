@@ -182,6 +182,7 @@ class MainActivity : ComponentActivity() {
                     patch.modules.map { it.modRanges },
                     patch.modules.map { it.steps.toList() },
                     patch.modules.map { it.dots.toList() },
+                    patch.modules.map { it.segments.toList() },
                     patch.scales,
                     patch.beatsPerBar,
                     patch.tempo,

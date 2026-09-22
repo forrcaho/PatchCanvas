@@ -78,6 +78,7 @@ import kotlinx.coroutines.withTimeout
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.exp
 import kotlin.math.floor
 import kotlin.math.roundToInt
 import kotlin.math.cos
@@ -331,6 +332,64 @@ data class Dot(
 )
 
 /**
+ * One leg of an envelope: reach [level] over [time] seconds, bent by [curve].
+ *
+ * A segment says where it is *going* and never where it starts, because it starts wherever
+ * the envelope already is. That is not a shortcut -- it is what lets a note released during
+ * the attack fall from the level it actually reached, which is the behaviour an ADSR gets
+ * for free and a naive list of points loses.
+ *
+ * [curve] runs -1 to 1 with 0 straight. Positive leaves fast and arrives slow, which is the
+ * shape of a natural decay; negative is the other way. It belongs to the segment rather
+ * than to either end, which is Surge's split and the reason this is usable on a phone:
+ * Bespoke hangs time, level and curvature on one draggable node, so the control that picks
+ * between them is a mode, and a mode on a fingertip-sized target is a coin toss. Here a
+ * node is time and level, and curvature is a drag on the line between two nodes --
+ * different targets rather than different modes.
+ *
+ * [sustain] parks the envelope here while a note is held. At most one segment in a list has
+ * it; [PatchModule.setSustain] is what enforces that. None of them having it is a perfectly
+ * good envelope -- it runs to its end and stops, which is what a percussive patch wants,
+ * and costs nothing on a synth besides, since a voice is freed the moment its gate ramp
+ * reaches zero and a release shapes nothing anyway.
+ */
+data class EnvSegment(
+    val time: Float,
+    val level: Float,
+    val curve: Float = 0f,
+    val sustain: Boolean = false,
+)
+
+/**
+ * What a new envelope is: the A/D/S/R every Env has had, said as segments.
+ *
+ * Deliberately the familiar shape rather than something the format could not have held
+ * before. The point of the redesign is that this is now the *starting* point and not the
+ * only one -- a node can be added, a curve bent, the sustain moved or dropped.
+ */
+/**
+ * How far along its travel a segment is at [t], bent by [curve]. Mirrors EnvNode's shape.
+ *
+ * The same expression on both sides on purpose: this is what the editor draws and what the
+ * engine plays, and an envelope that sounds unlike its own picture would be worse than one
+ * with no picture at all. `(1 - e^-at)/(1 - e^-a)`, which is 0 at 0, 1 at 1 for every a,
+ * and approaches a straight line as a does -- so there is no seam at the middle of the
+ * knob, where a piecewise pair of curves would have one.
+ */
+internal fun envShape(t: Float, curve: Float): Float {
+    val a = 6f * curve.coerceIn(-1f, 1f)
+    // Straight enough that the exponential form is 0/0, so it is taken as straight.
+    if (abs(a) < 1e-3f) return t
+    return ((1f - exp(-a * t)) / (1f - exp(-a)))
+}
+
+internal val DEFAULT_ENVELOPE = listOf(
+    EnvSegment(0.005f, 1f, 0.6f),
+    EnvSegment(0.12f, 0.6f, 0.6f, sustain = true),
+    EnvSegment(0.25f, 0f, 0.6f),
+)
+
+/**
  * What an exposed parameter sweeps between when something modulates it, in its own units.
  *
  * Stored on the parameter's module rather than on the cable, which is Bespoke's shape and
@@ -369,6 +428,14 @@ internal const val MOD_SPREAD = 0.2f
  */
 enum class GridKind {
     NONE,
+
+    /**
+     * Not a grid of cells at all, but it belongs here: the open panel is the view that
+     * already owns the whole screen and already has drawing and hit testing for a shape
+     * you edit with a finger, which is what an envelope needs. Columns are time and the
+     * vertical is level, both continuous. See [EnvSegment].
+     */
+    ENVELOPE,
 
     /**
      * Columns are steps and rows are degrees, as in a sequence, but a cell holds a dot: a
@@ -537,12 +604,10 @@ object Types {
     val Env = ModuleType(
         "Env", listOf(Port("notes", N)), listOf(Port("out", M)),
         Color(0xFF9A85D7),
-        params = listOf(
-            Param("A", 0.001f, 5f, 0.005f, "s", EXP),
-            Param("D", 0.001f, 5f, 0.12f, "s", EXP),
-            Param("S", 0f, 1f, 0.6f, "", LIN),
-            Param("R", 0.001f, 10f, 0.25f, "s", EXP),
-        ),
+        // No knobs: A, D, S and R were four fixed stages and the shape is segments now.
+        // What replaced them is a grid, because an envelope is a shape and the one thing
+        // four numbers cannot show you is what they add up to.
+        grid = GridKind.ENVELOPE,
     )
     /**
      * A slow wave, for turning knobs. Patched to a parameter's modulation port it sweeps
@@ -1032,6 +1097,99 @@ class PatchModule(
      * so removing one resends those after it, which for a grid's worth of dots is nothing.
      */
     val dots: SnapshotStateList<Dot> = mutableStateListOf()
+
+    /**
+     * An envelope's segments, in order; empty on everything else. Positional like dots, so
+     * the engine keeps a slot per index and one edit is one command.
+     */
+    val segments: SnapshotStateList<EnvSegment> = mutableStateListOf<EnvSegment>().apply {
+        if (type.grid == GridKind.ENVELOPE) addAll(DEFAULT_ENVELOPE)
+    }
+
+    /** Where each node sits in time: the running sum of the segments before it. */
+    val segmentTimes: List<Float>
+        get() {
+            var at = 0f
+            return segments.map { at += it.time; at }
+        }
+
+    /** The whole envelope's duration, which is what the editor's width stands for. */
+    val envelopeSpan: Float get() = segments.sumOf { it.time.toDouble() }.toFloat()
+
+    fun setSegment(index: Int, segment: EnvSegment) {
+        if (index !in segments.indices) return
+        segments[index] = segment.copy(
+            time = segment.time.coerceIn(SEGMENT_MIN_TIME, SEGMENT_MAX_TIME),
+            level = segment.level.coerceIn(0f, 1f),
+            curve = segment.curve.coerceIn(-1f, 1f),
+        )
+    }
+
+    /**
+     * Splits segment [index] in two at [at] (0 to 1 along it), adding a node there.
+     *
+     * The new node lands on the line where it was tapped, so the envelope's shape does not
+     * change the moment you add somewhere to bend it -- which it would if the new node took
+     * a level of its own. Its two halves keep the curve they came from.
+     */
+    fun splitSegment(index: Int, at: Float): Boolean {
+        if (segments.size >= MAX_SEGMENTS) return false
+        val seg = segments.getOrNull(index) ?: return false
+        val cut = at.coerceIn(0.05f, 0.95f)
+        val from = if (index == 0) 0f else segments[index - 1].level
+        val first = EnvSegment(
+            time = (seg.time * cut).coerceAtLeast(SEGMENT_MIN_TIME),
+            level = from + (seg.level - from) * envShape(cut, seg.curve),
+            curve = seg.curve,
+        )
+        // The sustain stays on the second half: it marks where the envelope waits, and
+        // that is the end of the leg that was split, not a new point in the middle of it.
+        val second = seg.copy(time = (seg.time * (1f - cut)).coerceAtLeast(SEGMENT_MIN_TIME))
+        segments[index] = first
+        segments.add(index + 1, second)
+        return true
+    }
+
+    /** Removes segment [index], unless it is the only one left. */
+    fun removeSegment(index: Int): Boolean {
+        if (segments.size <= 1 || index !in segments.indices) return false
+        segments.removeAt(index)
+        return true
+    }
+
+    /**
+     * Puts the sustain on [index], or clears it when it is already there.
+     *
+     * Exactly one segment may hold it, which is enforced here rather than trusted: two
+     * sustains would give the engine a second place to park that it can never reach, and
+     * the drawing would show a wait that never happens.
+     */
+    fun setSustain(index: Int) {
+        val already = segments.getOrNull(index)?.sustain ?: return
+        for (i in segments.indices) {
+            val want = i == index && !already
+            if (segments[i].sustain != want) segments[i] = segments[i].copy(sustain = want)
+        }
+    }
+
+    /**
+     * Takes [from]'s grid state: its dots, or its envelope's segments.
+     *
+     * One function rather than the same two lines in three places. A module is copied by
+     * undo, by duplicate and by adopting a saved subpatch, and when segments arrived all
+     * three were copying dots and none of them knew about a second kind of grid -- so an
+     * undone envelope, a duplicated one and one loaded from the library all came back as
+     * the A/D/S/R default, silently and only for the module you had just been editing.
+     * Cleared before it copies because an envelope is born with that default in it.
+     */
+    fun copyGridFrom(from: PatchModule) {
+        dots.clear()
+        dots.addAll(from.dots)
+        if (type.grid == GridKind.ENVELOPE) {
+            segments.clear()
+            segments.addAll(from.segments)
+        }
+    }
 
     /** Adds [dot] unless the sequencer is full. */
     fun addDot(dot: Dot): Boolean {
@@ -2111,7 +2269,14 @@ internal const val SCALE_TILE_H = 56f
 internal fun panelCellAt(
     panel: Rect, d: Float, module: PatchModule, at: Offset, scale: Scale = Scale.Chromatic,
 ): Pair<Int, Int>? {
-    if (module.type.grid == GridKind.NONE || module.type.grid == GridKind.PATTERN) return null
+    // An envelope has no cells: it is continuous in both axes, and its own hit testing is
+    // envNodeAt and envSegmentAt. Excluded here so a tap on the shape cannot also read as a
+    // cell somewhere behind it.
+    if (module.type.grid == GridKind.NONE || module.type.grid == GridKind.PATTERN ||
+        module.type.grid == GridKind.ENVELOPE
+    ) {
+        return null
+    }
     val area = panelGrid(panel, d, module.type)
     if (!area.contains(at)) return null
 
@@ -2677,7 +2842,7 @@ class Patch {
             it.parent = module.parent
             it.name = module.name
             it.font = module.font
-            it.dots.addAll(module.dots)
+            it.copyGridFrom(module)
         }
     }
 
@@ -2728,7 +2893,7 @@ class Patch {
             val copy = PatchModule(newId.getValue(from.id), from.type, where, ports)
             copy.name = if (from.id == subpatch.id) name else from.name
             copy.font = from.font
-            copy.dots.addAll(from.dots)
+            copy.copyGridFrom(from)
             from.params.forEachIndexed { i, v -> copy.setParam(i, v) }
             from.steps.forEachIndexed { i, step -> copy.setStep(i, step) }
             copy.modRanges = from.modRanges
@@ -3287,6 +3452,9 @@ sealed interface NumberTarget {
 
     /** The transport's tempo, which is a knob in every way but where it lives. */
     data object Tempo : NumberTarget
+
+    /** How long one envelope segment lasts. Typed in milliseconds; see [SEGMENT_TIME]. */
+    data class SegmentTime(val moduleId: Long, val index: Int) : NumberTarget
 }
 
 sealed interface MenuItem {
@@ -4421,6 +4589,94 @@ fun PatchCanvas(
                             // the remainder and a drag measured against the nominal value
                             // slides against the grid it is supposed to be moving.
                             val gridArea = panelGrid(panel, frame.density, open.type)
+
+                            // An envelope's editor, which is not a grid of cells and has its
+                            // own loop for that reason -- as the dot grid does below.
+                            //
+                            // Three targets, never a mode: the shape in the middle, a sustain
+                            // rail above it and a rail of times below. A node carries a time
+                            // and a level and a drag moves both; hanging the sustain and the
+                            // keypad on that same node as well is what makes an envelope
+                            // editor unusable with a finger, so they are elsewhere entirely.
+                            if (open.type.grid == GridKind.ENVELOPE && !onHistory && knob == null) {
+                                val d = frame.density
+                                val count = open.segments.size
+
+                                val sustainCell =
+                                    envCellAt(envSustainRail(gridArea, d), count, down.position)
+                                if (sustainCell >= 0) {
+                                    waitForUpRelease()
+                                    open.setSustain(sustainCell)
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    return@awaitEachGesture
+                                }
+                                val timeCell =
+                                    envCellAt(envTimeRail(gridArea, d), count, down.position)
+                                if (timeCell >= 0) {
+                                    waitForUpRelease()
+                                    interaction = Interaction.Typing(
+                                        NumberTarget.SegmentTime(open.id, timeCell),
+                                    )
+                                    return@awaitEachGesture
+                                }
+
+                                val geo = envGeometry(gridArea, open, d)
+                                val node = envNodeAt(geo, open, down.position, d)
+                                // A node wins over the line it sits on, so the two never
+                                // compete for the same finger.
+                                val segment =
+                                    if (node >= 0) -1 else envSegmentAt(geo, open, down.position, d)
+                                val grabbed = open.segments.getOrNull(if (node >= 0) node else segment)
+                                var envMoved = false
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    val change = event.changes.firstOrNull { it.pressed } ?: break
+                                    val travel = change.position - down.position
+                                    if (!envMoved && travel.getDistance() > slop) envMoved = true
+                                    if (envMoved && grabbed != null && node >= 0) {
+                                        // Both axes at once, unlike a dot, which locks to one:
+                                        // a dot is a cell in a grid and a node is a point, and
+                                        // carrying a point to a new time almost always wants a
+                                        // new level with it.
+                                        open.setSegment(
+                                            node,
+                                            grabbed.copy(
+                                                time = grabbed.time + geo.timeDelta(travel.x),
+                                                level = grabbed.level + geo.levelDelta(travel.y),
+                                            ),
+                                        )
+                                    } else if (envMoved && grabbed != null && segment >= 0) {
+                                        // Up bends the line up, which is the direction the
+                                        // finger is pushing it.
+                                        open.setSegment(
+                                            segment,
+                                            grabbed.copy(
+                                                curve = grabbed.curve -
+                                                    travel.y / (ENV_CURVE_TRAVEL * d),
+                                            ),
+                                        )
+                                    }
+                                    change.consume()
+                                }
+                                if (!envMoved) {
+                                    if (node >= 0) {
+                                        open.removeSegment(node)
+                                    } else if (segment >= 0) {
+                                        val times = open.segmentTimes
+                                        val left =
+                                            geo.x(if (segment == 0) 0f else times[segment - 1])
+                                        val right = geo.x(times[segment])
+                                        val at = if (right > left) {
+                                            (down.position.x - left) / (right - left)
+                                        } else {
+                                            0.5f
+                                        }
+                                        open.splitSegment(segment, at)
+                                    }
+                                }
+                                return@awaitEachGesture
+                            }
+
                             // Taken from the window rather than worked out again here: a drone
                             // shows fewer rows than fit when its scale is short, and a drag
                             // measured against the rows that would fit slid against the grid.
@@ -5250,9 +5506,15 @@ internal val KEYPAD_ROWS = listOf(
  */
 @Composable
 private fun NumberKeypad(patch: Patch, target: NumberTarget, onDone: () -> Unit) {
-    val module = (target as? NumberTarget.Knob)?.let { patch.module(it.moduleId) }
+    val module = when (target) {
+        is NumberTarget.Knob -> patch.module(target.moduleId)
+        is NumberTarget.SegmentTime -> patch.module(target.moduleId)
+        else -> null
+    }
     val param = when (target) {
         is NumberTarget.Tempo -> TEMPO
+        is NumberTarget.SegmentTime ->
+            SEGMENT_TIME.takeIf { module?.segments?.indices?.contains(target.index) == true }
         is NumberTarget.Knob -> module?.type?.params?.getOrNull(target.index)
     } ?: run {
         // The module went away under the keypad, which only an undo could do.
@@ -5262,6 +5524,8 @@ private fun NumberKeypad(patch: Patch, target: NumberTarget, onDone: () -> Unit)
     val range = (target as? NumberTarget.Knob)?.let { module?.modRanges?.get(it.index) }
     val current = when {
         target is NumberTarget.Tempo -> param.format(patch.tempo)
+        target is NumberTarget.SegmentTime ->
+            param.format((module?.segments?.get(target.index)?.time ?: 0f) * 1000f)
         target is NumberTarget.Knob && target.end == ValueTarget.LOW && range != null ->
             param.format(range.low)
         target is NumberTarget.Knob && target.end == ValueTarget.HIGH && range != null ->
@@ -5271,12 +5535,14 @@ private fun NumberKeypad(patch: Patch, target: NumberTarget, onDone: () -> Unit)
         else -> ""
     }
     val label = when {
+        target is NumberTarget.SegmentTime -> "segment ${target.index + 1}"
         target is NumberTarget.Knob && target.end == ValueTarget.LOW -> "${param.name} from"
         target is NumberTarget.Knob && target.end == ValueTarget.HIGH -> "${param.name} to"
         else -> param.name
     }
     val accent = when (target) {
         is NumberTarget.Tempo -> TransportAccent
+        is NumberTarget.SegmentTime -> module?.type?.accent ?: TransportAccent
         is NumberTarget.Knob -> if (range != null) ModulationColor else module?.type?.accent ?: TransportAccent
     }
 
@@ -5287,6 +5553,12 @@ private fun NumberKeypad(patch: Patch, target: NumberTarget, onDone: () -> Unit)
         if (value != null) {
             when (target) {
                 is NumberTarget.Tempo -> patch.tempo = value.roundToInt().toFloat()
+                is NumberTarget.SegmentTime -> {
+                    val m = module ?: return
+                    val seg = m.segments.getOrNull(target.index) ?: return
+                    // Typed in milliseconds, stored in seconds; see SEGMENT_TIME.
+                    m.setSegment(target.index, seg.copy(time = value / 1000f))
+                }
                 is NumberTarget.Knob -> {
                     val m = module ?: return
                     when {
@@ -5616,6 +5888,283 @@ internal fun euclidHit(index: Int, steps: Int, pulses: Int, rotate: Int): Boolea
 }
 
 /** A Euclid's pattern: a mark per step, filled where a note falls, ringed where it is. */
+/**
+ * A segment's time, for reading rather than for the file: milliseconds under a second.
+ *
+ * An attack is 5ms and a release is 2s, and one unit across that range either reads as
+ * 0.005 or as 2000 -- neither of which is the number anyone says out loud.
+ */
+internal fun envTime(seconds: Float): String = when {
+    seconds < 1f -> "${(seconds * 1000f).roundToInt()}ms"
+    seconds < 10f -> "${"%.2f".format(seconds).trimEnd('0').trimEnd('.')}s"
+    else -> "${"%.1f".format(seconds).trimEnd('0').trimEnd('.')}s"
+}
+
+/** A node's drawn radius, in dp. */
+internal const val ENV_NODE_RADIUS = 7f
+
+/** How near a finger must land to take a node or bend a segment, in dp. */
+internal const val ENV_GRAB = 22f
+
+/** Pixels of vertical drag that bend a segment from straight to fully curved. */
+internal const val ENV_CURVE_TRAVEL = 90f
+
+/**
+ * The time axis an envelope is drawn against: a round number at or above its own length,
+ * never the length itself.
+ *
+ * If the axis were the sum, the right-hand node would sit on the edge and could not be
+ * dragged any longer, and every other node would slide whenever any segment changed. A
+ * ladder holds the picture still while an edit is in progress and steps when it has to,
+ * which reads as a zoom rather than as the envelope squirming under the finger.
+ */
+internal fun envelopeAxis(span: Float): Float =
+    floatArrayOf(0.1f, 0.25f, 0.5f, 1f, 2f, 5f, 10f, 20f, 40f, 80f).firstOrNull { it >= span }
+        ?: (MAX_SEGMENTS * SEGMENT_MAX_TIME)
+
+/**
+ * Where an envelope's seconds and levels land in the panel, and back again.
+ *
+ * One object shared by the drawing and the hit testing on purpose: an editor whose picture
+ * and whose targets are worked out separately is one where they drift, and a node you can
+ * see but not grab is the worst of the two halves.
+ */
+internal class EnvGeometry(val area: Rect, val axis: Float, private val inset: Float) {
+    private val usable get() = area.height - 2f * inset
+    fun x(time: Float): Float = area.left + (time / axis) * area.width
+    fun y(level: Float): Float = area.bottom - inset - level * usable
+    fun timeAt(px: Float): Float = ((px - area.left) / area.width) * axis
+    fun levelAt(py: Float): Float = ((area.bottom - inset - py) / usable).coerceIn(0f, 1f)
+
+    /**
+     * How far a drag of [dx]/[dy] pixels moves a node, in seconds and in level.
+     *
+     * Relative rather than absolute, like the dot grid's velocity drag and for the same
+     * reason: a node taken by its edge should not jump to put its centre under the finger.
+     */
+    fun timeDelta(dx: Float): Float = (dx / area.width) * axis
+    fun levelDelta(dy: Float): Float = -dy / usable
+}
+
+/**
+ * The two strips that keep the envelope's other two decisions off the curve.
+ *
+ * A node already carries a time and a level, and a drag moves both. Hanging the sustain and
+ * the keypad on it as well would make the control that picks between them a mode, and a mode
+ * on a fingertip-sized target is a coin toss -- which is the exact failure the roadmap
+ * copied Surge to avoid. So each gets its own target instead, in its own strip, and neither
+ * can be hit by a finger aiming at the shape.
+ *
+ * Both are divided evenly by segment rather than laid out against the time axis, because a
+ * 5ms attack is half a percent of a one-second axis and the attack is the first thing anyone
+ * wants to type exactly. An even cell is always a target; the column order is what ties it
+ * to the node above it.
+ */
+internal const val ENV_RAIL = 26f
+
+internal fun envSustainRail(area: Rect, d: Float): Rect =
+    Rect(area.left, area.top, area.right, area.top + ENV_RAIL * d)
+
+internal fun envTimeRail(area: Rect, d: Float): Rect =
+    Rect(area.left, area.bottom - ENV_RAIL * d, area.right, area.bottom)
+
+/** What is left for the shape once both rails have taken theirs. */
+internal fun envCurveArea(area: Rect, d: Float): Rect =
+    Rect(area.left, area.top + ENV_RAIL * d, area.right, area.bottom - ENV_RAIL * d)
+
+/** One rail cell per segment, evenly divided. */
+internal fun envCell(rail: Rect, count: Int, index: Int): Rect {
+    val w = rail.width / count.coerceAtLeast(1)
+    return Rect(rail.left + index * w, rail.top, rail.left + (index + 1) * w, rail.bottom)
+}
+
+/** Which cell of [rail] holds [at], or -1 when it is outside. */
+internal fun envCellAt(rail: Rect, count: Int, at: Offset): Int {
+    if (count <= 0 || !rail.contains(at)) return -1
+    return ((at.x - rail.left) / (rail.width / count)).toInt().coerceIn(0, count - 1)
+}
+
+/** [area] is the whole grid; the curve gets what the rails leave. */
+internal fun envGeometry(area: Rect, module: PatchModule, d: Float): EnvGeometry =
+    EnvGeometry(
+        envCurveArea(area, d), envelopeAxis(module.envelopeSpan), ENV_NODE_RADIUS * d + 2f * d,
+    )
+
+/** Every node's position, one per segment; the envelope's own start is [envOrigin]. */
+internal fun envNodes(geo: EnvGeometry, module: PatchModule): List<Offset> {
+    val times = module.segmentTimes
+    return module.segments.mapIndexed { i, seg -> Offset(geo.x(times[i]), geo.y(seg.level)) }
+}
+
+/** Where the envelope starts: time zero at level zero, which is not a node and does not move. */
+internal fun envOrigin(geo: EnvGeometry): Offset = Offset(geo.x(0f), geo.y(0f))
+
+/** The level a segment leaves from: the one before it, or zero for the first. */
+internal fun envFrom(module: PatchModule, index: Int): Float =
+    if (index <= 0) 0f else module.segments[index - 1].level
+
+/** Which node [at] is grabbing, or -1. Nearest wins, so two close together are both reachable. */
+internal fun envNodeAt(geo: EnvGeometry, module: PatchModule, at: Offset, d: Float): Int {
+    val grab = ENV_GRAB * d
+    var best = -1
+    var bestDistance = grab
+    envNodes(geo, module).forEachIndexed { i, p ->
+        val distance = (p - at).getDistance()
+        if (distance <= bestDistance) {
+            best = i
+            bestDistance = distance
+        }
+    }
+    return best
+}
+
+/** Where a segment's curve sits at [t] along it, 0 to 1, in pixels. */
+internal fun envCurveY(geo: EnvGeometry, module: PatchModule, index: Int, t: Float): Float {
+    val seg = module.segments[index]
+    val from = envFrom(module, index)
+    return geo.y(from + (seg.level - from) * envShape(t, seg.curve))
+}
+
+/**
+ * Which segment's line [at] is on, or -1. Checked against the curve rather than a straight
+ * chord, so a bent segment is grabbed where it is drawn and not where it would have been.
+ */
+internal fun envSegmentAt(geo: EnvGeometry, module: PatchModule, at: Offset, d: Float): Int {
+    val times = module.segmentTimes
+    for (i in module.segments.indices) {
+        val left = geo.x(if (i == 0) 0f else times[i - 1])
+        val right = geo.x(times[i])
+        if (at.x < left || at.x > right || right <= left) continue
+        val t = ((at.x - left) / (right - left)).coerceIn(0f, 1f)
+        if (abs(at.y - envCurveY(geo, module, i, t)) <= ENV_GRAB * d) return i
+    }
+    return -1
+}
+
+/**
+ * The envelope, as the thing you edit and as the thing the engine plays.
+ *
+ * Drawn from the same [envShape] the engine runs, because an envelope that sounds unlike
+ * its own picture is worse than one with no picture: the picture is the whole reason the
+ * four knobs went.
+ */
+private fun DrawScope.drawEnvelope(
+    area: Rect,
+    d: Float,
+    module: PatchModule,
+    accent: Color,
+    measurer: TextMeasurer,
+) {
+    val geo = envGeometry(area, module, d)
+    val radius = ENV_NODE_RADIUS * d
+    val grid = accent.copy(alpha = 0.16f)
+
+    // The floor and the ceiling, so a level can be read against something. Two lines rather
+    // than a full grid: the vertical is continuous and ruling it would imply steps.
+    listOf(0f, 1f).forEach { level ->
+        drawLine(
+            grid, Offset(geo.area.left, geo.y(level)), Offset(geo.area.right, geo.y(level)), 1f * d,
+        )
+    }
+
+    // The shape itself, sampled along each segment's own curve.
+    val path = Path()
+    val origin = envOrigin(geo)
+    path.moveTo(origin.x, origin.y)
+    val times = module.segmentTimes
+    module.segments.indices.forEach { i ->
+        val left = if (i == 0) 0f else times[i - 1]
+        val steps = 24
+        for (k in 1..steps) {
+            val t = k.toFloat() / steps
+            path.lineTo(geo.x(left + (times[i] - left) * t), envCurveY(geo, module, i, t))
+        }
+    }
+    drawPath(path, accent, style = Stroke(width = 2.5f * d))
+
+    // Under the curve, faintly, which is what makes it read as a level over time rather
+    // than as a line graph of four numbers.
+    val filled = Path().apply {
+        addPath(path)
+        lineTo(geo.x(module.envelopeSpan), geo.y(0f))
+        lineTo(origin.x, origin.y)
+        close()
+    }
+    drawPath(filled, accent.copy(alpha = 0.12f))
+
+    // The sustain, before the nodes so a node sits on top of its own marker: a dashed line
+    // down through the shape, because what it marks is a wait and a wait is a place in time.
+    val sustainAt = module.segments.indexOfFirst { it.sustain }
+    if (sustainAt >= 0) {
+        val x = geo.x(times[sustainAt])
+        var y = geo.area.top
+        while (y < geo.area.bottom) {
+            drawLine(
+                accent.copy(alpha = 0.55f),
+                Offset(x, y), Offset(x, minOf(y + 6f * d, geo.area.bottom)), 1.5f * d,
+            )
+            y += 11f * d
+        }
+    }
+
+    // The nodes. The one that sustains is drawn open, so which point the envelope waits at
+    // is legible without reading the line under it.
+    envNodes(geo, module).forEachIndexed { i, p ->
+        if (module.segments[i].sustain) {
+            drawCircle(Color.Black, radius, p)
+            drawCircle(accent, radius, p, style = Stroke(width = 2.5f * d))
+        } else {
+            drawCircle(accent, radius, p)
+        }
+    }
+    // The start, which is not a node: it never moves and cannot be taken away.
+    drawCircle(accent.copy(alpha = 0.5f), radius * 0.5f, origin)
+
+    // The rails. Drawn after the shape so neither can be hidden behind the fill.
+    val count = module.segments.size
+    val sustainRail = envSustainRail(area, d)
+    val timeRail = envTimeRail(area, d)
+    module.segments.forEachIndexed { i, seg ->
+        val top = envCell(sustainRail, count, i).deflate(2f * d)
+        val bottom = envCell(timeRail, count, i).deflate(2f * d)
+
+        // The sustain cell: filled where the envelope waits, an outline everywhere else, so
+        // the one that holds it is legible without reading the dashes in the shape.
+        drawRoundRect(
+            if (seg.sustain) accent.copy(alpha = 0.5f) else accent.copy(alpha = 0.10f),
+            Offset(top.left, top.top), Size(top.width, top.height),
+            CornerRadius(4f * d, 4f * d),
+        )
+        val hold = measurer.measure(if (seg.sustain) "hold" else "${i + 1}", PanelValueStyle)
+        drawText(
+            hold,
+            color = accent.copy(alpha = if (seg.sustain) 0.95f else 0.45f),
+            topLeft = Offset(
+                top.center.x - hold.size.width / 2f,
+                top.center.y - hold.size.height / 2f,
+            ),
+        )
+
+        // The time cell: the reading, and the target the keypad opens from. A reading that
+        // is tapped and never dragged, which is the rule every other number on a panel
+        // already follows.
+        drawRoundRect(
+            accent.copy(alpha = 0.10f),
+            Offset(bottom.left, bottom.top), Size(bottom.width, bottom.height),
+            CornerRadius(4f * d, 4f * d),
+        )
+        val text = measurer.measure(envTime(seg.time), PanelValueStyle)
+        drawText(
+            text,
+            color = accent.copy(alpha = 0.85f),
+            topLeft = Offset(
+                bottom.center.x - text.size.width / 2f,
+                bottom.center.y - text.size.height / 2f,
+            ),
+        )
+    }
+}
+
 private fun DrawScope.drawEuclidPattern(area: Rect, d: Float, module: PatchModule, accent: Color, playingStep: Int) {
     val steps = module.params.getOrElse(0) { 8f }.roundToInt().coerceIn(1, EUCLID_STEPS)
     val pulses = module.params.getOrElse(1) { 3f }.roundToInt()
@@ -6751,6 +7300,24 @@ internal const val SEQ_ACCENT = 0xFFD8F0AC
 /** Dots one sequencer holds. Mirrors SeqNode::kMaxDots. */
 internal const val MAX_DOTS = 128
 
+/**
+ * Segments one envelope holds. Mirrors EnvNode::kMaxSegments.
+ *
+ * A cap rather than a scroll or a zoom, which were the other two answers. Eight nodes
+ * across a phone in landscape stay a fingertip apart at every spacing; a scroll would need
+ * a gesture that competes with dragging a node on the one surface where a drag already
+ * means "move this", and a zoom-to-fit puts the nodes closest together exactly when the
+ * envelope gets interesting. The number is the cheap part -- raise it once it has been
+ * played and found short.
+ */
+internal const val MAX_SEGMENTS = 8
+
+/** The longest one envelope segment may last, in seconds. */
+internal const val SEGMENT_MAX_TIME = 10f
+
+/** The shortest, which the keypad can still be used to ask for exactly. */
+internal const val SEGMENT_MIN_TIME = 0.001f
+
 /** The most octave columns a drone offers, before its cells run out. */
 internal const val DRONE_OCTAVES = 4
 
@@ -6783,6 +7350,17 @@ internal const val DEFAULT_INTERVAL = 3
 
 /** The transport's rate. The range mirrors kMinTempo and kMaxTempo in transport.h. */
 internal val TEMPO = Param("tempo", 20f, 300f, 120f, " bpm")
+
+/**
+ * A segment's duration on the keypad, in **milliseconds**, not seconds.
+ *
+ * This is the whole reason the keypad is wired to an envelope: nobody can drag a node to
+ * 12ms and everybody can tap it and type 12. In seconds that same intent is 0.012, which is
+ * three keys and a decimal point to say a number you were already holding.
+ */
+internal val SEGMENT_TIME = Param(
+    "time", SEGMENT_MIN_TIME * 1000f, SEGMENT_MAX_TIME * 1000f, 100f, "ms", ParamCurve.EXPONENTIAL,
+)
 
 internal val BEATS_PER_BAR = Param("beats per bar", 2f, 8f, 4f, curve = ParamCurve.STEPPED)
 
@@ -7363,9 +7941,14 @@ private fun DrawScope.drawPanel(
         GridKind.DRONE -> drawDroneGrid(gridArea, d, module, scale, module.type.accent)
         GridKind.DOTS -> drawDotGrid(gridArea, d, module, scale, module.type.accent, measurer, playingStep)
         GridKind.PATTERN -> drawEuclidPattern(gridArea, d, module, module.type.accent, playingStep)
+        GridKind.ENVELOPE -> drawEnvelope(gridArea, d, module, module.type.accent, measurer)
         GridKind.NONE -> {}
     }
-    if (module.type.grid != GridKind.NONE && module.type.grid != GridKind.PATTERN) {
+    // Neither of these scrolls: a pattern is read-only and an envelope is capped to what
+    // fits, which is the whole reason MAX_SEGMENTS is a cap.
+    if (module.type.grid != GridKind.NONE && module.type.grid != GridKind.PATTERN &&
+        module.type.grid != GridKind.ENVELOPE
+    ) {
         drawGridScrollBar(gridArea, d, gridWindow(module, gridArea, d, scale), module.type.accent)
     }
 

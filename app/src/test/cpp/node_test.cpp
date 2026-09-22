@@ -2681,6 +2681,204 @@ void aDroneReportsTheNotesItIsHolding() {
     check(none.count == 0, "an untouched drone holds nothing");
 }
 
+/** An envelope with just the segments given, and the A/D/S/R default cleared out of it. */
+void shape(EnvNode &env, const std::vector<std::array<float, 4>> &segments) {
+    for (int32_t i = 0; i < EnvNode::kMaxSegments; ++i) {
+        if (i < static_cast<int32_t>(segments.size())) {
+            const auto &s = segments[i];
+            env.setSegment(i, s[0], s[1], s[2], s[3] != 0.0f);
+        } else {
+            env.setSegment(i, 0.0f, 0.0f, 0.0f, false);
+        }
+    }
+}
+
+/** Sends one note event and takes the buffer straight back, as the graph's merge does. */
+void send(EnvNode &env, const NoteBuffer &notes) {
+    env.setNoteInput(0, &notes);
+    run(env, 1);
+    env.setNoteInput(0, &kNoNotes);
+}
+
+/**
+ * A segment arrives at its level in the time it says, which is the whole difference from
+ * the ADSR this replaced.
+ *
+ * DaisySP's decay and release are one-pole *time constants* toward a target they approach
+ * and never reach -- a 250ms release from a sustain of 0.6 actually runs about 4x that, and
+ * the old test above had to measure it at 2048 blocks to see it close. A segment is a
+ * distance covered in a stated time, and this is what pins that.
+ */
+void aSegmentArrivesWhenItSaidItWould() {
+    std::printf("a segment arrives when it said it would\n");
+    EnvNode env;
+    env.prepare(kRate);
+    shape(env, {{0.1f, 1.0f, 0.0f, 0.0f}});  // 100ms, straight, no sustain
+
+    const auto on = noteAt(NoteKind::On, 1);
+    send(env, on);  // 32 samples in
+
+    // 100ms is 4800 samples; one block is 32. Halfway is halfway, because it is straight.
+    const auto half = run(env, 74);
+    check(std::fabs(half.back() - 0.5f) < 0.02f,
+          "halfway through a straight segment is half, was " + std::to_string(half.back()));
+
+    const auto done = run(env, 76);
+    check(std::fabs(done.back() - 1.0f) < 0.001f,
+          "and it is exactly there at its stated time, was " + std::to_string(done.back()));
+
+    // Past the last segment it simply holds. An envelope that ends high stays high until
+    // the next note, which is what "the release is optional" means at the other end.
+    check(std::fabs(run(env, 400).back() - 1.0f) < 0.001f, "and holds there afterwards");
+}
+
+/**
+ * A curve bends the middle and leaves both ends exactly where they were.
+ *
+ * The ends matter more than the bend: a shape whose endpoints drift with the curvature
+ * would make every segment's arrival level depend on a control that is supposed to be about
+ * how it gets there, and two segments in a row would compound it.
+ */
+void aCurveBendsTheMiddleAndNotTheEnds() {
+    std::printf("a curve bends the middle and not the ends\n");
+    for (const float curve : {0.8f, -0.8f}) {
+        EnvNode env;
+        env.prepare(kRate);
+        shape(env, {{0.1f, 1.0f, curve, 0.0f}});
+        const auto on = noteAt(NoteKind::On, 1);
+        send(env, on);
+
+        const float mid = run(env, 74).back();
+        if (curve > 0.0f) {
+            check(mid > 0.62f, "a positive curve leaves fast, was " + std::to_string(mid));
+        } else {
+            check(mid < 0.38f, "a negative one leaves slow, was " + std::to_string(mid));
+        }
+        const float end = run(env, 76).back();
+        check(std::fabs(end - 1.0f) < 0.001f,
+              "and either way it arrives exactly, was " + std::to_string(end));
+    }
+}
+
+/**
+ * With no segment marked sustain, a note off is not listened to at all.
+ *
+ * This is what makes a release optional rather than merely short: a percussive envelope
+ * runs its whole shape whatever the note does, so a sequencer's staccato does not cut it.
+ */
+void anEnvelopeWithNoSustainRunsToItsEnd() {
+    std::printf("an envelope with no sustain runs to its end\n");
+    EnvNode env;
+    env.prepare(kRate);
+    shape(env, {{0.005f, 1.0f, 0.0f, 0.0f}, {0.2f, 0.0f, 0.0f, 0.0f}});
+
+    const auto on = noteAt(NoteKind::On, 1);
+    send(env, on);
+    const auto off = noteAt(NoteKind::Off, 1);
+    send(env, off);  // let go almost at once
+
+    // Still climbing or already falling, but certainly not silenced by the note ending.
+    check(peak(run(env, 60)) > 0.5f, "the note ending does not cut it short");
+    check(std::fabs(run(env, 400).back()) < 0.01f, "and it finishes on its own schedule");
+}
+
+/**
+ * A release leaves from the level the envelope actually reached, not from the sustain.
+ *
+ * A note let go during a long attack never touched the sustain level, and starting the
+ * release there would step the output by the whole difference -- the same class of fault as
+ * the velocity click, and audible for the same reason.
+ */
+void aReleaseLeavesFromWhereItGotTo() {
+    std::printf("a release leaves from where it got to\n");
+    EnvNode env;
+    env.prepare(kRate);
+    shape(env, {
+        {1.0f, 1.0f, 0.0f, 0.0f},   // a full second of attack
+        {0.001f, 0.8f, 0.0f, 1.0f}, // sustain at 0.8
+        {0.5f, 0.0f, 0.0f, 0.0f},   // and a release
+    });
+
+    const auto on = noteAt(NoteKind::On, 1);
+    send(env, on);
+    const float reached = run(env, 300).back();  // ~200ms in, so about 0.2
+    check(reached > 0.15f && reached < 0.25f,
+          "a fifth of the way up the attack, was " + std::to_string(reached));
+
+    const auto off = noteAt(NoteKind::Off, 1);
+    send(env, off);
+    const float after = run(env, 2).back();
+    check(after < reached + 0.01f,
+          "letting go does not jump up to the sustain it never reached, was " +
+                  std::to_string(after));
+    check(after > 0.15f, "and it falls from where it was, was " + std::to_string(after));
+}
+
+/** Clearing a slot shortens the envelope: the count is the first unused one. */
+void clearingASlotShortensTheEnvelope() {
+    std::printf("clearing a slot shortens the envelope\n");
+    EnvNode env;
+    env.prepare(kRate);
+    shape(env, {
+        {0.01f, 1.0f, 0.0f, 0.0f},
+        {0.01f, 0.5f, 0.0f, 0.0f},
+        {0.01f, 0.0f, 0.0f, 0.0f},
+    });
+    env.setSegment(1, 0.0f, 0.0f, 0.0f, false);  // and 2 is now unreachable
+
+    const auto on = noteAt(NoteKind::On, 1);
+    send(env, on);
+    // One segment left, so it climbs to 1 and stays: if the cleared slots still counted it
+    // would carry on down to 0.5 and then to nothing.
+    check(std::fabs(run(env, 400).back() - 1.0f) < 0.001f, "only the first segment is left");
+}
+
+/**
+ * A sustain on the last segment stops there rather than hanging open.
+ *
+ * There is nothing after it to release into, so the alternative is an envelope that holds a
+ * level forever once any note has touched it -- which on an Amp is a voice that never goes
+ * quiet.
+ */
+void aSustainOnTheLastSegmentStops() {
+    std::printf("a sustain on the last segment stops\n");
+    EnvNode env;
+    env.prepare(kRate);
+    shape(env, {{0.005f, 1.0f, 0.0f, 0.0f}, {0.01f, 0.4f, 0.0f, 1.0f}});
+
+    const auto on = noteAt(NoteKind::On, 1);
+    send(env, on);
+    check(std::fabs(run(env, 60).back() - 0.4f) < 0.01f, "it parks at the last level");
+
+    const auto off = noteAt(NoteKind::Off, 1);
+    send(env, off);
+    check(std::fabs(run(env, 60).back() - 0.4f) < 0.01f,
+          "and letting go leaves it there rather than running off the end");
+}
+
+/**
+ * Editing the level of the segment an envelope is parked on is heard, and glides.
+ *
+ * Dragging a sustain node is something anyone does with a note held down, and an editor
+ * that is deaf exactly then is an editor you cannot tune by ear. It glides rather than
+ * steps because this is a level feeding an Amp.
+ */
+void aParkedEnvelopeFollowsItsLevel() {
+    std::printf("a parked envelope follows its level\n");
+    EnvNode env;
+    env.prepare(kRate);
+    shape(env, {{0.001f, 0.8f, 0.0f, 1.0f}});
+
+    const auto on = noteAt(NoteKind::On, 1);
+    send(env, on);
+    check(std::fabs(run(env, 60).back() - 0.8f) < 0.01f, "parked at its level");
+
+    env.setSegment(0, 0.001f, 0.2f, 0.0f, true);
+    const float oneBlock = run(env, 1).back();
+    check(oneBlock > 0.4f, "a block later it has not jumped there, was " + std::to_string(oneBlock));
+    check(std::fabs(run(env, 60).back() - 0.2f) < 0.01f, "and it arrives within the glide");
+}
+
 int main() {
     oscPlaysTheRequestedPitch();
     oscStaysBandLimited();
@@ -2691,6 +2889,13 @@ int main() {
     fullResonanceRingsButDoesNotOscillate();
     theCutoffFollowsTheNote();
     aTrackedCutoffSlidesRatherThanJumping();
+    aSegmentArrivesWhenItSaidItWould();
+    aCurveBendsTheMiddleAndNotTheEnds();
+    anEnvelopeWithNoSustainRunsToItsEnd();
+    aReleaseLeavesFromWhereItGotTo();
+    clearingASlotShortensTheEnvelope();
+    aSustainOnTheLastSegmentStops();
+    aParkedEnvelopeFollowsItsLevel();
     envFollowsTheNotesItIsHolding();
     envSustainsUnderAChordAndWaitsForTheLastNote();
     envEndsTheNotesOfASourceThatWasUnpatched();

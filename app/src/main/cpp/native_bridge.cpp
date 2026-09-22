@@ -149,6 +149,16 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetDot(JNIEnv *, jobject, 
                                                                                  : JNI_FALSE;
 }
 
+JNIEXPORT jboolean JNICALL
+Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetSegment(JNIEnv *, jobject, jlong id,
+                                                                 jint slot, jfloat time,
+                                                                 jfloat level, jfloat curve,
+                                                                 jboolean sustain) {
+    return engine().graph().postSetSegment(id, slot, time, level, curve, sustain == JNI_TRUE)
+        ? JNI_TRUE
+        : JNI_FALSE;
+}
+
 /**
  * The patch's scales, flattened: every entry's degrees end to end, and per entry its
  * degree count, period and length in beats.

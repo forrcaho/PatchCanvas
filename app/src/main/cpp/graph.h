@@ -107,6 +107,9 @@ public:
     /** One dot of a dot sequencer, by slot; a length of 0 clears the slot. */
     bool postSetDot(int64_t id, int32_t slot, int32_t step, int32_t degree, int32_t length,
                     float velocity);
+    /** One segment of an envelope, by slot; a time of 0 clears the slot. */
+    bool postSetSegment(int64_t id, int32_t slot, float time, float level, float curve,
+                        bool sustain);
     /**
      * Replaces the patch's scales with [list], which the graph takes ownership of. Built
      * by the caller off the audio thread and swapped in whole; the list it replaces comes
@@ -173,7 +176,7 @@ public:
 private:
     enum class CommandType : int32_t {
         Add, Remove, Connect, Disconnect, SetParam, SetStep, SetTempo, ResetTransport,
-        SetScales, SetModRange, ConnectMod, DisconnectMod, SetResource, SetDot,
+        SetScales, SetModRange, ConnectMod, DisconnectMod, SetResource, SetDot, SetSegment,
     };
 
     struct Command {
@@ -200,6 +203,12 @@ private:
         /** SetDot only, beside paramIndex (the slot) and degree: where it starts and how long. */
         int32_t step = 0;
         int32_t length = 0;
+        /**
+         * SetSegment only: how the segment bends. The third float a segment needs, where
+         * value carries its level and high its time -- a curve had nowhere else to ride,
+         * and four bytes on a POD in a queue is not worth a bit field to save.
+         */
+        float curve = 0.0f;
     };
 
     /**

@@ -144,7 +144,12 @@ sounded like, never a conversion. A dot that never said how hard it was struck w
 full (11); a `Filter` that names neither type nor slope was a 12dB lowpass (12); a `Filter`
 with no `track` knob, and no cable into a note port it did not have, was following nothing
 (13). The direction that needs no rule is the other one -- a 10 build refuses an 11 file on
-the version alone, which is what stops it dropping every velocity and autosaving. **A knob or
+the version alone, which is what stops it dropping every velocity and autosaving. **That run
+ended at 14, which reads nothing but 14**: an `Env` is segments, and A/D/S/R cannot be
+restated as segments, only converted. DaisySP's stages are one-pole *time constants* toward
+targets they never reach -- a release from sustain S actually lasts `R*ln(1 + 100S)`, about
+four times the knob -- where a segment covers a stated distance in a stated time. The mapping
+exists and using it would be the silent conversion 10 was drawn against. **A knob or
 a port added to an existing module bumps the version too**, for that same reason: knobs are
 keyed by name and port indices are positional, so an 11 build would read a bandpass, ignore
 the two knobs it does not know, and autosave it as a lowpass. **Adding a module type bumps the version** even though
@@ -261,6 +266,8 @@ name settled the worst collision in the project -- "voice" meant both the module
 the eight slots inside it -- and it has since settled itself: there are no slots any more,
 so "voice" means one note's worth of sound and nothing else. `Filter` lost its cutoff jack and `Steps` its pitch
 and gate outputs, so a sequencer says a note once rather than the same thing three ways.
+`Env` lost all four of its knobs, which is a module keeping its id while ceasing to be
+parameterised at all: its panel is a grid and `Types.Env.params` is empty.
 The note port `Filter` has now is not that jack coming back: the cutoff is modulated by
 exposing the parameter, like every other knob, and the note port says which pitch to follow.
 Node ids 1, 7 and 8 are retired and never reused; `Osc` is id 10, where `Voice` was. **A
@@ -269,6 +276,38 @@ envelopes out of the synths the pair you reach for is `Env` and the thing `Env` 
 that should be one cable rather than opening a `Mix`, exposing its level, setting brackets
 and then patching. Id 7 stays dead all the same: that module took a control voltage, and
 there is no such thing here.
+
+**An envelope is segments, and a segment says where it is going, never where it starts.**
+Each is a time, a level and a curve; it begins wherever the output already is, which is what
+lets a note let go during the attack fall from the level it *reached* rather than stepping to
+a sustain it never touched. At most one segment is marked sustain, and **none of them being
+marked is a whole envelope** -- it runs to its end whatever the note does, which is what a
+percussive patch wants and costs nothing on a synth anyway, since a voice is freed the moment
+its gate ramp hits zero. A parked envelope keeps *following* its level over 5ms, because
+dragging a sustain node is something you do with a note held down and an editor that is deaf
+exactly then cannot be tuned by ear. The curve is `(1 - e^-at)/(1 - e^-a)`, which is 0 at 0
+and 1 at 1 for every `a`, so bending a segment cannot move where it arrives; `envShape` in
+Kotlin and `EnvNode` in C++ are **the same expression on purpose**, because an envelope that
+sounds unlike its own picture is worse than one with no picture.
+
+**An envelope editor's decisions each get their own target, never a mode.** A node carries a
+time and a level and a drag moves both; the sustain and the keypad live in a rail above the
+shape and a rail below it. This is Surge's split rather than Bespoke's, and the reason is
+arithmetic: three quantities on one draggable point makes the control that picks between them
+a mode, and a mode on a fingertip-sized target is a coin toss. The rails divide **evenly by
+segment** rather than against the time axis, because a 5ms attack is half a percent of a
+one-second axis and the attack is the first thing anyone wants to type exactly -- which is the
+keypad's whole job here, in **milliseconds**, since nobody can drag a node to 12ms and everybody
+can tap it and type 12. `MAX_SEGMENTS` is 8 and is a **cap**, not a scroll or a zoom: a scroll
+needs a gesture that competes with dragging a node, and a zoom-to-fit puts the nodes closest
+together exactly when the envelope gets interesting.
+
+**Copying a module copies its grid, and there is one function that does it.**
+`PatchModule.copyGridFrom` -- because a module is copied in three places (undo's
+`replaceWith`, `duplicate`, and `adoptSubpatch`) and when segments arrived all three were
+copying dots and none knew about a second kind of grid. An undone envelope, a duplicated one
+and one loaded from the library each came back as the default, silently, and only for the
+module you had just been editing.
 
 **No synth has an envelope.** `Osc` has one knob and `FM` three; what is left of the ADSR
 is a 5ms gate ramp (`GateRamp` in `synth.h`) that keeps a note from starting or stopping

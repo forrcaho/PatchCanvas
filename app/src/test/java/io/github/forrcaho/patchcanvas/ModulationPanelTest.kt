@@ -13,6 +13,9 @@ import org.junit.Test
  * device in landscape. Geometry that overlaps is a control that cannot be hit, and nothing
  * but a finger on glass or a test like this notices.
  */
+/** Pluck's R, the app's remaining exponential knob in seconds. */
+private const val PLUCK_RELEASE = 3
+
 class ModulationPanelTest {
 
     private val frame = Frame(
@@ -157,17 +160,21 @@ class ModulationPanelTest {
         // A new range puts [ at the very end for any knob in the bottom fifth of its travel,
         // and a finger aiming at it from outside lands a little past the bar.
         val patch = Patch()
-        // Env's A, which is where Osc's was before the envelopes left the synths: 5ms on a
-        // range to 5s, which is the bottom of its travel.
-        val env = patch.add(Types.Env, Offset.Zero)!!
-        val attack = env.type.params[0]
-        patch.expose(env, 0, initialModRange(attack, attack.default))
-        val row = panelRow(panel, d, env.type, 0)
-        val low = panelBracketX(row, d, attack, env.modRanges.getValue(0).low, closing = false)
+        // Pluck's R, wound down to its minimum so it sits at the very bottom of its travel.
+        // This was Env's A until the envelopes became segments and Env stopped having knobs
+        // at all; what the case needs is any exponential seconds knob near its floor.
+        val pluck = patch.add(Types.Pluck, Offset.Zero)!!
+        val release = pluck.type.params[PLUCK_RELEASE]
+        pluck.setParam(PLUCK_RELEASE, release.min)
+        patch.expose(pluck, PLUCK_RELEASE, initialModRange(release, release.min))
+        val row = panelRow(panel, d, pluck.type, PLUCK_RELEASE)
+        val low = panelBracketX(
+            row, d, release, pluck.modRanges.getValue(PLUCK_RELEASE).low, closing = false,
+        )
         assertEquals("the new range starts at the end of the bar", row.left, low, 0.5f)
         assertEquals(
-            ParamRow(env, 0) to false,
-            panelBracketAt(panel, d, env, rows(env), Offset(row.left - 15f * d, row.center.y)),
+            ParamRow(pluck, PLUCK_RELEASE) to false,
+            panelBracketAt(panel, d, pluck, rows(pluck), Offset(row.left - 15f * d, row.center.y)),
         )
     }
 
@@ -183,7 +190,10 @@ class ModulationPanelTest {
 
     @Test
     fun `an exposed bar reads its range in its own units`() {
-        assertEquals("[0.017s \u2013 0.522s]", rangeReading(Types.Env.params[0], ModRange(0.017f, 0.522f)))
+        assertEquals(
+            "[0.017s \u2013 0.522s]",
+            rangeReading(Types.Pluck.params[PLUCK_RELEASE], ModRange(0.017f, 0.522f)),
+        )
         assertEquals("[300Hz \u2013 3000Hz]", rangeReading(Types.Filter.params[0], ModRange(300f, 3000f)))
     }
 

@@ -248,8 +248,11 @@ public:
     uint32_t noteInputs() const override { return 1u << 0; }
     void prepare(int32_t sampleRate) override;
     void process(int32_t frames) override;
-    void setParam(int32_t index, float value) override;
     void notesCut(int32_t port, int32_t source) override;
+    void setSegment(int32_t slot, float time, float level, float curve, bool sustain) override;
+
+    /** Mirrored by MAX_SEGMENTS in PatchCanvas.kt. */
+    static constexpr int32_t kMaxSegments = 8;
 
 private:
     /**
@@ -260,18 +263,77 @@ private:
      */
     static constexpr int32_t kHeld = 16;
 
+    /**
+     * The shortest a segment may be, so a time of 0 can mean "unused" without a segment
+     * ever dividing by it. Well under the 5ms gate ramp, so nothing here is the thing that
+     * steps.
+     */
+    static constexpr float kMinTime = 0.0001f;
+
     struct Held {
         uint32_t id = 0;
         /** The input slot the event came from, so notesCut can end one source's notes. */
         int32_t source = -1;
     };
 
+    struct Segment {
+        /** Seconds. 0 means the slot is unused; see [Node::setSegment]. */
+        float time = 0.0f;
+        /** Where this segment is going, 0 to 1. Where it starts is wherever the envelope is. */
+        float level = 0.0f;
+        /** -1 to 1, 0 straight. Positive leaves fast and arrives slow, as a decay does. */
+        float curve = 0.0f;
+        /** Park here while a note is held. At most one segment has it; the model enforces that. */
+        bool sustain = false;
+    };
+
     void start(const NoteEvent &event);
     void release(uint32_t id, int32_t source);
+    /** The last note let go: park or release, depending on whether a segment sustains. */
+    void letGo();
+
+    /** Recomputed whenever a slot changes: the count is the first unused slot. */
+    void rescan();
+    /** Begin [index_], from wherever the output currently sits. */
+    void enter(int32_t index);
+    /** Leave the current segment for the next, ending the envelope past the last. */
+    void advance();
 
     Held held_[kHeld] = {};
     int32_t heldCount_ = 0;
-    daisysp::Adsr adsr_;
+
+    Segment seg_[kMaxSegments] = {};
+    int32_t segCount_ = 0;
+    /** Which segment parks, or -1 for an envelope that simply ends. */
+    int32_t sustainIndex_ = -1;
+
+    /** The segment being played, and how far through it, 0 to 1. */
+    int32_t index_ = 0;
+    float phase_ = 0.0f;
+    float rate_ = 0.0f;
+    /** The output when the current segment was entered, which is what it travels from. */
+    float from_ = 0.0f;
+    /** The output, and what a new segment starts from. Idle is 0 and stays 0. */
+    float value_ = 0.0f;
+    bool running_ = false;
+    /** Parked at a sustain, waiting for the last note to let go. */
+    bool holding_ = false;
+    /**
+     * 1/(1 - e^-a) for the current segment, where a is its curve scaled. Precomputed
+     * because it is the only part of the shape that does not move with the phase.
+     */
+    float shapeScale_ = 1.0f;
+    float shapeA_ = 0.0f;
+    /**
+     * Per-sample coefficient for following the sustain level while parked on it.
+     *
+     * Editing the level of the segment an envelope is *currently* holding at has to be
+     * heard, or the editor is deaf exactly while a note is held down -- which is when
+     * anyone would be dragging it. A glide rather than a jump because this is a level
+     * feeding an Amp, and a step in it is the same discontinuity the gate ramp exists to
+     * avoid; the rate is the ramp's own 5ms.
+     */
+    float holdGlide_ = 1.0f;
 };
 
 /**

@@ -83,6 +83,11 @@ object AudioEngine {
     fun setDot(id: Long, slot: Int, step: Int, degree: Int, length: Int, velocity: Float): Boolean =
         available && started && nativeSetDot(id, slot, step, degree, length, velocity)
 
+    /** One segment of an envelope, by slot; a time of 0 clears it. */
+    fun setSegment(
+        id: Long, slot: Int, time: Float, level: Float, curve: Float, sustain: Boolean,
+    ): Boolean = available && started && nativeSetSegment(id, slot, time, level, curve, sustain)
+
     /**
      * Parses a SoundFont and returns its handle, or 0 if it is not one this build reads.
      *
@@ -251,6 +256,9 @@ object AudioEngine {
     private external fun nativeScaleEntry(): Int
     private external fun nativeSetDot(
         id: Long, slot: Int, step: Int, degree: Int, length: Int, velocity: Float,
+    ): Boolean
+    private external fun nativeSetSegment(
+        id: Long, slot: Int, time: Float, level: Float, curve: Float, sustain: Boolean,
     ): Boolean
     private external fun nativeLoadSoundFont(bytes: ByteArray): Long
     private external fun nativeSoundFontPresets(handle: Long): Array<String>

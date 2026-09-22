@@ -3079,29 +3079,92 @@ been played.
 
 ### The Env, redone: segments, curvature, and a shape you can see
 
-**The one that may not work, and so the one to try on hardware early.** What is wanted is
-closer to Surge XT's MSEG than to an ADSR: segments rather than four fixed stages, curvature
-per segment, and a release that is optional -- an envelope that simply ends is a perfectly
-good envelope for a percussive patch, and with the release finding above it costs nothing on
-a synth anyway.
+**Built 2026-09-22**, and it is the one this phase called "the one that may not work". The
+hooks were where the plan said they were: an envelope editor is another `GridKind` in the
+open panel, which already owns the whole screen and already has drawing and hit testing for
+a shape you edit with a finger, and the number keypad was already there.
 
-**The hooks exist.** An envelope editor is another `GridKind` in the open panel, which is a
-view that already owns the whole screen, has hit testing and drawing for `Seq`'s dots and
-`Drone`'s cells, and is where a grid belongs. And the number keypad is already there, which
-answers the thing that kills envelope editors on a phone: nobody can drag a node to 12ms,
-and everybody can tap it and type 12.
+**A segment says where it is going, never where it starts.** That one decision is what the
+whole node does differently from the ADSR it replaced, and it is not a shortcut: a segment
+begins wherever the output already is, so a note let go during a long attack falls from the
+level it actually *reached*. A naive list of points would start the release at the sustain
+level -- a level that note never touched -- and step the output by the whole difference,
+which is the same class of fault as the velocity click and audible for the same reason. A
+mutation confirms it: starting from the previous segment's level instead reports 0.797 where
+the note had got to 0.2.
 
-**Bespoke's is hard to control and it is worth saying why**, because the failure is
-copyable. A node carries its time, its level and its curvature, which is three quantities
-on one draggable point -- so the control that sets one of them is a mode, and a mode on a
-target the size of a fingertip is a coin toss. Surge splits them: a node is time and
-level, and curvature is a separate drag on the *segment between* two nodes. Different
-targets rather than different modes, which is what makes it survive a finger. Copy the
-split before inventing anything.
+**Which is also why the format could not read an older file.** DaisySP's A, D and R are
+one-pole *time constants* toward targets they never reach -- the release from a sustain of
+0.6 with `R` at 250ms really runs `R*ln(1 + 100S)`, about four times the knob, which is why
+the old test had to measure 2048 blocks to watch it close. A segment covers a stated distance
+in a stated time. The mapping between them exists and writing it would have been the silent
+conversion 10 was drawn against, so **14 reads nothing but 14** and the additive run that
+carried 11, 12 and 13 ends here. Forrest chose that over keeping the ADSR alive as a second
+module; the catalog stays one envelope deep and every saved patch goes to
+`patch.rejected.json`, which is a refusal and not a delete.
 
-Open, and only a finger answers it: how many segments fit across a phone in landscape before
-the nodes are closer together than a fingertip, and whether the answer is a scroll, a zoom,
-or a cap.
+**The gesture is Surge's split, and the reason is arithmetic.** Bespoke hangs time, level and
+curvature on one draggable node, so the control that picks between them is a mode, and a mode
+on a fingertip-sized target is a coin toss. Here a node is time and level -- both axes at
+once, unlike a dot, because a node is a point rather than a cell and carrying a point to a
+new time almost always wants a new level with it -- and curvature is a drag on the line
+*between* two nodes. Different targets rather than different modes.
+
+The other two decisions got targets of their own rather than being stacked onto the node as
+well: **a sustain rail above the shape and a rail of times below it**. Both divide evenly by
+segment rather than against the time axis, which looks wrong until you do the sum -- a 5ms
+attack is half a percent of a one-second axis, and the attack is the first thing anyone wants
+to type exactly. An even cell is always a target; the column order is what ties it to the
+node above. The keypad is in **milliseconds** for the same reason the roadmap gave when it
+was only a plan: nobody can drag a node to 12ms and everybody can tap it and type 12.
+
+**A cap, not a scroll or a zoom.** `MAX_SEGMENTS` is 8. A scroll needs a gesture that
+competes with dragging a node on the one surface where a drag already means "move this", and
+a zoom-to-fit puts the nodes closest together exactly when the envelope gets interesting. The
+number is the cheap part and is one line to raise once it has been played and found short.
+The time axis is a round number at or above the envelope's own length rather than the length
+itself -- otherwise the last node sits on the edge and cannot be dragged any longer, and every
+other node slides whenever any segment changes.
+
+**The curve is one expression on both sides.** `(1 - e^-at)/(1 - e^-a)`, which is 0 at 0 and
+1 at 1 for every `a` and approaches a straight line as `a` does, so there is no seam at the
+middle of the control where a piecewise pair of curves would have one. `envShape` in Kotlin
+and `EnvNode` in C++ are deliberately the same formula: an envelope that sounds unlike its own
+picture would be worse than one with no picture, and the picture is the entire reason the four
+knobs went.
+
+**A release is optional and that is a real setting, not a short time.** With no segment marked
+sustain the envelope ignores the note off completely and runs its whole shape -- so a
+sequencer's staccato does not cut a percussive patch short. This costs nothing on a synth
+either way, because of the Phase 10 finding: a voice is freed the moment its gate ramp reaches
+zero, so a release shapes nothing there regardless.
+
+**A parked envelope keeps following its level.** Found while fixing the `graph_test` fixture
+that used to drive a modulator through Env's sustain knob. Dragging a sustain node is
+something anyone does with a note held down, and an editor that is deaf exactly then cannot be
+tuned by ear -- so holding tracks the segment's level over the gate ramp's own 5ms rather than
+jumping, since this is a level feeding an `Amp`. It also removed a wart the ADSR had imposed
+on that fixture: a sustain of exactly zero used to latch the envelope to idle forever, so a
+modulator set to nothing once could never be raised again.
+
+**Three copies of a module and none of them knew.** `replaceWith` copied dots and not
+segments, so undo silently handed back a default envelope; `duplicate` and `adoptSubpatch` had
+the same hole, so a duplicated Env and one loaded from the subpatch library did too. Caught by
+the byte-identical round-trip test, which is the one this file already credits with catching
+the tuning and the tempo. They share `PatchModule.copyGridFrom` now -- one function, so the
+next kind of grid is added in one place rather than in three and a half.
+
+**Not verified on hardware.** 360 JVM tests, 104 graph checks and 334 node checks pass, lint
+is clean and the APK builds, and none of that is the same as playing it -- which this file has
+said about every feature in the project and been right about every time. No device was
+attached when this was written. The three things most likely to be wrong are all of the kind a
+finger finds in a minute: whether eight nodes across a phone in landscape really are a
+fingertip apart, whether a drag that moves both axes at once is controllable or skittish, and
+whether `ENV_CURVE_TRAVEL` at 90dp bends too fast or too slow.
+
+Open and deliberately unanswered until then: whether a tap on a node should remove it. It
+mirrors the dot grid, where a tap toggles, but a dot costs one tap to put back and a node
+costs its curve and its time.
 
 ### The fm port comes back to Osc
 
@@ -3153,13 +3216,20 @@ the note ends, and neither of these needs a synth to be told anything.
 
 ### What this costs the file format
 
-**More than one bump, and they are cheap.** Velocity is a fourth number on a dot, which
-changes what `toJson` emits; `Noise`, `Delay` and `Reverb` are new module types, and the
-rule is that adding one bumps the version even though nothing needs converting -- an older
-build reads an unknown type as retired, skips it, and autosaves the patch without it. The
-new `Env` changes what an envelope *is* in the file, which is the only one of these that
-would be tempting to convert silently, and must not be: an ADSR read as four segments with
-the wrong curvature is a patch that loads, plays, and is not the sound that was saved.
+**More than one bump, and all but one of them are cheap.** Velocity was a fourth number on a
+dot (11); the Filter's type and slope were knobs keyed by name (12) and its note port was a
+port appended (13). `Noise`, `Delay` and `Reverb` are new module types, and the rule is that
+adding one bumps the version even though nothing needs converting -- an older build reads an
+unknown type as retired, skips it, and autosaves the patch without it.
+
+**The expensive one was the `Env`, as predicted, and it landed as predicted.** It changes what
+an envelope *is* in the file, which was the only one of these that would have been tempting to
+convert silently. 14 reads nothing but 14. What the plan did not know was the arithmetic that
+makes the conversion impossible rather than merely unwise: A, D and R are one-pole time
+constants toward targets they never reach, so there is no segment duration that is the same
+thing as an `R` of 250ms -- the honest mapping is `R*ln(1 + 100S)`, which depends on the
+sustain. An ADSR read as four segments is a patch that loads, plays, and is not the sound that
+was saved.
 
 ---
 

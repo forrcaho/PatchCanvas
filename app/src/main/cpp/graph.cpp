@@ -93,6 +93,18 @@ bool Graph::postSetDot(int64_t id, int32_t slot, int32_t step, int32_t degree, i
     cmd.value = velocity;
     return commands_.push(cmd);
 }
+bool Graph::postSetSegment(int64_t id, int32_t slot, float time, float level, float curve,
+                           bool sustain) {
+    Command cmd;
+    cmd.type = CommandType::SetSegment;
+    cmd.id = id;
+    cmd.paramIndex = slot;
+    cmd.high = time;
+    cmd.value = level;
+    cmd.curve = curve;
+    cmd.gate = sustain;
+    return commands_.push(cmd);
+}
 
 bool Graph::postSetScales(ScaleList *list) {
     Command cmd;
@@ -545,6 +557,14 @@ void Graph::applyCommands() {
                 // Bounds-checked by the node, as a step is.
                 nodes_[slot].node->setDot(cmd.paramIndex, cmd.step, cmd.degree, cmd.length,
                                           cmd.value);
+                break;
+            }
+            case CommandType::SetSegment: {
+                const int32_t slot = indexOf(cmd.id);
+                if (slot < 0) break;
+                // Bounds-checked by the node, as a dot is.
+                nodes_[slot].node->setSegment(cmd.paramIndex, cmd.high, cmd.value, cmd.curve,
+                                              cmd.gate);
                 break;
             }
             case CommandType::SetScales:

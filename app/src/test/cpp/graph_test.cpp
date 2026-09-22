@@ -961,8 +961,12 @@ struct ModPatch {
         graph.postSetParam(1, 1, 0.001f);
         graph.postSetParam(1, 2, 0.001f);
         graph.postSetParam(1, 3, 1.0f);
-        graph.postSetParam(4, 0, 0.001f); // the modulator's own attack
-        graph.postSetParam(4, 1, 0.001f); // and decay, so it reaches its sustain at once
+        // The modulator is one segment that rises at once and then parks, so what it is
+        // worth is a level and not a moment in a shape. Slots 1 and 2 are cleared because
+        // a fresh Env arrives with the A/D/S/R default in it.
+        graph.postSetSegment(4, 0, 0.001f, 0.002f, 0.0f, true);
+        graph.postSetSegment(4, 1, 0.0f, 0.0f, 0.0f, false);
+        graph.postSetSegment(4, 2, 0.0f, 0.0f, 0.0f, false);
         graph.postConnect(5, 0, 1, 0);
         graph.postConnect(5, 0, 4, 0);
         graph.postConnect(1, 0, 2, 0);
@@ -970,17 +974,19 @@ struct ModPatch {
         graph.applyCommands();
     }
     /**
-     * What the modulator is worth, 0 to 1: the sustain the held envelope sits at.
+     * What the modulator is worth, 0 to 1: the level the parked envelope holds at.
      *
-     * Floored just above zero, which is not fussiness. DaisySP's envelope decaying toward
-     * a sustain of exactly zero crosses below it and latches to idle, and idle is only
-     * left on a rising gate -- which a note held for the whole test never gives. Set to
-     * nothing once, the modulator could never be raised again, and every measurement after
-     * the first would read the low end whatever the range said.
+     * Exactly zero is allowed now, where the ADSR this replaced could not take it: DaisySP's
+     * envelope decaying toward a sustain of zero crossed below it and latched to idle, and
+     * idle was only left on a rising gate -- so a modulator set to nothing once could never
+     * be raised again. A segment that parks holds whatever level it names, including none,
+     * and follows the level while it is parked there.
      */
     void level(float value) {
-        graph.postSetParam(4, 2, std::max(value, 0.002f));
+        graph.postSetSegment(4, 0, 0.001f, value, 0.0f, true);
         graph.applyCommands();
+        // Past the 5ms glide onto the new level; see EnvNode::holdGlide_.
+        render(graph, 480);
     }
 };
 

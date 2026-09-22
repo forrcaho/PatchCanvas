@@ -28,6 +28,10 @@ private sealed interface Cmd {
         val id: Long, val slot: Int, val step: Int, val degree: Int, val length: Int,
         val velocity: Float = 1f,
     ) : Cmd
+    data class SetSegment(
+        val id: Long, val slot: Int, val time: Float, val level: Float, val curve: Float,
+        val sustain: Boolean,
+    ) : Cmd
 }
 
 private class Recorder : GraphCommands {
@@ -58,6 +62,11 @@ private class Recorder : GraphCommands {
     override fun setFont(id: Long, font: Long) { log += Cmd.SetFont(id, font) }
     override fun setDot(id: Long, slot: Int, step: Int, degree: Int, length: Int, velocity: Float) {
         log += Cmd.SetDot(id, slot, step, degree, length, velocity)
+    }
+    override fun setSegment(
+        id: Long, slot: Int, time: Float, level: Float, curve: Float, sustain: Boolean,
+    ) {
+        log += Cmd.SetSegment(id, slot, time, level, curve, sustain)
     }
     override fun setModRange(id: Long, index: Int, low: Float, high: Float, exponential: Boolean) {
         log += Cmd.SetModRange(id, index, low, high, exponential)

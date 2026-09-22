@@ -113,7 +113,7 @@ fun Patch.replaceWith(source: Patch): Set<Long> {
             copy.parent = from.parent
             copy.name = from.name
             copy.font = from.font
-            copy.dots.addAll(from.dots)
+            copy.copyGridFrom(from)
             from.params.forEachIndexed { index, value -> copy.setParam(index, value) }
             from.steps.forEachIndexed { index, step -> copy.setStep(index, step) }
             // Before the cables below, which include any landing on these parameters.
