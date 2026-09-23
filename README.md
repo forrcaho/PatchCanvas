@@ -5,7 +5,10 @@ A touch-first modular synthesizer for Android, built with Jetpack Compose.
 What it is built around: a patch nests inside a patch nests inside a patch. A
 **subpatch** is a box holding a patch of its own, with the same rails and the same
 canvas inside it, and a **poly subpatch** is one the engine stamps out a copy of per
-note -- monophonic on the inside, polyphonic from outside. The app was called
+note -- monophonic on the inside, polyphonic from outside. A subpatch is meant to be
+the first thing you reach for rather than a way to tidy up afterwards: make an empty one
+from the add menu and build inside it, or collapse what is already on the canvas into
+one. [`ROADMAP.md`](ROADMAP.md) opens with where the design stands. The app was called
 PatchCanvas while the canvas was the idea, and briefly PatchMatryoshka for the nesting;
 the `applicationId` and the `io.github.forrcaho.patchcanvas` package are still the
 original, because changing those would make this a different app to Android with no
@@ -32,7 +35,7 @@ Builds on JDK 25 (the system default) with no `JAVA_HOME` override. Android Stud
 uses its own bundled JBR.
 
 Toolchain: AGP 9.3.2, Gradle 9.7.1, Kotlin 2.4.10, Compose BOM 2026.08.00,
-compileSdk 37, minSdk 26.
+compileSdk 37, minSdk 33.
 
 Note that AGP 9 supplies Kotlin support itself, so there is no
 `org.jetbrains.kotlin.android` plugin in the build files -- adding one is an error,
@@ -48,7 +51,7 @@ not a redundancy. The Compose compiler is applied as
 
 `rememberDemoPatch()` supplies the starting patch: a sequencer into a poly subpatch
 called Voice — an oscillator, an envelope and the amp it opens, one of each — then a
-filter. Every synth is monophonic; polyphony is the box around it.
+filter. Every synth but the SoundFont player is monophonic; polyphony is the box around it.
 
 ## Tunings and SoundFonts
 

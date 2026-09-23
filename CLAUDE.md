@@ -10,7 +10,27 @@ makes it a different app to Android and an installed copy cannot update into it.
 the launcher label, `rootProject.name` and the docs ever carry the app's name** -- a
 rename touches those four places and nothing else. `ROADMAP.md` carries the plan, the phase-by-phase
 reasoning, and the decisions that were made and reversed — read it before proposing
-direction. This file is the operating manual.
+direction, starting with *Where it stands* at the top, which is the current answer wherever
+a phase below it disagrees. This file is the operating manual.
+
+## The design in brief
+
+**Subpatches are the app.** A subpatch is a box holding a patch of its own, and the goal is
+that it is the first thing anyone reaches for, not what they tidy up with afterwards. Weigh
+a proposal against that: does it make building inside a box easier than building on the
+open canvas, or does it make the box a detour? `ROADMAP.md` keeps the list of what still
+works against it.
+
+**A poly subpatch is the special kind**: the engine copies it once per note, so you build
+one voice and the patch on screen stays the size of one. It is the only way anything is
+patched per note.
+
+**The model is a hybrid, split at that boundary.** Outside a poly subpatch it is Bespoke
+Synth: notes are events with an on, an off and an id, cables are typed and connect like to
+like, and something allocates. Inside it is Eurorack: one voice, one of everything, every
+synth monophonic, and polyphony by copying -- except that the engine does the copying, and
+`PolyIn` is the only allocator. `SF` is the one polyphonic source, because TinySoundFont
+layers several of its voices under one note.
 
 ## Commands
 
@@ -201,8 +221,9 @@ unreadable. Tuning controls are in **cents**, never semitones: a semitone is a f
 means nothing in the tunings these knobs still have to work in.
 
 **Signal types are enforced.** Audio, CV and gate used to color the cable without
-constraining it, because in hardware it is all voltage. That was the Eurorack model and
-the project has left it: CV and gate are now *modulation* and *pulse*, which are not
+constraining it, because in hardware it is all voltage. That was Eurorack's cable, and the
+project has left it -- what it kept of Eurorack is the monophonic voice inside a poly
+subpatch, not the cable. CV and gate are now *modulation* and *pulse*, which are not
 voltages and do not interchange, so `patchesTo` is like-to-like and a mismatch is refused.
 Audio-rate modulation does not need the loophole — a module that wants it declares an
 audio input, and `MODULATION` is applied once per block and could not carry it anyway.

@@ -3,7 +3,51 @@
 The goal is an instrument I actually play on my phone. Not a demo, not a library
 with an app bolted on -- an app, which may shed reusable pieces along the way.
 
-Two commitments shape everything below.
+## Where it stands
+
+**Settled 2026-09-23.** The project has turned several times, and the phases below record
+every turn, the reversed ones included, because the reasoning is what stops a wrong idea
+being derived a second time. This section is the current answer. Where a phase disagrees
+with it, this section wins, and the phase stays for its reasons. Phase 7 predates the rename
+and says **group** where the app now says **subpatch**; they are the same thing.
+
+### Subpatches are the app
+
+**A subpatch should be the first thing anyone reaches for**, not what you tidy up with
+afterwards. It is a box holding a patch of its own, with the same canvas and the same rails
+inside it: make one empty and build in it, or collapse what is already on the canvas into
+one. This is the app's theme, and every feature is weighed against it -- one that makes
+building inside a box easier than building on the open canvas is on the theme, and one that
+makes the box a detour is not.
+
+**A poly subpatch is the special kind, and the one that makes the rest pay.** The engine
+copies it once per note: you build one voice and the patch on screen stays the size of one.
+It is the only way to patch per note -- an `Env` on one note's FM index, a filter per note,
+anything wired anywhere -- which a synth with its own voices inside could never offer. That
+one limitation is why Phase 10 happened.
+
+### Bespoke outside a poly subpatch, Eurorack inside it
+
+The early vocabulary was Eurorack's; Phase 6 made the model Bespoke Synth's, and Phase 10
+took half of Eurorack back. What is left is a hybrid, and each half has a side of the
+boundary:
+
+- **Outside, it is Bespoke.** Notes are events, each with an on, an off and an id, and
+  something allocates them to whatever sounds them. Cables are typed -- audio, modulation,
+  pulse, note -- and connect only like to like. CV and gate are gone, and stay gone.
+- **Inside, it is Eurorack.** One voice, one of everything, and every synth monophonic.
+  Polyphony is copying the voice, which is exactly what Eurorack is said to be stuck with.
+  The difference that mattered was never copying; it was who copies. Here the engine
+  copies: `PolyIn` hands each note to a copy and `PolySum` adds the copies back up.
+- **`PolyIn` is the seam, and the only allocator** -- idle first, then the oldest released,
+  then steal. A synth with voices of its own inside a poly subpatch would be two allocators
+  with the inner one never choosing anything.
+- **`SF` is the one exception.** Its voices are TinySoundFont's, and one note can layer
+  several of them, so capping it to one would silence half of some instruments. It is the
+  only polyphonic source, and it is drawn as a stack to say where you do *not* need a poly
+  subpatch around anything.
+
+### Decisions that hold
 
 **The interaction thesis is the point.** Tap-to-connect, screen-space hit targets,
 one unified gesture loop. Every phase either tests that thesis against real use or
@@ -16,19 +60,47 @@ coroutine, or `System.nanoTime` will jitter by up to a buffer no matter what sit
 underneath it. So the sequencer lives *inside* the audio graph and counts frames.
 This is a design decision made once, early, and never revisited.
 
-**The model is Bespoke Synth, not Eurorack.** Eurorack supplied a lot of the early
-vocabulary -- 1V/oct, gates, "it is all voltage" -- and while the two agreed nothing
-depended on which was the model. They disagree about notes: a Eurorack cable carries one
-signal, so polyphony means copying voices, where Bespoke passes notes as events and lets
-whatever sounds them allocate the voices. Where they part, Bespoke's shape wins -- though
-not its names, and not its internal MIDI. See Phase 6, where notes became events, and
-Phase 7, where CV and gate follow them out.
+**Subpatches never reach the engine.** `engineGraph()` flattens them before anything
+crosses into C++, a poly subpatch by copying, so making one, unpacking one or promoting a
+knob out of one sends a playing patch nothing (Phases 7 and 10).
 
-**Phase 10 took half of Eurorack's answer back.** Notes are still events and something
-still allocates -- but what they are allocated *to* is a copy of a patch, stamped out per
-note, which is the copying Eurorack was said to be stuck with. The difference that mattered
-was never copying; it was who copies. Here you build one voice and the engine makes the
-copies, so the patch on screen stays the size of one.
+**No synth has an envelope.** Shaping is an `Env` inside a poly subpatch, one per note. An
+`Env` shapes a note while it is held; a tail that outlives the note needs a module that
+keeps sounding, which is one reason delay and reverb are in Phase 11.
+
+**A poly subpatch may not contain another.** Instances would multiply, and the id space
+that numbers them is one level deep on purpose. A plain subpatch nests as deep as you like,
+inside a poly one or around it.
+
+**A saved subpatch loads as a copy, never a link.** Linked instances -- edit the definition
+and every use follows -- were passed over rather than ruled out, because nothing here can
+yet show you where a definition is used (Phase 7, *A group can be saved and loaded*).
+
+**A patch file is refused, never silently converted.** `CLAUDE.md` carries the whole rule
+and the run of formats it has governed.
+
+### What subpatch-first still asks for
+
+Each of these was recorded where it was found. They are collected here because together
+they are the work the theme implies. None is designed yet.
+
+- **The add menu offers every built-in module before a subpatch.** The palette comes first,
+  and the empty `Subpatch` and `Poly` follow it.
+- **A saved subpatch does not sit beside the built-ins.** The library is its own menu behind
+  "Load...", where Phase 7's *Choosing from a library* said the picker has to treat a built-in
+  `Osc` and a saved `BassVoice` the same. That menu stops at twelve tiles
+  (`MAX_SAVED_TILES`) with no list past them, and a saved subpatch cannot be deleted from
+  inside the app.
+- **A knob promotes one level and no further.** A subpatch's own panel has no promote chip,
+  so a knob two boxes down stops at the first edge; and a promoted knob cannot be given a
+  jack from outside.
+- **A module moves between scopes only by making or unpacking a subpatch.** A subpatch
+  loaded into the wrong one can only be unpacked out of it.
+- **A box's kind is fixed when it is made.** Turning a finished voice into a poly one means
+  wrapping it in a `Poly` or unpacking it into one.
+- **A subpatch's panel opens only from its long-press menu**, because a tap goes inside.
+  That was chosen on purpose in Phase 7 and is worth watching, since the promoted knobs are
+  the whole of a subpatch's face from outside.
 
 ## Stack
 
@@ -1249,6 +1321,12 @@ each instance with its own state -- considerably more work, needing a definition
 library and a file format that separates definitions from instances. Grouping is the
 natural first half of abstraction, so neither choice wastes the other.
 
+> **Abstraction arrived as two kinds of copy, and neither is a definition.** The library
+> loads a saved subpatch as an independent copy, so no file format had to separate
+> definitions from instances. A poly subpatch is the "stamped out many times, each instance
+> with its own state" half, done by the engine per note rather than by hand. Linked
+> instances are the part still not built. See *Where it stands* at the top.
+
 **Why after parameters.** A Voice macro whose filter cutoff cannot be reached from
 outside is half a feature. Exposing a knob through the boundary matters as much as
 exposing a port, and that needs parameters to exist.
@@ -2151,6 +2229,12 @@ format -- definitions and instances must be separable, and that wants deciding b
 Phase 5 hardens the schema. The loader already refuses unknown versions, so a bump is
 clean.
 
+> **The deadline passed without the separation being needed**, because a saved subpatch
+> loads as a copy (*A group can be saved and loaded*, above). What still stands is the
+> first half: the picker has to treat a built-in and a saved subpatch alike. It does not yet
+> -- the library is its own menu behind "Load..." -- and that is on the list of what
+> subpatch-first still asks for, at the top.
+
 A cheaper partial win, available any time: collapsing a module to a title-only strip
 buys back a good deal of the same screen space for far less work.
 
@@ -2199,9 +2283,9 @@ its pitch is the length of its delay line, one per note.
 > when the synths went monophonic -- an `Osc` sends one voice now, so two of them inside a
 > poly subpatch would be one note each. What holds regardless is that an `Osc`'s frequency
 > comes from the notes it is sent and nothing patchable sets it, and that nothing patchable
-> sets a delay line's length from a note. Both are still what the module *is*. Both are what the module *is*,
-which is the roadmap's test for a fixed module ("Growing the library", above), and the
-decision already taken for FM on 2026-09-15.
+> sets a delay line's length from a note. Both are what the module *is*, which is the
+> roadmap's test for a fixed module ("Growing the library", above), and the decision
+> already taken for FM on 2026-09-15.
 
 **A panel past five rows goes to two columns**, chosen over pages and over trimming FM to
 fit. The landscape panel is about 980dp wide, so a half-width bar is still long enough to
@@ -2536,6 +2620,10 @@ not by picking whatever passes.
 **Begun 2026-09-20, on its own branch, because it may not turn out better.** Forrest tried
 to put an envelope on an FM's modulation index and found he could not, and the reason was
 structural rather than a missing feature. Everything below follows from that one attempt.
+
+> **It did turn out better, and it is the design now.** The poly subpatch was heard on the
+> phone on 2026-09-21 (*Heard, on the phone*, below), and on 2026-09-23 subpatches were
+> settled as the app's theme. See *Where it stands* at the top.
 
 ### What was actually wrong
 
@@ -3425,6 +3513,8 @@ use rather than by argument.
    pair, that trade may not pay. Measured at ~17 modules on screen at zoom 1.0, which
    is more headroom than feared -- but Phase 7 exists because a patch worth playing
    will exceed it. A minimap or collapsed modules are the cheaper interim answers.
+   Subpatches are the answer the project chose; this stays open until a patch big
+   enough to test it has been built out of them and played.
 3. **Does the unified gesture loop survive?** It already needs long-press (Phase 1) and
    may need knob-drag (Phase 5). At some point a single `awaitEachGesture` becomes the
    tangle it was written to avoid. Watch for it.
@@ -3458,3 +3548,8 @@ use rather than by argument.
    that jack from outside like any other. What remains untested is whether a port that
    only exists because you asked for it reads as a feature or as a thing you have to know
    about.
+8. **Is a subpatch the first thing anyone reaches for?** It is the app's theme (see
+   *Where it stands*), and like the rest of this list it is answered by use: whether a new
+   instrument gets started inside an empty box or on the open canvas and collapsed
+   afterwards. The second is not wrong, but if it is what keeps happening, something on
+   the list of what subpatch-first still asks for is in the way.
