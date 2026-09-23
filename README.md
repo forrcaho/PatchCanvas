@@ -9,10 +9,10 @@ note -- monophonic on the inside, polyphonic from outside. A subpatch is meant t
 the first thing you reach for rather than a way to tidy up afterwards: make an empty one
 from the add menu and build inside it, or collapse what is already on the canvas into
 one. [`ROADMAP.md`](ROADMAP.md) opens with where the design stands. The app was called
-PatchCanvas while the canvas was the idea, and briefly PatchMatryoshka for the nesting;
-the `applicationId` and the `io.github.forrcaho.patchcanvas` package are still the
-original, because changing those would make this a different app to Android with no
-update path from an installed copy.
+PatchCanvas while the canvas was the idea, and briefly PatchMatryoshka for the nesting.
+Since 2026-09-23 it is `io.github.forrcaho.patchgarden`, so Android treats it as a
+different app from PatchCanvas: an installed PatchCanvas (v0.1.0 or a debug build)
+will not update into it, and the two install side by side.
 
 The interaction model departs from the drag-a-cable convention in three ways
 (see the comment at the top of `PatchCanvas.kt`):
@@ -46,8 +46,8 @@ not a redundancy. The Compose compiler is applied as
 
 | Path | |
 | --- | --- |
-| `app/src/main/java/io/github/forrcaho/patchcanvas/PatchCanvas.kt` | Model, camera, gestures, drawing |
-| `app/src/main/java/io/github/forrcaho/patchcanvas/MainActivity.kt` | Full-bleed host for the canvas |
+| `app/src/main/java/io/github/forrcaho/patchgarden/PatchCanvas.kt` | Model, camera, gestures, drawing |
+| `app/src/main/java/io/github/forrcaho/patchgarden/MainActivity.kt` | Full-bleed host for the canvas |
 
 `rememberDemoPatch()` supplies the starting patch: a sequencer into a poly subpatch
 called Voice — an oscillator, an envelope and the amp it opens, one of each — then a
@@ -56,7 +56,7 @@ filter. Every synth but the SoundFont player is monophonic; polyphony is the box
 ## Tunings and SoundFonts
 
 Both are files you put on the device, in the app's own folder on external storage --
-`Android/data/io.github.forrcaho.patchcanvas/files/` -- which is reachable over USB or
+`Android/data/io.github.forrcaho.patchgarden/files/` -- which is reachable over USB or
 from a file manager.
 
 | Folder | What goes in it |

@@ -29,7 +29,7 @@ val appVersionName: String = (findProperty("appVersionName") as String?) ?: "1.0
 val appVersionCode: Int = ((findProperty("appVersionCode") as String?) ?: "1").toInt()
 
 android {
-    namespace = "io.github.forrcaho.patchcanvas"
+    namespace = "io.github.forrcaho.patchgarden"
     compileSdk = 37
 
     // Pinned rather than left to AGP's default, so a second machine and CI
@@ -37,7 +37,7 @@ android {
     ndkVersion = "28.2.13676358"
 
     defaultConfig {
-        applicationId = "io.github.forrcaho.patchcanvas"
+        applicationId = "io.github.forrcaho.patchgarden"
         minSdk = 33
         targetSdk = 37
         versionCode = appVersionCode

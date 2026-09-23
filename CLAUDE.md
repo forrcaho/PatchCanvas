@@ -4,11 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 PatchGarden is a touch-first modular synthesizer for Android: a Compose canvas for
 patching, and a C++/Oboe audio engine behind it. It was PatchCanvas until the redesign
-around subpatches, and PatchMatryoshka briefly after it; the `applicationId`, the package
-and `PatchCanvas.kt` still carry the original name, because changing the `applicationId`
-makes it a different app to Android and an installed copy cannot update into it. **Only
-the launcher label, `rootProject.name` and the docs ever carry the app's name** -- a
-rename touches those four places and nothing else. `ROADMAP.md` carries the plan, the phase-by-phase
+around subpatches, and PatchMatryoshka briefly after it. **The name is settled, and on
+2026-09-23 the `applicationId` and the package became `io.github.forrcaho.patchgarden`**
+(the GitHub repo was renamed to match). That made it a different app to Android, so an
+installed PatchCanvas does not update into it; the reference device's patch, SoundFont and
+tunings were copied across over adb once. **Do not change the
+`applicationId` again** -- keeping it fixed is what lets an installed copy update.
+`PatchCanvas.kt` and the `PatchCanvas` composable keep their names because they are the
+canvas, not the app. `ROADMAP.md` carries the plan, the phase-by-phase
 reasoning, and the decisions that were made and reversed — read it before proposing
 direction, starting with *Where it stands* at the top, which is the current answer wherever
 a phase below it disagrees. This file is the operating manual.
@@ -55,14 +58,14 @@ Deploy and drive on a device:
                                         # installing after a test run ships the previous
                                         # build and the device shows you a bug you fixed
 adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb shell am force-stop io.github.forrcaho.patchcanvas
-adb shell am start -n io.github.forrcaho.patchcanvas/.MainActivity
+adb shell am force-stop io.github.forrcaho.patchgarden
+adb shell am start -n io.github.forrcaho.patchgarden/.MainActivity
 adb logcat -d -s PatchAudio:V      # engine: stream state, latency, xruns
 adb logcat -d -s PatchSync:V       # every command crossing to the graph (debug builds)
 adb logcat -d -s PatchGesture:V    # what the envelope editor made of each touch (debug builds)
-adb shell run-as io.github.forrcaho.patchcanvas cat files/patch.json
-adb shell ls /sdcard/Android/data/io.github.forrcaho.patchcanvas/files/scales   # tunings
-adb shell ls /sdcard/Android/data/io.github.forrcaho.patchcanvas/files/subpatches
+adb shell run-as io.github.forrcaho.patchgarden cat files/patch.json
+adb shell ls /sdcard/Android/data/io.github.forrcaho.patchgarden/files/scales   # tunings
+adb shell ls /sdcard/Android/data/io.github.forrcaho.patchgarden/files/subpatches
 adb logcat -d -s PatchScales:V     # which .scl files loaded, and which were skipped
 ```
 
@@ -581,7 +584,7 @@ Debug builds keep a rolling 10s capture of exactly what reaches the stream, writ
 stop. Play, background the app, then:
 
 ```sh
-adb exec-out run-as io.github.forrcaho.patchcanvas cat files/capture.wav > /tmp/c.wav
+adb exec-out run-as io.github.forrcaho.patchgarden cat files/capture.wav > /tmp/c.wav
 python3 tools/find_clicks.py /tmp/c.wav          # discontinuities + boundary alignment
 python3 ~/musicode/rust/cursive/tools/audio_analyze.py /tmp/c.wav --png /tmp/s.png
 ```

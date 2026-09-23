@@ -143,7 +143,7 @@ float String::ProcessInternal(const float in)
 
         if(non_linearity == NON_LINEARITY_DISPERSION)
         {
-            // PatchCanvas: rand() replaced. Bionic's takes a mutex, and the audio thread
+            // PatchGarden: rand() replaced. Bionic's takes a mutex, and the audio thread
             // never blocks; each string keeps its own generator instead.
             rng_       = rng_ * 1664525u + 1013904223u;
             float noise = static_cast<float>(rng_ >> 8) * (1.0f / 16777216.0f) - 0.5f;

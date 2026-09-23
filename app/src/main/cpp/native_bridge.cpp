@@ -22,44 +22,44 @@ extern "C" {
 // ---------------------------------------------------------------- stream lifecycle
 
 JNIEXPORT jboolean JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeStart(JNIEnv *, jobject) {
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeStart(JNIEnv *, jobject) {
     return engine().start() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeStop(JNIEnv *, jobject) {
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeStop(JNIEnv *, jobject) {
     engine().stop();
 }
 
 JNIEXPORT void JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetOutputEnabled(JNIEnv *, jobject,
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeSetOutputEnabled(JNIEnv *, jobject,
                                                                       jboolean enabled) {
     engine().setOutputEnabled(enabled == JNI_TRUE);
 }
 
 JNIEXPORT jboolean JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeAttachPerformanceHint(JNIEnv *, jobject) {
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeAttachPerformanceHint(JNIEnv *, jobject) {
     return engine().attachPerformanceHint() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeStartInput(JNIEnv *, jobject) {
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeStartInput(JNIEnv *, jobject) {
     return engine().startInput() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeStopInput(JNIEnv *, jobject) {
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeStopInput(JNIEnv *, jobject) {
     engine().stopInput();
 }
 
 JNIEXPORT jstring JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeInputStatus(JNIEnv *env, jobject) {
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeInputStatus(JNIEnv *env, jobject) {
     return env->NewStringUTF(engine().inputStatus().c_str());
 }
 
 /** Debug only: arm the rolling capture written when the stream stops. */
 JNIEXPORT void JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeArmCapture(JNIEnv *env, jobject,
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeArmCapture(JNIEnv *env, jobject,
                                                                  jboolean enabled,
                                                                  jstring path) {
     const char *chars = env->GetStringUTFChars(path, nullptr);
@@ -68,7 +68,7 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeArmCapture(JNIEnv *env, jo
 }
 
 JNIEXPORT jstring JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeStatus(JNIEnv *env, jobject) {
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeStatus(JNIEnv *env, jobject) {
     return env->NewStringUTF(engine().status().c_str());
 }
 
@@ -78,39 +78,39 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeStatus(JNIEnv *env, jobjec
 // so the only thing that crosses to the audio thread is a pointer.
 
 JNIEXPORT jboolean JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeAddNode(JNIEnv *, jobject,
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeAddNode(JNIEnv *, jobject,
                                                               jlong id, jint type) {
     return engine().graph().postAdd(id, static_cast<NodeType>(type)) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeRemoveNode(JNIEnv *, jobject, jlong id) {
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeRemoveNode(JNIEnv *, jobject, jlong id) {
     return engine().graph().postRemove(id) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeConnect(JNIEnv *, jobject,
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeConnect(JNIEnv *, jobject,
                                                               jlong srcId, jint srcPort,
                                                               jlong dstId, jint dstPort) {
     return engine().graph().postConnect(srcId, srcPort, dstId, dstPort) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeDisconnect(JNIEnv *, jobject,
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeDisconnect(JNIEnv *, jobject,
                                                                  jlong srcId, jint srcPort,
                                                                  jlong dstId, jint dstPort) {
     return engine().graph().postDisconnect(srcId, srcPort, dstId, dstPort) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetParam(JNIEnv *, jobject,
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeSetParam(JNIEnv *, jobject,
                                                                jlong id, jint index,
                                                                jfloat value) {
     return engine().graph().postSetParam(id, index, value) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetModRange(JNIEnv *, jobject,
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeSetModRange(JNIEnv *, jobject,
                                                                   jlong id, jint index,
                                                                   jfloat low, jfloat high,
                                                                   jboolean exponential) {
@@ -120,14 +120,14 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetModRange(JNIEnv *, jobj
 }
 
 JNIEXPORT jboolean JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeConnectMod(JNIEnv *, jobject,
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeConnectMod(JNIEnv *, jobject,
                                                                  jlong srcId, jint srcPort,
                                                                  jlong dstId, jint index) {
     return engine().graph().postConnectMod(srcId, srcPort, dstId, index) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeDisconnectMod(JNIEnv *, jobject,
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeDisconnectMod(JNIEnv *, jobject,
                                                                     jlong srcId, jint srcPort,
                                                                     jlong dstId, jint index) {
     return engine().graph().postDisconnectMod(srcId, srcPort, dstId, index) ? JNI_TRUE : JNI_FALSE;
@@ -143,7 +143,7 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeDisconnectMod(JNIEnv *, jo
  * caller ever writes them out.
  */
 JNIEXPORT jboolean JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetSlot(JNIEnv *, jobject, jlong id,
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeSetSlot(JNIEnv *, jobject, jlong id,
                                                               jint kind, jint index,
                                                               jint i0, jint i1, jint i2,
                                                               jfloat f0, jfloat f1, jfloat f2,
@@ -174,7 +174,7 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetSlot(JNIEnv *, jobject,
  * degrees array would otherwise be read past its end.
  */
 JNIEXPORT jboolean JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetScales(JNIEnv *env, jobject,
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeSetScales(JNIEnv *env, jobject,
                                                                 jfloatArray degrees,
                                                                 jintArray sizes,
                                                                 jfloatArray periods,
@@ -222,7 +222,7 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetScales(JNIEnv *env, job
  * kept for the life of the process.
  */
 JNIEXPORT jlong JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeLoadSoundFont(JNIEnv *env, jobject,
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeLoadSoundFont(JNIEnv *env, jobject,
                                                                     jbyteArray data) {
     const jsize size = env->GetArrayLength(data);
     jbyte *bytes = env->GetByteArrayElements(data, nullptr);
@@ -234,7 +234,7 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeLoadSoundFont(JNIEnv *env,
 
 /** "bank<TAB>program<TAB>name" per preset, in the font's own order. */
 JNIEXPORT jobjectArray JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSoundFontPresets(JNIEnv *env, jobject,
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeSoundFontPresets(JNIEnv *env, jobject,
                                                                        jlong handle) {
     auto *font = reinterpret_cast<SoundFont *>(handle);
     const int32_t count = font != nullptr ? font->presetCount() : 0;
@@ -256,7 +256,7 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSoundFontPresets(JNIEnv *e
 
 /** Builds SF node [id] a synth over font [handle], here, and hands it across. */
 JNIEXPORT jboolean JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetNodeFont(JNIEnv *, jobject, jlong id,
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeSetNodeFont(JNIEnv *, jobject, jlong id,
                                                                   jlong handle) {
     auto *font = reinterpret_cast<SoundFont *>(handle);
     if (font == nullptr) return JNI_FALSE;
@@ -264,39 +264,39 @@ Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetNodeFont(JNIEnv *, jobj
 }
 
 JNIEXPORT jint JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeScaleEntry(JNIEnv *, jobject) {
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeScaleEntry(JNIEnv *, jobject) {
     return engine().graph().scaleEntry();
 }
 
 JNIEXPORT jint JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeStepOf(JNIEnv *, jobject, jlong id) {
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeStepOf(JNIEnv *, jobject, jlong id) {
     return engine().graph().stepOf(id);
 }
 
 JNIEXPORT jfloat JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeParamOf(JNIEnv *, jobject, jlong id,
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeParamOf(JNIEnv *, jobject, jlong id,
                                                               jint index) {
     return engine().graph().paramOf(id, index);
 }
 
 JNIEXPORT jboolean JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeSetTempo(JNIEnv *, jobject, jfloat bpm) {
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeSetTempo(JNIEnv *, jobject, jfloat bpm) {
     return engine().graph().postSetTempo(bpm) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeResetTransport(JNIEnv *, jobject) {
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeResetTransport(JNIEnv *, jobject) {
     return engine().graph().postResetTransport() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jdouble JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeTransportBeat(JNIEnv *, jobject) {
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeTransportBeat(JNIEnv *, jobject) {
     return engine().graph().transportBeat();
 }
 
 /** Frees whatever the audio thread handed back. Deliberately not on the audio thread. */
 JNIEXPORT void JNICALL
-Java_io_github_forrcaho_patchcanvas_AudioEngine_nativeCollectGarbage(JNIEnv *, jobject) {
+Java_io_github_forrcaho_patchgarden_AudioEngine_nativeCollectGarbage(JNIEnv *, jobject) {
     engine().graph().collectGarbage();
 }
 

@@ -8,7 +8,7 @@ notices for the code DaisySP incorporates.
 ## Why vendored rather than a submodule
 
 DaisySP's own repository carries `DaisySP-LGPL` as a submodule. Adding DaisySP as a
-submodule here would mean anyone running `git clone --recursive` on PatchCanvas pulls
+submodule here would mean anyone running `git clone --recursive` on PatchGarden pulls
 the LGPL half we deliberately exclude, and acquires a relinking obligation without ever
 choosing to. Copying the files we use removes that hazard entirely, and keeps offline
 and CI builds free of a configure-time download.
@@ -31,7 +31,7 @@ The cost is that updating is a manual re-copy. That is the right trade for a doz
 `Utility/dsp.h` includes `custom_dsp.h` behind `#ifdef DSY_CUSTOM_DSP`, which we do
 not define, so that missing file is not a problem.
 
-Edits to upstream source (the second is marked `PatchCanvas:` where it is made):
+Edits to upstream source (the second is marked `PatchGarden:` where it is made):
 
 - Includes flattened (`"Utility/dsp.h"` to `"dsp.h"`, and so on), so one include
   directory suffices.

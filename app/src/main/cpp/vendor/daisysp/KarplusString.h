@@ -105,7 +105,7 @@ class String
     float src_phase_;
     float out_sample_[2];
 
-    // PatchCanvas: the dispersion noise's generator, in place of rand(). See the .cpp.
+    // PatchGarden: the dispersion noise's generator, in place of rand(). See the .cpp.
     uint32_t rng_ = 1;
 };
 } // namespace daisysp

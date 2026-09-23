@@ -79,6 +79,10 @@ yet show you where a definition is used (Phase 7, *A group can be saved and load
 **A patch file is refused, never silently converted.** `CLAUDE.md` carries the whole rule
 and the run of formats it has governed.
 
+**The app is PatchGarden, and so is its id.** `io.github.forrcaho.patchgarden` since
+2026-09-23 (Phase 10, *Everything is a subpatch now*). It does not change again, since
+changing it is the one rename an installed copy cannot follow.
+
 ### What subpatch-first still asks for
 
 Each of these was recorded where it was found. They are collected here because together
@@ -2659,6 +2663,14 @@ either way, and because it pinned down what a rename costs -- the launcher label
 `rootProject.name` and the docs, and nothing else. That the second one was as cheap as the
 first is the useful part: keeping the `applicationId` and the package on the original name
 is what makes the app's name a label rather than an identity.
+
+> **On 2026-09-23 the name became the identity.** With the design settled (*Where it
+> stands*, at the top), PatchGarden stopped being a label that might move again, and the
+> `applicationId`, the package, the native library and the GitHub repo all took it. The
+> cost is exactly what this paragraph kept it from paying twice: an installed PatchCanvas
+> is a different app and does not update into PatchGarden, so the live patch, the SoundFont
+> bank and the tunings added by hand were copied across over adb. Paying it once, at the
+> point the name stopped changing, is the point.
 
 The goal behind the rename is that a subpatch should be **the first thing anyone reaches
 for**, not the thing you tidy up with afterwards. So both kinds can be made empty from the

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22.1)
-project(patchcanvas LANGUAGES CXX)
+project(patchgarden LANGUAGES CXX)
 
 # Oboe arrives as a prefab package inside its AAR, so there is no source checkout and
 # no submodule to keep in step -- the Gradle dependency version is the only version.
@@ -28,7 +28,7 @@ target_compile_options(daisysp PRIVATE -w)
 add_library(tinysoundfont STATIC vendor/tinysoundfont/tsf.cpp)
 target_compile_options(tinysoundfont PRIVATE -w)
 
-add_library(patchcanvas SHARED
+add_library(patchgarden SHARED
         audio_engine.cpp
         graph.cpp
         nodes.cpp
@@ -36,8 +36,8 @@ add_library(patchcanvas SHARED
         processors.cpp
         native_bridge.cpp)
 
-target_include_directories(patchcanvas SYSTEM PRIVATE vendor/daisysp vendor/tinysoundfont)
+target_include_directories(patchgarden SYSTEM PRIVATE vendor/daisysp vendor/tinysoundfont)
 
-target_compile_features(patchcanvas PRIVATE cxx_std_17)
-target_compile_options(patchcanvas PRIVATE -Wall -Wextra -ffast-math)
-target_link_libraries(patchcanvas PRIVATE daisysp tinysoundfont oboe::oboe android log)
+target_compile_features(patchgarden PRIVATE cxx_std_17)
+target_compile_options(patchgarden PRIVATE -Wall -Wextra -ffast-math)
+target_link_libraries(patchgarden PRIVATE daisysp tinysoundfont oboe::oboe android log)
