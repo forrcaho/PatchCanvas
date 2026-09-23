@@ -305,7 +305,9 @@ there is no such thing here.
 **An envelope is segments, and a segment says where it is going, never where it starts.**
 Each is a time, a level and a curve; it begins wherever the output already is, which is what
 lets a note let go during the attack fall from the level it *reached* rather than stepping to
-a sustain it never touched. At most one segment is marked sustain, and **none of them being
+a sustain it never touched. At most one segment is marked sustain -- the editor calls it the
+*release*, since what holds is the value at the segment's end: that node is drawn with an `R`
+and everything after it sits on a blue ground -- and **none of them being
 marked is a whole envelope** -- it runs to its end whatever the note does, which is what a
 percussive patch wants and costs nothing on a synth anyway, since a voice is freed the moment
 its gate ramp hits zero. A parked envelope keeps *following* its level over 5ms, because
@@ -343,13 +345,26 @@ hidden while any panel is open). They share one `inEditor` gate now. The tap-onl
 had this problem and do not need it: each carries a rect and none returns without hitting it.
 It is loops that claim.
 
+**A long press is what is done *to* a thing, and it never destroys on its own.** Across the
+app a tap on a reading opens the keypad, a tap on a chip toggles it, and a drag adjusts what
+the first move decided; the long press is the fourth. One harmless action happens directly (a
+crumb renames, a pinned rail opens its panel); anything more is a menu, and a destructive
+action is always a tile -- which is why a subpatch's jack gets a menu of one item. An envelope
+node's removal was the bare long press, the one exception, until the release needed somewhere
+to go; it is a menu now, like a module's. Check a new gesture against these four before
+inventing a fifth.
+
 **Nothing in the envelope editor is destructive on a tap.** A tap on a node used to remove
 it, mirroring the dot grid, and it made the whole editor feel unreliable: a tap is what a
 finger does when it means to *grab* something, so segments vanished while people were trying
 to drag them -- one patch went from six to two without anyone meaning it. A removed dot costs
 one tap to put back and a removed node costs its time and its curve, which is the asymmetry
-that makes the same gesture right in one grid and wrong in the other. Removal is a long press
-now; a tap on a node does nothing at all, and a tap on the *line* still adds one.
+that makes the same gesture right in one grid and wrong in the other. Removal is in the node's
+long-press menu now; a tap on a node does nothing at all, and a tap on the *line* still adds
+one. **The release stays off the tap too**, though moving it costs one tap to undo: the node
+most often touched and left where it is is the release node itself, with a note held while its
+level is tuned by ear, and a touch that never clears the slop is a tap -- which would let the
+note go.
 
 **A target must match what is drawn.** The envelope is drawn as a *filled* area under its
 curve, and for two builds only a 53px band around the stroke responded -- so a finger landing
@@ -388,15 +403,18 @@ the whole range. Curvature is dragged **relative** to where it already was, so a
 costs nothing -- a second drag carries on from the first.
 
 **An envelope editor's decisions each get their own target, never a mode.** A node carries a
-time and a level and a drag moves both; the sustain and the keypad live in a rail above the
-shape and a rail below it. This is Surge's split rather than Bespoke's, and the reason is
-arithmetic: three quantities on one draggable point makes the control that picks between them
-a mode, and a mode on a fingertip-sized target is a coin toss. **A rail cell is as wide as its
-segment is long**, floored at `envCellMin` so a 5ms attack still has something tappable that
+time and a level and a drag moves both; the numbers are typed from a rail of levels above the
+shape and a rail of times below it. This is Surge's split rather than Bespoke's, and the reason
+is arithmetic: three quantities on one draggable point makes the control that picks between
+them a mode, and a mode on a fingertip-sized target is a coin toss. **The two rails are laid
+out differently because a time is a span and a level is a point.** A time cell is as wide as
+its segment is long, floored at `envCellMin` so a 5ms attack still has something tappable that
 still says "5ms" -- allocated by water-filling, so where no floor binds the cells land exactly
-on the segment columns and the rails line up with the nodes. They were divided evenly once,
-which kept every cell tappable and put the `hold` chip nowhere near its own dashed line. The
-keypad is in **milliseconds**, since nobody can drag a node to 12ms and everybody can tap it
+on the segment columns. A level chip is centered over its *node*, one floor wide, and moved
+only as far as crowding requires: an isotonic fit, so a crowded pair shares the displacement
+rather than one chip being shoved a whole width off its node. The top rail used to be a
+`hold` cell per segment, which read as "this segment is held" when what holds is the one value
+at its end. The keypad is in **milliseconds**, since nobody can drag a node to 12ms and everybody can tap it
 and type 12. `MAX_SEGMENTS` is 8 and is a **cap**, not a scroll or a zoom: a scroll
 needs a gesture that competes with dragging a node, and a zoom-to-fit puts the nodes closest
 together exactly when the envelope gets interesting.

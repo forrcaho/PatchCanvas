@@ -3426,6 +3426,61 @@ toggles, but a dot costs one tap to put back and a node costs its curve and its 
 not hit by accident once while driving the editor, which is weak evidence and the only kind
 available until it is played.
 
+### The release is a point, and a level has a number, 2026-09-23
+
+**Two complaints from use.** A segment's time could be typed and its level could not even be
+read. And the `hold` cell confused: what holds is not the segment but the single value at its
+end. Forrest's answer to the second was the design -- mark the node itself with an `R` (it was
+already drawn open, which was the right idea) and put everything after it on a dark blue
+ground -- and it left one question: what gesture marks a node, now that the rail above is no
+longer where the mark lives?
+
+**The gestures were reviewed before anything was built**, across the canvas, the panel, the
+cards and every editor, and four rules came out of it. A tap on a reading opens the keypad; a
+tap on a chip toggles it; a drag adjusts, with what it adjusts decided on the first move; and
+a long press is what is done *to* a thing. On the canvas that last one never destroys by
+itself -- a module's Delete is a tile, and a subpatch's jack gets a menu of one item rather than
+removing itself -- and one place broke it: an envelope node, whose long press removed it
+outright. That was defensible while removal was the only thing a node offered. A second thing
+is exactly what makes a module's long press a menu.
+
+**Three ways to mark the release, and the menu won.** A *tap* on a node was free and fits the
+chip rule, but a tap on a node was made inert for a reason that applies here with more force:
+a touch that never clears the slop is a tap, and the node most often touched and left alone is
+the release node itself, held with a note down while its level is tuned by ear. A stray tap
+there would let the note go. A *draggable flag* that snaps between nodes would have been its
+own target in the purest sense, but it is a gesture found nowhere else in the app, it would sit
+inside the column the curvature drag owns, and "no release" would have meant dragging it off
+the end, where nobody would look. The **long-press menu** keeps both earlier decisions -- taps on
+nodes stay harmless, and a long press means the same thing on the canvas and in the panel -- at
+the cost of a tile's tap on top of removal. It is the canvas's own menu, `Interaction.Menu`
+with a node index, drawn over the panel and dismissed by any touch off its tiles: "Release
+here" or "No release", and "Remove" unless it is the last node.
+
+**The level rail was first proposed per segment, and that was wrong.** Forrest caught it: a
+segment goes *between* two levels, so a level cell spanning a segment says the same misleading
+thing the `hold` cell did. A segment stores where it is going, but on screen a level belongs to
+a point. So the two rails are laid out differently on purpose -- times tile the columns, levels
+are chips centered over their nodes -- and crowding, which is ordinary here (a 5ms attack puts
+the first node on the rail's end), is solved exactly rather than nudged. With `u[i] = left[i] -
+i*w`, "no two chips overlap" is just "u never decreases", so the nearest arrangement is an
+isotonic fit, pooled adjacent violators, clamped into the rail. The test that tells it from a
+merely valid layout is a crowded pair: shoving the second chip a whole width right also keeps
+them apart, and a greedy push was the mutation that proved the test can tell. A touch anywhere
+in the level rail belongs to it, so the empty stretch between two sparse chips does nothing
+rather than bending the segment below or adding a node to a line drawn just under it.
+
+**Nothing crossed the file format.** The mark is the same `sustain` flag on the same segment,
+so no version bump and no refusal; the engine hears exactly what it heard before.
+
+**Driven on the Pixel_8 emulator at font scale 1.5, not the phone.** A level typed as 0.35
+reached all four poly instances; "Release here" moved the mark with exactly two commands; "No
+release" sent one and took the band away; a plain tap on a node sent nothing; a touch off the
+menu dismissed it and sent nothing; "Remove" took a node away and undo put it back; ten
+milliseconds typed into a middle segment packed its chip beside the attack's. **What has not
+been judged is the picture on the reference device**: whether the blue reads as "after the
+note ends" on the phone's own screen, and whether the chips' text fits at its density.
+
 ### The fm port comes back to Osc
 
 **Now that an `Osc` is one voice again**, the objection that retired it is gone: it used to

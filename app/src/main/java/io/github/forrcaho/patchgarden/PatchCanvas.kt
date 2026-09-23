@@ -347,7 +347,11 @@ data class Dot(
  * node is time and level, and curvature is a drag on the line between two nodes --
  * different targets rather than different modes.
  *
- * [sustain] parks the envelope here while a note is held. At most one segment in a list has
+ * [sustain] parks the envelope at this segment's *end* while a note is held, and everything
+ * after it is the release. The editor calls it that: the node is drawn with an `R`, the rest
+ * of the shape sits on a blue ground, and it is set from the node's long-press menu. The
+ * field keeps its name because it is what the file and the engine call it, and what it
+ * stores has not changed. At most one segment in a list has
  * it; [PatchModule.setSustain] is what enforces that. None of them having it is a perfectly
  * good envelope -- it runs to its end and stops, which is what a percussive patch wants,
  * and costs nothing on a synth besides, since a voice is freed the moment its gate ramp
@@ -3422,6 +3426,11 @@ sealed interface Interaction {
         val port: PortRef? = null,
         /** The library's own menu, whose tiles are the saved subpatches. */
         val library: Boolean = false,
+        /**
+         * Set when the press landed on a node of [targetId]'s envelope, whose menu is its
+         * release and its removal. The only menu opened over a panel rather than the canvas.
+         */
+        val node: Int = -1,
     ) : Interaction
 
     /**
@@ -3467,6 +3476,9 @@ sealed interface NumberTarget {
 
     /** How long one envelope segment lasts. Typed in milliseconds; see [SEGMENT_TIME]. */
     data class SegmentTime(val moduleId: Long, val index: Int) : NumberTarget
+
+    /** The level at the end of segment [index] -- node [index]'s. See [SEGMENT_LEVEL]. */
+    data class SegmentLevel(val moduleId: Long, val index: Int) : NumberTarget
 }
 
 sealed interface MenuItem {
@@ -3498,6 +3510,15 @@ sealed interface MenuItem {
 
     /** The library with nothing in it yet: a tile that says so and dismisses. */
     data object LibraryEmpty : MenuItem
+
+    /** Makes envelope node [node] the one the envelope waits at while a note is held. */
+    data class ReleaseAt(val moduleId: Long, val node: Int) : MenuItem
+
+    /** Takes the release mark away, so the envelope runs its whole shape whatever the note does. */
+    data class NoRelease(val moduleId: Long, val node: Int) : MenuItem
+
+    /** Takes envelope node [node] away, and the segment that ends at it. */
+    data class RemoveNode(val moduleId: Long, val node: Int) : MenuItem
 }
 
 /**
@@ -3520,17 +3541,36 @@ internal fun Patch.subpatchPortAt(ref: PortRef): Triple<PatchModule, PortDirecti
     }
 }
 
-private fun menuItems(
+internal fun menuItems(
     patch: Patch,
     targetId: Long?,
     port: PortRef? = null,
     /** Non-null for the library's own menu: its tiles are what is saved. */
     saved: List<String>? = null,
+    /** An envelope node of [targetId]'s, when the press landed on one. */
+    node: Int = -1,
 ): List<MenuItem> = when {
     saved != null ->
         saved.take(MAX_SAVED_TILES).map { MenuItem.Load(it) }.ifEmpty { listOf(MenuItem.LibraryEmpty) }
     port != null -> patch.subpatchPortAt(port)
         ?.let { (subpatch, dir, index) -> listOf(MenuItem.RemovePort(subpatch.id, dir, index)) }
+        .orEmpty()
+    // A node's menu, for the same reason a module has one: it is a thing a drag already
+    // moves, and the things done *to* it rather than *with* it are what a long press offers.
+    // Removal was the long press itself while it was the only one; a second is what makes it
+    // a menu, exactly as on the canvas. The release comes first because it is the one reached
+    // for more often, and removing the last node is not offered, since an envelope is always
+    // at least one segment.
+    node >= 0 && targetId != null -> patch.module(targetId)
+        ?.segments?.getOrNull(node)
+        ?.let { segment ->
+            val canRemove = patch.module(targetId)!!.segments.size > 1
+            listOfNotNull(
+                if (segment.sustain) MenuItem.NoRelease(targetId, node)
+                else MenuItem.ReleaseAt(targetId, node),
+                MenuItem.RemoveNode(targetId, node).takeIf { canRemove },
+            )
+        }
         .orEmpty()
     targetId == null -> Types.palette.map { MenuItem.Add(it) } +
         // The boxes come first among what the menu offers after the modules: an empty one
@@ -4433,6 +4473,16 @@ fun PatchCanvas(
                         // rather than another outcome bolted into the one below.
                         val open = patch.modules.firstOrNull { it.expanded }
                         if (open != null) {
+                            // A menu over the panel -- an envelope node's -- takes the next touch
+                            // whatever it lands on, as the canvas's menus do: a tile chooses, and
+                            // anywhere else dismisses without reaching what is underneath.
+                            if (interaction is Interaction.Menu) {
+                                waitForUpRelease()
+                                interaction = handleTap(
+                                    patch, camera, frame, interaction, down.position, touchPx, controls,
+                                )
+                                return@awaitEachGesture
+                            }
                             val panel = panelRect(frame)
                             // Checked before the knobs, because the buttons float over the
                             // panel and overhang its bottom edge -- where a tap would
@@ -4623,31 +4673,40 @@ fun PatchCanvas(
                             // An envelope's editor, which is not a grid of cells and has its
                             // own loop for that reason -- as the dot grid does below.
                             //
-                            // Three targets, never a mode: the shape in the middle, a sustain
-                            // rail above it and a rail of times below. A node carries a time
-                            // and a level and a drag moves both; hanging the sustain and the
-                            // keypad on that same node as well is what makes an envelope
-                            // editor unusable with a finger, so they are elsewhere entirely.
+                            // Three targets, never a mode: the shape in the middle, a rail of
+                            // levels above it and a rail of times below. A node carries a time
+                            // and a level and a drag moves both; hanging the keypad on that same
+                            // node as well is what makes an envelope editor unusable with a
+                            // finger, so the numbers are typed from the rails instead.
                             if (open.type.grid == GridKind.ENVELOPE && !onHistory && knob == null &&
                                 inEditor
                             ) {
                                 val d = frame.density
-                                // The rails are laid out from the same edges the drawing uses,
+                                // The rails are laid out by the same functions the drawing uses,
                                 // so a cell is hit where it is seen.
-                                val railEdges = envCellEdges(
-                                    envGeometry(gridArea, open, d), open,
-                                    envCellMin(d, frame.fontScale),
-                                )
+                                val railGeo = envGeometry(gridArea, open, d)
+                                val railMin = envCellMin(d, frame.fontScale)
+                                val railEdges = envCellEdges(railGeo, open, railMin)
 
-                                val sustainCell =
-                                    envCellAt(envSustainRail(gridArea, d), railEdges, down.position)
-                                if (sustainCell >= 0) {
+                                // The whole strip is the level rail's, including the stretch
+                                // between two far-apart chips: a touch there does nothing,
+                                // rather than falling through to bend a segment or, worse,
+                                // add a node to a line drawn just under the rail.
+                                val levelRail = envLevelRail(gridArea, d)
+                                if (levelRail.contains(down.position)) {
+                                    val levelCell = envLevelCellAt(
+                                        levelRail, envLevelCells(railGeo, open, levelRail, railMin),
+                                        down.position,
+                                    )
                                     if (BuildConfig.DEBUG) {
-                                        android.util.Log.d("PatchGesture", "sustain rail cell $sustainCell")
+                                        android.util.Log.d("PatchGesture", "level rail cell $levelCell")
                                     }
                                     waitForUpRelease()
-                                    open.setSustain(sustainCell)
-                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    if (levelCell >= 0) {
+                                        interaction = Interaction.Typing(
+                                            NumberTarget.SegmentLevel(open.id, levelCell),
+                                        )
+                                    }
                                     return@awaitEachGesture
                                 }
                                 val timeCell =
@@ -4682,7 +4741,7 @@ fun PatchCanvas(
                                     grabbed.level >= envFrom(open, segment)
                                 var envMoved = false
                                 var lifted = false
-                                var removed = false
+                                var menuOpened = false
 
                                 // The decide phase, under a long-press timer, as the canvas
                                 // loop does it -- the timer wraps this phase rather than
@@ -4693,7 +4752,10 @@ fun PatchCanvas(
                                 // when it means to grab something, so segments vanished while
                                 // people were trying to drag them, and a removed node costs
                                 // its time and its curve where a removed dot costs one tap to
-                                // put back. Deliberate gesture, deliberate loss.
+                                // put back. Deliberate gesture, deliberate loss. The release
+                                // mark is kept off the tap for the same reason: the node most
+                                // often touched and not moved is the release node itself, with
+                                // a note held, and a stray tap there would let the note go.
                                 try {
                                     withTimeout(longPressMs) {
                                         while (true) {
@@ -4719,14 +4781,20 @@ fun PatchCanvas(
                                     // and said nothing about why. The canvas loop above has
                                     // always caught the right one; this is why.
                                     //
-                                    // Held still on a node: take it away. Held still anywhere
-                                    // else falls through, so a slow drag on a line still bends it.
-                                    if (node >= 0 && open.removeSegment(node)) {
+                                    // Held still on a node: its menu, the release and the
+                                    // removal, which is what a long press on a module does on
+                                    // the canvas. Held still anywhere else falls through, so a
+                                    // slow drag on a line still bends it.
+                                    if (node >= 0) {
                                         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        removed = true
+                                        interaction = Interaction.Menu(
+                                            envNodes(geo, open)[node], open.id, node = node,
+                                        )
+                                        menuOpened = true
                                     }
                                 }
-                                if (removed) {
+                                if (menuOpened) {
+                                    // Swallowed, so the finger lifting is not a tap on a tile.
                                     waitForUpRelease()
                                     return@awaitEachGesture
                                 }
@@ -4774,7 +4842,8 @@ fun PatchCanvas(
                                 // at the line: a drag owns the whole column because bending is
                                 // an adjustment, where adding a node changes what the envelope
                                 // is made of. A tap on a node itself does nothing at all --
-                                // the only destructive thing in here costs a deliberate hold.
+                                // the only destructive thing in here costs a deliberate hold
+                                // and then a tile.
                                 if (!envMoved && node < 0 && segment >= 0 &&
                                     envOnCurve(geo, open, segment, down.position, d)
                                 ) {
@@ -5308,7 +5377,10 @@ fun PatchCanvas(
             (interaction as? Interaction.Menu)?.let { menu ->
                 drawMenu(
                 menuLayout(
-                    menuItems(patch, menu.targetId, menu.port, savedSubpatches.takeIf { menu.library }),
+                    menuItems(
+                        patch, menu.targetId, menu.port, savedSubpatches.takeIf { menu.library },
+                        menu.node,
+                    ),
                     menu.anchor, d, size, frame.fontScale,
                 ),
                 d, screenMeasurer,
@@ -5624,12 +5696,15 @@ private fun NumberKeypad(patch: Patch, target: NumberTarget, onDone: () -> Unit)
     val module = when (target) {
         is NumberTarget.Knob -> patch.module(target.moduleId)
         is NumberTarget.SegmentTime -> patch.module(target.moduleId)
+        is NumberTarget.SegmentLevel -> patch.module(target.moduleId)
         else -> null
     }
     val param = when (target) {
         is NumberTarget.Tempo -> TEMPO
         is NumberTarget.SegmentTime ->
             SEGMENT_TIME.takeIf { module?.segments?.indices?.contains(target.index) == true }
+        is NumberTarget.SegmentLevel ->
+            SEGMENT_LEVEL.takeIf { module?.segments?.indices?.contains(target.index) == true }
         is NumberTarget.Knob -> module?.type?.params?.getOrNull(target.index)
     } ?: run {
         // The module went away under the keypad, which only an undo could do.
@@ -5641,6 +5716,8 @@ private fun NumberKeypad(patch: Patch, target: NumberTarget, onDone: () -> Unit)
         target is NumberTarget.Tempo -> param.format(patch.tempo)
         target is NumberTarget.SegmentTime ->
             param.format((module?.segments?.get(target.index)?.time ?: 0f) * 1000f)
+        target is NumberTarget.SegmentLevel ->
+            param.format(module?.segments?.get(target.index)?.level ?: 0f)
         target is NumberTarget.Knob && target.end == ValueTarget.LOW && range != null ->
             param.format(range.low)
         target is NumberTarget.Knob && target.end == ValueTarget.HIGH && range != null ->
@@ -5650,14 +5727,16 @@ private fun NumberKeypad(patch: Patch, target: NumberTarget, onDone: () -> Unit)
         else -> ""
     }
     val label = when {
-        target is NumberTarget.SegmentTime -> "segment ${target.index + 1}"
+        // Both say which quantity as well as which one, now that an envelope types two.
+        target is NumberTarget.SegmentTime -> "segment ${target.index + 1} time"
+        target is NumberTarget.SegmentLevel -> "node ${target.index + 1} level"
         target is NumberTarget.Knob && target.end == ValueTarget.LOW -> "${param.name} from"
         target is NumberTarget.Knob && target.end == ValueTarget.HIGH -> "${param.name} to"
         else -> param.name
     }
     val accent = when (target) {
         is NumberTarget.Tempo -> TransportAccent
-        is NumberTarget.SegmentTime -> module?.type?.accent ?: TransportAccent
+        is NumberTarget.SegmentTime, is NumberTarget.SegmentLevel -> module?.type?.accent ?: TransportAccent
         is NumberTarget.Knob -> if (range != null) ModulationColor else module?.type?.accent ?: TransportAccent
     }
 
@@ -5673,6 +5752,11 @@ private fun NumberKeypad(patch: Patch, target: NumberTarget, onDone: () -> Unit)
                     val seg = m.segments.getOrNull(target.index) ?: return
                     // Typed in milliseconds, stored in seconds; see SEGMENT_TIME.
                     m.setSegment(target.index, seg.copy(time = value / 1000f))
+                }
+                is NumberTarget.SegmentLevel -> {
+                    val m = module ?: return
+                    val seg = m.segments.getOrNull(target.index) ?: return
+                    m.setSegment(target.index, seg.copy(level = value))
                 }
                 is NumberTarget.Knob -> {
                     val m = module ?: return
@@ -6093,22 +6177,24 @@ internal class EnvGeometry(val area: Rect, val axis: Float, private val inset: F
 }
 
 /**
- * The two strips that keep the envelope's other two decisions off the curve.
+ * The two strips that keep the envelope's numbers off the curve: levels above, times below.
  *
- * A node already carries a time and a level, and a drag moves both. Hanging the sustain and
- * the keypad on it as well would make the control that picks between them a mode, and a mode
- * on a fingertip-sized target is a coin toss -- which is the exact failure the roadmap
- * copied Surge to avoid. So each gets its own target instead, in its own strip, and neither
+ * A node already carries a time and a level, and a drag moves both. Hanging the keypad on it
+ * as well would make the control that picks between dragging and typing a mode, and a mode on
+ * a fingertip-sized target is a coin toss -- which is the exact failure the roadmap copied
+ * Surge to avoid. So each number gets its own target instead, in its own strip, and neither
  * can be hit by a finger aiming at the shape.
  *
- * Both are divided evenly by segment rather than laid out against the time axis, because a
- * 5ms attack is half a percent of a one-second axis and the attack is the first thing anyone
- * wants to type exactly. An even cell is always a target; the column order is what ties it
- * to the node above it.
+ * **The two rails are laid out differently because they read different things.** A time is a
+ * span, so the bottom rail tiles the segments' columns ([envCellEdges]). A level is a point --
+ * a segment stores where it is going, but on screen the level belongs to the node at its end
+ * -- so the top rail is one chip per node, centered over it ([envLevelCells]). The top rail
+ * used to carry the sustain, one cell per segment, which read as "the segment is held" when
+ * what holds is the single value at its end; that mark lives on the node now, as its `R`.
  */
 internal const val ENV_RAIL = 26f
 
-internal fun envSustainRail(area: Rect, d: Float): Rect =
+internal fun envLevelRail(area: Rect, d: Float): Rect =
     Rect(area.left, area.top, area.right, area.top + ENV_RAIL * d)
 
 internal fun envTimeRail(area: Rect, d: Float): Rect =
@@ -6131,8 +6217,8 @@ internal fun envCellMin(d: Float, fontScale: Float): Float = ENV_CELL_MIN * font
 /**
  * Where each rail cell begins and ends: n + 1 edges, left to right.
  *
- * **A cell is as wide as its segment is long**, so the rails read against the shape above
- * them rather than beside it -- the evenly-divided version put the `hold` chip nowhere near
+ * **A cell is as wide as its segment is long**, so the rail reads against the shape above
+ * it rather than beside it -- the evenly-divided version put the old `hold` chip nowhere near
  * its own dashed line and the last cell over empty canvas past the end of the curve. Every
  * cell keeps at least [envCellMin], because the whole reason the even version existed is
  * that a 5ms attack is half a percent of a one-second axis and its cell still has to be
@@ -6200,6 +6286,86 @@ internal fun envCellAt(rail: Rect, edges: List<Float>, at: Offset): Int {
         if (at.x >= edges[i] && at.x <= edges[i + 1]) return i
     }
     return -1
+}
+
+/**
+ * The level rail's chips, one per node: [minWidth] wide, centered over their nodes wherever
+ * there is room, and moved only as far as keeping them apart requires.
+ *
+ * Crowding is the ordinary case, not an edge one: a 5ms attack puts the first node almost on
+ * the rail's left end, so its chip cannot be centered at all, and two nodes a few milliseconds
+ * apart want the same spot. Each chip then moves as little as it can, which is a cluster
+ * shared out evenly around the nodes it covers rather than the second chip shoved a whole
+ * width sideways -- so every chip stays as near its own node as the others allow.
+ *
+ * Solved exactly rather than nudged: with `u[i] = left[i] - i*w`, "no two overlap" is just
+ * "u never decreases", so the nearest arrangement is an isotonic fit of what each chip wants,
+ * clamped into the rail. Past the point where they cannot all fit at [minWidth], they share
+ * the rail equally, as the time rail's cells do.
+ */
+internal fun envLevelCells(
+    geo: EnvGeometry,
+    module: PatchModule,
+    rail: Rect,
+    minWidth: Float,
+): List<Rect> {
+    val n = module.segments.size
+    if (n == 0) return emptyList()
+    val w = minOf(minWidth, rail.width / n)
+    val centers = envNodes(geo, module).map { it.x }
+
+    // Pool adjacent violators: each block is a run of chips packed edge to edge, placed at the
+    // mean of where its members want to be.
+    val sums = ArrayList<Float>(n)
+    val counts = ArrayList<Int>(n)
+    for (i in 0 until n) {
+        sums.add(centers[i] - w / 2f - i * w)
+        counts.add(1)
+        while (sums.size > 1 &&
+            sums[sums.size - 2] / counts[counts.size - 2] > sums.last() / counts.last()
+        ) {
+            val sum = sums.removeAt(sums.size - 1)
+            val count = counts.removeAt(counts.size - 1)
+            sums[sums.size - 1] += sum
+            counts[counts.size - 1] += count
+        }
+    }
+
+    // maxOf, because n * (width / n) can land a hair past the width, and coerceIn throws on
+    // an empty range rather than clamping to it.
+    val lo = rail.left
+    val hi = maxOf(lo, rail.right - n * w)
+    val cells = ArrayList<Rect>(n)
+    for (block in sums.indices) {
+        val u = (sums[block] / counts[block]).coerceIn(lo, hi)
+        repeat(counts[block]) {
+            val left = u + cells.size * w
+            cells.add(Rect(left, rail.top, left + w, rail.bottom))
+        }
+    }
+    return cells
+}
+
+/**
+ * Which level chip a touch in [rail] means, or -1.
+ *
+ * The nearest chip, within a chip's width of its center -- half a chip past either edge, which
+ * is generous in the way the promote chip is: the rail holds nothing else, so a finger in it
+ * near a level is asking for that level. Farther than that is the rail's empty stretch
+ * between two sparse nodes, which the rail keeps for itself and does nothing with.
+ */
+internal fun envLevelCellAt(rail: Rect, cells: List<Rect>, at: Offset): Int {
+    if (!rail.contains(at)) return -1
+    var best = -1
+    var bestDistance = Float.MAX_VALUE
+    cells.forEachIndexed { i, cell ->
+        val distance = abs(at.x - cell.center.x)
+        if (distance < bestDistance) {
+            best = i
+            bestDistance = distance
+        }
+    }
+    return if (best >= 0 && bestDistance <= cells[best].width) best else -1
 }
 
 /** [area] is the whole grid; the curve gets what the rails leave. */
@@ -6347,6 +6513,20 @@ private fun DrawScope.drawEnvelope(
     val geo = envGeometry(area, module, d)
     val radius = ENV_NODE_RADIUS * d
     val grid = accent.copy(alpha = 0.16f)
+    val times = module.segmentTimes
+
+    // The release, first so everything else is drawn over it: from the node the envelope waits
+    // at to the end of the shape, the part that plays once the note is let go. A region rather
+    // than the dashed line it replaced, because what it marks is a stretch of the envelope and
+    // not a moment -- and with the mark on the node there is no longer a moment to draw. None
+    // at all when nothing is marked, or when the mark is on the last node, which is honest in
+    // both cases: there is no release to see.
+    val releaseAt = module.segments.indexOfFirst { it.sustain }
+    if (releaseAt >= 0 && releaseAt < module.segments.size - 1) {
+        val from = geo.x(times[releaseAt])
+        val to = geo.x(times.last())
+        drawRect(EnvReleaseBand, Offset(from, geo.area.top), Size(to - from, geo.area.height))
+    }
 
     // The floor and the ceiling, so a level can be read against something. Two lines rather
     // than a full grid: the vertical is continuous and ruling it would imply steps.
@@ -6360,7 +6540,6 @@ private fun DrawScope.drawEnvelope(
     val path = Path()
     val origin = envOrigin(geo)
     path.moveTo(origin.x, origin.y)
-    val times = module.segmentTimes
     module.segments.indices.forEach { i ->
         val left = if (i == 0) 0f else times[i - 1]
         val steps = 24
@@ -6381,27 +6560,17 @@ private fun DrawScope.drawEnvelope(
     }
     drawPath(filled, accent.copy(alpha = 0.12f))
 
-    // The sustain, before the nodes so a node sits on top of its own marker: a dashed line
-    // down through the shape, because what it marks is a wait and a wait is a place in time.
-    val sustainAt = module.segments.indexOfFirst { it.sustain }
-    if (sustainAt >= 0) {
-        val x = geo.x(times[sustainAt])
-        var y = geo.area.top
-        while (y < geo.area.bottom) {
-            drawLine(
-                accent.copy(alpha = 0.55f),
-                Offset(x, y), Offset(x, minOf(y + 6f * d, geo.area.bottom)), 1.5f * d,
-            )
-            y += 11f * d
-        }
-    }
-
-    // The nodes. The one that sustains is drawn open, so which point the envelope waits at
-    // is legible without reading the line under it.
+    // The nodes. The one the envelope waits at is drawn open with an R in it: what is held is
+    // the single value at the end of its segment, so the mark belongs on that point and not on
+    // the segment, which is what the old `hold` chip above the shape seemed to say. Grown to
+    // fit its letter, which reads the font setting, rather than the letter shrunk to fit it.
     envNodes(geo, module).forEachIndexed { i, p ->
         if (module.segments[i].sustain) {
-            drawCircle(Color.Black, radius, p)
-            drawCircle(accent, radius, p, style = Stroke(width = 2.5f * d))
+            val r = measurer.measure("R", EnvReleaseLabelStyle)
+            val ring = maxOf(radius, maxOf(r.size.width, r.size.height) / 2f + 1f * d)
+            drawCircle(Color.Black, ring, p)
+            drawCircle(accent, ring, p, style = Stroke(width = 2.5f * d))
+            drawText(r, topLeft = Offset(p.x - r.size.width / 2f, p.y - r.size.height / 2f))
         } else {
             drawCircle(accent, radius, p)
         }
@@ -6410,27 +6579,29 @@ private fun DrawScope.drawEnvelope(
     drawCircle(accent.copy(alpha = 0.5f), radius * 0.5f, origin)
 
     // The rails. Drawn after the shape so neither can be hidden behind the fill.
-    val sustainRail = envSustainRail(area, d)
+    val levelRail = envLevelRail(area, d)
     val timeRail = envTimeRail(area, d)
-    val edges = envCellEdges(geo, module, envCellMin(d, fontScale))
+    val cellMin = envCellMin(d, fontScale)
+    val edges = envCellEdges(geo, module, cellMin)
+    val levelCells = envLevelCells(geo, module, levelRail, cellMin)
     module.segments.forEachIndexed { i, seg ->
-        val top = envCell(sustainRail, edges, i).deflate(2f * d)
+        val top = levelCells[i].deflate(2f * d)
         val bottom = envCell(timeRail, edges, i).deflate(2f * d)
 
-        // The sustain cell: filled where the envelope waits, an outline everywhere else, so
-        // the one that holds it is legible without reading the dashes in the shape.
+        // The level chip: node i's level, over node i. A reading that is tapped and never
+        // dragged, like the time under it.
         drawRoundRect(
-            if (seg.sustain) accent.copy(alpha = 0.5f) else accent.copy(alpha = 0.10f),
+            accent.copy(alpha = 0.10f),
             Offset(top.left, top.top), Size(top.width, top.height),
             CornerRadius(4f * d, 4f * d),
         )
-        val hold = measurer.measure(if (seg.sustain) "hold" else "${i + 1}", PanelValueStyle)
+        val level = measurer.measure(SEGMENT_LEVEL.format(seg.level), PanelValueStyle)
         drawText(
-            hold,
-            color = accent.copy(alpha = if (seg.sustain) 0.95f else 0.45f),
+            level,
+            color = accent.copy(alpha = 0.85f),
             topLeft = Offset(
-                top.center.x - hold.size.width / 2f,
-                top.center.y - hold.size.height / 2f,
+                top.center.x - level.size.width / 2f,
+                top.center.y - level.size.height / 2f,
             ),
         )
 
@@ -7342,7 +7513,10 @@ private fun handleTap(
 ): Interaction {
     if (current is Interaction.Menu) {
         val layout = menuLayout(
-            menuItems(patch, current.targetId, current.port, controls.saved.takeIf { current.library }),
+            menuItems(
+                patch, current.targetId, current.port, controls.saved.takeIf { current.library },
+                current.node,
+            ),
             current.anchor, frame.density, frame.canvas, frame.fontScale,
         )
         val chosen = layout.tiles.firstOrNull { it.first.contains(screen) }?.second
@@ -7386,6 +7560,15 @@ private fun handleTap(
                 patch.modules.forEach { it.expanded = false }
                 subpatch.expanded = true
             }
+            // setSustain toggles, so each asks first: a stale tile must not do the opposite
+            // of what it says.
+            is MenuItem.ReleaseAt -> patch.module(chosen.moduleId)?.let { env ->
+                if (env.segments.getOrNull(chosen.node)?.sustain == false) env.setSustain(chosen.node)
+            }
+            is MenuItem.NoRelease -> patch.module(chosen.moduleId)?.let { env ->
+                if (env.segments.getOrNull(chosen.node)?.sustain == true) env.setSustain(chosen.node)
+            }
+            is MenuItem.RemoveNode -> patch.module(chosen.moduleId)?.removeSegment(chosen.node)
         }
         return Interaction.Idle
     }
@@ -7651,6 +7834,13 @@ internal val SEGMENT_TIME = Param(
     "time", SEGMENT_MIN_TIME * 1000f, SEGMENT_MAX_TIME * 1000f, 100f, "ms", ParamCurve.EXPONENTIAL,
 )
 
+/**
+ * A node's level, on its rail chip and on the keypad: 0 to 1 and unitless, as `res` and
+ * `chance` read. What it means is decided at the far end of the cable, by the brackets of
+ * whatever the envelope is patched to.
+ */
+internal val SEGMENT_LEVEL = Param("level", 0f, 1f, 1f, "", ParamCurve.LINEAR)
+
 internal val BEATS_PER_BAR = Param("beats per bar", 2f, 8f, 4f, curve = ParamCurve.STEPPED)
 
 
@@ -7738,6 +7928,9 @@ private fun MenuItem.label(): String = when (this) {
     is MenuItem.Delete -> "Delete"
     is MenuItem.StartSubpatch -> "${type.name}\u2026"
     is MenuItem.Unpack -> "Unpack"
+    is MenuItem.ReleaseAt -> "Release here"
+    is MenuItem.NoRelease -> "No release"
+    is MenuItem.RemoveNode -> "Remove"
 }
 
 private fun MenuItem.tint(): Color = when (this) {
@@ -7751,6 +7944,9 @@ private fun MenuItem.tint(): Color = when (this) {
     is MenuItem.Delete -> Color(0xFFE07A6B)
     is MenuItem.StartSubpatch -> type.accent
     is MenuItem.Unpack -> Types.Subpatch.accent
+    // The release's own blue, so the tile is the color of the region it makes.
+    is MenuItem.ReleaseAt, is MenuItem.NoRelease -> EnvReleaseMark
+    is MenuItem.RemoveNode -> Color(0xFFE07A6B)
 }
 
 private fun DrawScope.drawMenu(layout: MenuLayout, d: Float, measurer: TextMeasurer) {
@@ -7855,6 +8051,19 @@ private val PanelValueStyle = TextStyle(
     fontSize = 16.sp,
     fontWeight = FontWeight.Medium,
     color = Color(0xFFE4E7EC),
+)
+
+/**
+ * The release: a dark blue behind the part of an envelope that plays after the note is let
+ * go, and a light one for the `R` on the node it starts from and the menu tiles that move it.
+ */
+private val EnvReleaseBand = Color(0xFF1A2B47)
+private val EnvReleaseMark = Color(0xFF7FB2FF)
+
+private val EnvReleaseLabelStyle = TextStyle(
+    fontSize = 11.sp,
+    fontWeight = FontWeight.Bold,
+    color = EnvReleaseMark,
 )
 
 /** The degree number beside a tonic row. Quiet: a landmark, not a label to read. */

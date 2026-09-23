@@ -229,19 +229,168 @@ class EnvelopeTest {
         }
     }
 
-    /** The rails are what keep the sustain and the keypad off the shape. See ENV_RAIL. */
+    /** The rails are what keep the keypad off the shape. See ENV_RAIL. */
     @Test
     fun `the rails sit above and below the curve, never over it`() {
         val (_, env) = env()
-        val sustain = envSustainRail(area, 1f)
+        val levels = envLevelRail(area, 1f)
         val times = envTimeRail(area, 1f)
         val curve = envCurveArea(area, 1f)
         assertTrue(
             "the curve sits between them",
-            curve.top >= sustain.bottom && curve.bottom <= times.top,
+            curve.top >= levels.bottom && curve.bottom <= times.top,
         )
-        val edges = envCellEdges(envGeometry(area, env, 1f), env, 10f)
-        assertEquals("and the curve area is not a rail", -1, envCellAt(sustain, edges, curve.center))
+        val geo = envGeometry(area, env, 1f)
+        val edges = envCellEdges(geo, env, 10f)
+        assertEquals("and the curve area is not a rail", -1, envCellAt(times, edges, curve.center))
+        assertEquals(
+            "on either side",
+            -1,
+            envLevelCellAt(levels, envLevelCells(geo, env, levels, 10f), curve.center),
+        )
+    }
+
+    /**
+     * A level belongs to a node, so its chip sits over the node -- not across the segment,
+     * which is what the times below do and what made the old `hold` cell read as "this
+     * segment is held" when what holds is the one value at its end.
+     */
+    @Test
+    fun `a level chip sits centered over its own node when there is room`() {
+        val (_, env) = env()
+        env.segments.clear()
+        env.segments.add(EnvSegment(0.1f, 1f, 0f))
+        env.segments.add(EnvSegment(0.1f, 0.5f, 0f))
+        env.segments.add(EnvSegment(0.2f, 0f, 0f))
+        val geo = envGeometry(area, env, 1f)
+        val rail = envLevelRail(area, 1f)
+        val cells = envLevelCells(geo, env, rail, 40f)
+
+        assertEquals(env.segments.size, cells.size)
+        envNodes(geo, env).forEachIndexed { i, node ->
+            assertEquals("chip $i is centered on node $i", node.x, cells[i].center.x, 0.5f)
+            assertEquals("and is a whole floor wide", 40f, cells[i].width, 0.01f)
+        }
+    }
+
+    /**
+     * Crowding is ordinary -- a 5ms attack sits almost on the rail's end, and two nodes a few
+     * milliseconds apart want the same spot -- and each chip moves as little as it can.
+     *
+     * The pair is the case that tells a nearest fit from a merely valid one: shoving the
+     * second chip a whole width to the right also keeps them apart, and leaves it a whole
+     * width from its node. Shared out, the two sit evenly either side of the pair.
+     */
+    @Test
+    fun `crowded level chips move apart as little as they can`() {
+        val (_, env) = env()
+        env.segments.clear()
+        env.segments.add(EnvSegment(0.005f, 1f, 0f))  // on top of the rail's left end
+        env.segments.add(EnvSegment(0.1f, 0.5f, 0f))
+        env.segments.add(EnvSegment(0.001f, 0.4f, 0f)) // a hair after the one before it
+        env.segments.add(EnvSegment(0.1f, 0f, 0f))
+        val geo = envGeometry(area, env, 1f)
+        val rail = envLevelRail(area, 1f)
+        val w = 60f
+        val cells = envLevelCells(geo, env, rail, w)
+        val nodes = envNodes(geo, env)
+
+        assertEquals("the first chip cannot hang off the rail", rail.left, cells[0].left, 0.01f)
+        cells.zipWithNext().forEach { (a, b) ->
+            assertTrue("chips must not overlap: ${a.right} then ${b.left}", b.left >= a.right - 0.01f)
+        }
+        // The pair, straddling the midpoint of its two nodes.
+        val pairCenter = (nodes[1].x + nodes[2].x) / 2f
+        assertEquals(pairCenter - w / 2f, cells[1].center.x, 0.5f)
+        assertEquals(pairCenter + w / 2f, cells[2].center.x, 0.5f)
+        assertEquals("and the uncrowded one stays put", nodes[3].x, cells[3].center.x, 0.5f)
+    }
+
+    /** At the cap, with every segment tiny, the chips still fit the rail and keep their order. */
+    @Test
+    fun `level chips fit the rail however many there are`() {
+        val (_, env) = env()
+        env.segments.clear()
+        repeat(MAX_SEGMENTS) { env.segments.add(EnvSegment(0.002f, 0.5f, 0f)) }
+        val geo = envGeometry(area, env, 1f)
+        val rail = envLevelRail(area, 1f)
+        val cells = envLevelCells(geo, env, rail, 200f)  // floors that cannot possibly all fit
+        assertEquals(MAX_SEGMENTS, cells.size)
+        cells.zipWithNext().forEach { (a, b) ->
+            assertTrue("in order and apart: ${a.right} then ${b.left}", b.left >= a.right - 0.01f)
+        }
+        assertTrue(cells.first().left >= rail.left - 0.01f)
+        assertTrue(cells.last().right <= rail.right + 0.01f)
+    }
+
+    /**
+     * The rail holds nothing but levels, so a finger near one is asking for it -- and the empty
+     * stretch between two far-apart chips is the rail's own, so it answers nothing.
+     */
+    @Test
+    fun `a touch in the level rail finds the level it is near, and only that`() {
+        val (_, env) = env()
+        env.segments.clear()
+        env.segments.add(EnvSegment(0.05f, 1f, 0f))
+        env.segments.add(EnvSegment(0.4f, 0f, 0f))
+        val geo = envGeometry(area, env, 1f)
+        val rail = envLevelRail(area, 1f)
+        val cells = envLevelCells(geo, env, rail, 40f)
+        val y = rail.center.y
+
+        assertEquals(0, envLevelCellAt(rail, cells, Offset(cells[0].center.x, y)))
+        assertEquals(1, envLevelCellAt(rail, cells, Offset(cells[1].center.x, y)))
+        assertEquals(
+            "just past a chip's edge still means that chip",
+            1,
+            envLevelCellAt(rail, cells, Offset(cells[1].left - 10f, y)),
+        )
+        val between = (cells[0].right + cells[1].left) / 2f
+        assertTrue("the probe is far from both", cells[1].left - cells[0].right > 2f * 40f)
+        assertEquals("the empty stretch is nothing", -1, envLevelCellAt(rail, cells, Offset(between, y)))
+    }
+
+    /** 0 to 1 and unitless, as `res` and `chance` read. */
+    @Test
+    fun `a node's level is typed from 0 to 1`() {
+        assertEquals(0f, SEGMENT_LEVEL.min)
+        assertEquals(1f, SEGMENT_LEVEL.max)
+        assertEquals("", SEGMENT_LEVEL.unit)
+        assertEquals("0.6", SEGMENT_LEVEL.format(0.6f))
+        assertEquals("typed past the top is the top", 1f, keypadValue("1.5", SEGMENT_LEVEL))
+    }
+
+    /**
+     * A long press on a node opens its menu, as a long press on a module does on the canvas:
+     * the release and the removal, the two things done *to* a node rather than with it.
+     *
+     * The release was never put on a tap, which was free, for the reason removal left it: a
+     * touch that never clears the slop is a tap, and the node most often touched and left
+     * where it is is the release node itself -- with a note held, being tuned by ear.
+     */
+    @Test
+    fun `a node's menu offers its release and its removal`() {
+        val (patch, env) = env()  // the default: its second node is the one that waits
+        assertEquals(
+            listOf(MenuItem.ReleaseAt(env.id, 0), MenuItem.RemoveNode(env.id, 0)),
+            menuItems(patch, env.id, node = 0),
+        )
+        assertEquals(
+            "the node that waits offers to stop waiting",
+            listOf(MenuItem.NoRelease(env.id, 1), MenuItem.RemoveNode(env.id, 1)),
+            menuItems(patch, env.id, node = 1),
+        )
+        while (env.segments.size > 1) env.removeSegment(env.segments.size - 1)
+        assertEquals(
+            "and the last node cannot be removed, so it is not offered",
+            listOf(if (env.segments[0].sustain) MenuItem.NoRelease(env.id, 0) else MenuItem.ReleaseAt(env.id, 0)),
+            menuItems(patch, env.id, node = 0),
+        )
+        assertEquals(
+            "a node that is not there offers nothing",
+            emptyList<MenuItem>(),
+            menuItems(patch, env.id, node = 5),
+        )
     }
 
     /**
