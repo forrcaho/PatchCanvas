@@ -111,7 +111,7 @@ class SubpatchLibraryTest {
     @Test
     fun `a file that is not one subpatch is refused`() {
         val patch = Patch()
-        assertNull("a whole patch is not a subpatch", patch.loadSubpatch(demoPatch().toJson(), Offset.Zero))
+        assertNull("a whole patch is not a subpatch", patch.loadSubpatch(fixturePatch().toJson(), Offset.Zero))
         assertNull("nor is nonsense", patch.loadSubpatch("{\"version\":7}", Offset.Zero))
         assertNull("nor is a version this build cannot read", patch.loadSubpatch("{\"version\":2}", Offset.Zero))
 
@@ -131,7 +131,7 @@ class SubpatchLibraryTest {
 
     @Test
     fun `the whole patch saves as one subpatch and leaves the patch alone`() {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         val before = patch.toJson()
 
         val json = patch.patchToSubpatchJson("Whole thing")!!

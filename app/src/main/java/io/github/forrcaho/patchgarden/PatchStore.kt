@@ -502,7 +502,7 @@ fun patchFromJson(text: String, scales: ScaleLibrary = ScaleLibrary.of(null)): P
  * built around a VCA an envelope opened would come back as a filter fed by nothing,
  * quieter than it was left, with the load reporting success. So every older file is
  * refused, and [PatchStore.load] moves a refused file to patch.rejected.json rather than
- * letting the demo patch overwrite it -- refusing costs the file nothing. Decided
+ * letting the empty patch opened in its place overwrite it -- refusing costs the file nothing. Decided
  * 2026-09-15.
  *
  * The ladder that was here walked 1 to 2 to 3 to 4, one step per change, and went with
@@ -560,7 +560,7 @@ class PatchStore(context: Context, private val scales: ScaleLibrary) {
      * The patch on disk, or null for one this build will not read.
      *
      * A refused file is moved aside rather than left where it is, because the caller's
-     * only answer to null is the demo patch -- and the next autosave would write that over
+     * only answer to null is an empty patch -- and the next autosave would write that over
      * the file it just refused. "Refuse" would then mean "destroy", which is not what
      * refusing is for: the point of it is that a file this build cannot read honestly is
      * left alone instead of half-converted.

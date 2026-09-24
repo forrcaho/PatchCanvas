@@ -3516,6 +3516,13 @@ between refusing just those files -- the first refusal to look inside a file rat
 version -- and refusing every 14. Forrest took the second: during development there is no
 patch worth keeping.
 
+**And a refused or missing patch now opens an empty canvas**, which is what "New patch"
+leaves. The built-in demo it replaced had stopped describing the app: it began with Steps,
+which the Add menu no longer offers, put the Filter outside the Voice where it could track
+nothing, and did not fit the phone's screen. Demo patches come back before release as files
+in the library, which is where something to load belongs. The old one lives on in the tests
+as `fixturePatch()`, since fifty of them know its shape.
+
 ### The fm port comes back to Osc
 
 **Now that an `Osc` is one voice again**, the objection that retired it is gone: it used to

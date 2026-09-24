@@ -211,7 +211,7 @@ class GraphSyncTest {
 
     @Test
     fun `first sync sends every node and cable`() {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         sync.sync(patch)
 
         val adds = rec.log.filterIsInstance<Cmd.Add>()
@@ -228,7 +228,7 @@ class GraphSyncTest {
 
     @Test
     fun `every add precedes every connect`() {
-        sync.sync(demoPatch())
+        sync.sync(fixturePatch())
         val lastAdd = rec.log.indexOfLast { it is Cmd.Add }
         val firstConnect = rec.log.indexOfFirst { it is Cmd.Connect }
         assertTrue("add at $lastAdd, connect at $firstConnect", lastAdd < firstConnect)
@@ -236,7 +236,7 @@ class GraphSyncTest {
 
     @Test
     fun `an unchanged patch sends nothing`() {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         sync.sync(patch)
         rec.clear()
         sync.sync(patch)
@@ -245,7 +245,7 @@ class GraphSyncTest {
 
     @Test
     fun `moving a module is not a graph change`() {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         sync.sync(patch)
         rec.clear()
         patch.free.first().position = Offset(999f, 999f)
@@ -255,7 +255,7 @@ class GraphSyncTest {
 
     @Test
     fun `adding a module sends one add`() {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         sync.sync(patch)
         rec.clear()
         val added = patch.add(Types.Osc, Offset.Zero)!!
@@ -266,7 +266,7 @@ class GraphSyncTest {
 
     @Test
     fun `removing a module drops its cables before the node`() {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         sync.sync(patch)
         rec.clear()
 
@@ -282,7 +282,7 @@ class GraphSyncTest {
 
     @Test
     fun `re-patching an occupied input sends no disconnect`() {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         val a = patch.add(Types.Osc, Offset.Zero)!!
         patch.connect(PortRef(a.id, PortDirection.OUTPUT, 0), PortRef(OUT_ID, PortDirection.INPUT, 0))
         sync.sync(patch)
@@ -306,7 +306,7 @@ class GraphSyncTest {
 
     @Test
     fun `a cable removed outright still disconnects`() {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         sync.sync(patch)
         rec.clear()
 
@@ -324,7 +324,7 @@ class GraphSyncTest {
 
     @Test
     fun `invalidate forces a full resend`() {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         sync.sync(patch)
         val first = rec.log.size
         rec.clear()
@@ -336,7 +336,7 @@ class GraphSyncTest {
 
     @Test
     fun `a reloaded patch syncs like any other change`() {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         sync.sync(patch)
         rec.clear()
 
@@ -348,7 +348,7 @@ class GraphSyncTest {
 
     @Test
     fun `a new node has every knob sent`() {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         sync.sync(patch)
         rec.clear()
 
@@ -363,7 +363,7 @@ class GraphSyncTest {
 
     @Test
     fun `turning one knob sends one command`() {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         sync.sync(patch)
         rec.clear()
 
@@ -376,7 +376,7 @@ class GraphSyncTest {
 
     @Test
     fun `knobs that did not move send nothing`() {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         sync.sync(patch)
         rec.clear()
         sync.sync(patch)
@@ -385,7 +385,7 @@ class GraphSyncTest {
 
     @Test
     fun `knobs are sent after the node exists`() {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         sync.sync(patch)
         rec.clear()
         val added = patch.add(Types.Osc, Offset.Zero)!!
@@ -398,7 +398,7 @@ class GraphSyncTest {
 
     @Test
     fun `garbage is collected on every sync`() {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         sync.sync(patch)
         sync.sync(patch)
         assertEquals(2, rec.collected)
@@ -408,7 +408,7 @@ class GraphSyncTest {
 
     /** A sequencer's notes output into a voice, which is the patch this all exists for. */
     private fun withVoice(): Triple<Patch, PatchModule, PatchModule> {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         val steps = patch.free.first { it.type.stepCount > 0 }
         val voice = patch.add(Types.Osc, Offset.Zero)!!
         patch.connect(notesOut(steps), notesIn(voice))
@@ -623,7 +623,7 @@ class ModuleContractTest {
 
     @Test
     fun `signal kinds survive a patch round trip`() {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         val restored = patchFromJson(patch.toJson())!!
         patch.connections.forEach { cable ->
             assertEquals(
@@ -803,7 +803,7 @@ class SequenceTest {
     private fun sequencer(patch: Patch) = patch.free.first { it.type.stepCount > 0 }
 
     private fun withSteps(): Pair<Patch, PatchModule> {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         return patch to sequencer(patch)
     }
 
@@ -1006,14 +1006,14 @@ class TransportSyncTest {
 
     @Test
     fun `the first sync sends the tempo`() {
-        val patch = demoPatch().apply { tempo = 133f }
+        val patch = fixturePatch().apply { tempo = 133f }
         sync.sync(patch)
         assertEquals(listOf(Cmd.SetTempo(133f)), tempos())
     }
 
     @Test
     fun `changing the tempo sends it once and nothing else`() {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         sync.sync(patch)
         rec.clear()
 
@@ -1025,7 +1025,7 @@ class TransportSyncTest {
 
     @Test
     fun `an unchanged tempo is not sent again`() {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         sync.sync(patch)
         rec.clear()
         sync.sync(patch)
@@ -1035,7 +1035,7 @@ class TransportSyncTest {
     /** The engine keeps its transport across a restart, but not the rate it was told. */
     @Test
     fun `invalidate sends the tempo again`() {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         sync.sync(patch)
         rec.clear()
 
@@ -1333,7 +1333,7 @@ class SoundFontSyncTest {
 
     @Test
     fun `nothing but an SF is sent a font`() {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         val rec = Recorder()
         GraphSync(rec).sync(patch, mapOf(chosen to bank))
         assertTrue(rec.log.none { it is Cmd.SetFont })

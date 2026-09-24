@@ -15,7 +15,7 @@ import org.junit.Test
  */
 class PatchJsonTest {
 
-    private fun sample(): Patch = demoPatch()
+    private fun sample(): Patch = fixturePatch()
 
     @Test
     fun `round trip preserves modules, positions and cables`() {
@@ -205,7 +205,7 @@ class PatchJsonTest {
 
     @Test
     fun `a patch has a name, saved and undone, and absent until it is given one`() {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         assertEquals("Patch", patch.title)
         assertTrue("nothing in the file until it is named", !patch.toJson().contains("\"name\":\"Patch\""))
 
@@ -215,14 +215,14 @@ class PatchJsonTest {
         assertEquals("and the round trip is byte for byte", json, patchFromJson(json)!!.toJson())
 
         // Undo restores it through the model, like every other part of a patch.
-        val before = demoPatch().toJson()
+        val before = fixturePatch().toJson()
         patch.replaceWith(patchFromJson(before)!!)
         assertEquals("Patch", patch.title)
     }
 
     @Test
     fun `a new patch is empty, in the default tuning and tempo, and undoes back`() {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         patch.name = "Something"
         patch.tempo = 96f
         patch.scales = listOf(ScaleEntry(Scale.Chromatic, rootCents = 300f))

@@ -115,7 +115,7 @@ class ReplaceWithTest {
 
     @Test
     fun `a replaced patch serializes identically to its snapshot`() {
-        val snapshot = demoPatch().toJson()
+        val snapshot = fixturePatch().toJson()
 
         val live = Patch()
         live.replaceWith(patchFromJson(snapshot)!!)
@@ -125,11 +125,11 @@ class ReplaceWithTest {
 
     @Test
     fun `replacing restores modules, knobs and cables over a different patch`() {
-        val before = demoPatch()
+        val before = fixturePatch()
         before.free.first { it.type.name == "Filter" }.setParam(0, 4321f)
         val snapshot = before.toJson()
 
-        val live = demoPatch()
+        val live = fixturePatch()
         live.remove(live.free.first { it.type.name == "Osc" })
         live.add(Types.Mix, Offset(900f, 900f))
         live.connections.clear()
@@ -143,12 +143,12 @@ class ReplaceWithTest {
 
     @Test
     fun `the rails survive, and their knobs come back with the snapshot`() {
-        val before = demoPatch()
+        val before = fixturePatch()
         val level = before.module(OUT_ID)!!
         level.setParam(0, level.params[0] * 0.5f)
         val snapshot = before.toJson()
 
-        val live = demoPatch()
+        val live = fixturePatch()
         live.module(OUT_ID)!!.setParam(0, 1f)
 
         live.replaceWith(patchFromJson(snapshot)!!)
@@ -166,8 +166,8 @@ class ReplaceWithTest {
      */
     @Test
     fun `a replacement is applied as one change, never as an empty patch`() {
-        val live = demoPatch()
-        val snapshot = patchFromJson(demoPatch().toJson())!!
+        val live = fixturePatch()
+        val snapshot = patchFromJson(fixturePatch().toJson())!!
 
         val observed = mutableListOf<Int>()
         val handle = Snapshot.registerApplyObserver { _, _ -> observed += live.connections.size }
@@ -188,7 +188,7 @@ class ReplaceWithTest {
      */
     @Test
     fun `the open panel stays open across a restore`() {
-        val live = demoPatch()
+        val live = fixturePatch()
         val open = live.free.first { it.type.name == "Filter" }
         open.expanded = true
         val snapshot = live.toJson()
@@ -201,8 +201,8 @@ class ReplaceWithTest {
 
     @Test
     fun `a panel whose module the snapshot predates closes`() {
-        val snapshot = demoPatch().toJson()
-        val live = demoPatch()
+        val snapshot = fixturePatch().toJson()
+        val live = fixturePatch()
         val added = live.add(Types.Mix, Offset(10f, 10f))!!
         added.expanded = true
 
@@ -214,7 +214,7 @@ class ReplaceWithTest {
 
     @Test
     fun `undo puts the tempo and beats per bar back`() {
-        val live = demoPatch()
+        val live = fixturePatch()
         val snapshot = live.toJson()
         live.tempo = 211f
         live.beatsPerBar = 7
@@ -237,7 +237,7 @@ class ReplaceWithTest {
         val major = library.byName("Major")!!
         val minor = library.byName("Minor")!!
 
-        val live = demoPatch().apply { scales = listOf(ScaleEntry(major, 2, 1), ScaleEntry(minor)) }
+        val live = fixturePatch().apply { scales = listOf(ScaleEntry(major, 2, 1), ScaleEntry(minor)) }
         val snapshot = live.toJson()
         live.scales = listOf(ScaleEntry(minor))
 
@@ -251,8 +251,8 @@ class ReplaceWithTest {
 
     @Test
     fun `a module added after the snapshot is gone once it is restored`() {
-        val snapshot = demoPatch().toJson()
-        val live = demoPatch()
+        val snapshot = fixturePatch().toJson()
+        val live = fixturePatch()
 
         val added = live.add(Types.Mix, Offset(10f, 10f))!!
         live.connect(
@@ -379,7 +379,7 @@ class RestoreChangeSetTest {
 
     /** Applies [edit] to a copy of the demo patch and returns what restoring it flags. */
     private fun changesAfter(edit: Patch.() -> Unit): Set<Long> {
-        val live = demoPatch()
+        val live = fixturePatch()
         val snapshot = live.toJson()
         live.edit()
         return live.replaceWith(patchFromJson(snapshot)!!)
@@ -392,7 +392,7 @@ class RestoreChangeSetTest {
 
     @Test
     fun `a knob flags only its own module`() {
-        val filter = demoPatch().free.first { it.type.name == "Filter" }.id
+        val filter = fixturePatch().free.first { it.type.name == "Filter" }.id
         assertEquals(
             setOf(filter),
             changesAfter { module(filter)!!.setParam(0, 77f) },
@@ -401,7 +401,7 @@ class RestoreChangeSetTest {
 
     @Test
     fun `a move flags only the module that moved`() {
-        val osc = demoPatch().free.first { it.type.name == "Osc" }.id
+        val osc = fixturePatch().free.first { it.type.name == "Osc" }.id
         assertEquals(
             setOf(osc),
             changesAfter { module(osc)!!.position = Offset(1f, 1f) },
@@ -410,7 +410,7 @@ class RestoreChangeSetTest {
 
     @Test
     fun `a cable flags both of the modules it touches`() {
-        val live = demoPatch()
+        val live = fixturePatch()
         val osc = live.free.first { it.type.name == "Osc" }.id
         // A second filter, because the demo already patches the oscillator into its
         // first one and re-making a cable that is already there changes nothing.
@@ -430,7 +430,7 @@ class RestoreChangeSetTest {
 
     @Test
     fun `a module that appears on restore is flagged`() {
-        val live = demoPatch()
+        val live = fixturePatch()
         val snapshot = live.toJson()
         val doomed = live.free.first { it.type.name == "Filter" }
         live.remove(doomed)
@@ -448,7 +448,7 @@ class RestoreChangeSetTest {
 
     @Test
     fun `flashing nothing does not fire a pulse`() {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         val before = patch.flash.serial
         patch.flash(emptySet())
         assertEquals(before, patch.flash.serial)
@@ -456,7 +456,7 @@ class RestoreChangeSetTest {
 
     @Test
     fun `the same set twice still fires, so undo and redo both pulse`() {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         patch.flash(setOf(1L))
         val first = patch.flash.serial
         patch.flash(setOf(1L))

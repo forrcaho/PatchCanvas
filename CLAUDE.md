@@ -184,7 +184,7 @@ the two knobs it does not know, and autosave it as a lowpass. **Adding a module 
 nothing needs converting: an older build reads an unknown type as retired, skips it, and
 autosaves the patch without it -- the bump makes that build refuse the file instead. What
 makes that affordable is that `PatchStore.load` moves a refused file to
-`patch.rejected.json` before the demo patch can be autosaved over it. **A refusal must
+`patch.rejected.json` before the empty patch opened in its place can be autosaved over it. **A refusal must
 never be a delete** -- check that still holds before adding another one.
 
 **Undo restores through the model, in one snapshot.** A snapshot is the autosave JSON;

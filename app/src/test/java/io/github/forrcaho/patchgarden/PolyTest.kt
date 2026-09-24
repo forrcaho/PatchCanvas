@@ -275,7 +275,7 @@ class PolyTest {
      */
     @Test
     fun `the patch a fresh install opens with is a poly subpatch`() {
-        val patch = demoPatch()
+        val patch = fixturePatch()
         val voice = patch.modules.single { it.type == Types.Poly }
         assertEquals("Voice", voice.name)
         assertEquals(

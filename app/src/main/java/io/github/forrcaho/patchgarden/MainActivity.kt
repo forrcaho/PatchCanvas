@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -127,7 +128,9 @@ class MainActivity : ComponentActivity() {
         subpatches = SubpatchLibrary.load(this)
         soundFonts = SoundFontLibrary.load(this)
         store = PatchStore(this, scales)
-        patch = store.load() ?: demoPatch()
+        // Nothing saved, or a file this build refused: an empty canvas, as "New patch" leaves.
+        // Demo patches, when there are some, are for the library rather than for here.
+        patch = store.load() ?: Patch()
 
         // Debug only. Armed before the engine starts, because the ring is allocated in
         // start() and freed in stop() -- which is what lets the audio thread write into
@@ -413,5 +416,5 @@ fun PatchGardenApp(
 @Preview(widthDp = 800, heightDp = 400, showBackground = true)
 @Composable
 private fun PatchGardenPreview() {
-    PatchGardenApp(rememberDemoPatch())
+    PatchGardenApp(remember { Patch() })
 }

@@ -237,7 +237,7 @@ class DotSeqTest {
     fun `Seq took Steps' place in the menu, and Steps still loads`() {
         assertTrue(Types.Seq in Types.palette)
         assertTrue("not offered", Types.Steps !in Types.palette)
-        val patch = demoPatch()
+        val patch = fixturePatch()
         assertTrue("the demo patch has one", patch.modules.any { it.type == Types.Steps })
         val back = patchFromJson(patch.toJson())!!
         assertEquals("and it comes back", patch.modules.count { it.type == Types.Steps }, back.modules.count { it.type == Types.Steps })
