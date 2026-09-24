@@ -653,15 +653,15 @@ void aMixChannelIsAGainThatCanBeShut() {
 }
 
 /**
- * The Amp is a multiplier with a knob, and an open one when nothing is patched to it.
+ * The Amp multiplies its audio by what arrives on `mod`, which is its gain knob per sample.
  *
- * The second half is the part worth pinning: silence is the right idle for an input that is
- * summed and the wrong one for an input that multiplies, so this port declares itself a
- * unity input and the graph hands it ones. An Amp dropped into a patch with nothing on its
- * mod jack has to pass its audio, or it reads as a module that does not work.
+ * The node's half is only the multiply: turning the knob and the modulator into that gain --
+ * the knob while nothing is patched, the modulator swept between the brackets once something
+ * is -- is the graph's, and graph_test checks it there. What is pinned here is that the port
+ * declares itself the gain's, since that declaration is what the graph acts on.
  */
-void anAmpMultipliesAndIsOpenWithNothingPatched() {
-    std::printf("an amp multiplies, and is open with nothing patched\n");
+void anAmpMultipliesByTheGainItIsHanded() {
+    std::printf("an amp multiplies by the gain it is handed\n");
     const auto signal = constantBuffer(1.0f);
     const auto half = constantBuffer(0.5f);
     const auto shut = constantBuffer(0.0f);
@@ -671,21 +671,12 @@ void anAmpMultipliesAndIsOpenWithNothingPatched() {
     amp.setInput(0, signal.data());
 
     amp.setInput(1, half.data());
-    check(std::fabs(peak(run(amp, 4)) - 0.5f) < 0.001f, "the modulator is a gain");
-
+    check(std::fabs(peak(run(amp, 4)) - 0.5f) < 0.001f, "the gain it is handed is the gain");
     amp.setInput(1, shut.data());
-    check(peak(run(amp, 4)) == 0.0f, "and shuts it");
+    check(peak(run(amp, 4)) == 0.0f, "and nothing shuts it");
 
-    amp.setInput(1, half.data());
-    amp.setParam(0, 2.0f);
-    check(std::fabs(peak(run(amp, 4)) - 1.0f) < 0.001f, "the knob multiplies on top of it");
-
-    // What Graph hands an unpatched unity input; see Node::unityInputs.
-    check(amp.unityInputs() == (1u << 1), "the mod port asks for ones rather than silence");
-    const auto ones = constantBuffer(1.0f);
-    amp.setParam(0, 1.0f);
-    amp.setInput(1, ones.data());
-    check(std::fabs(peak(run(amp, 4)) - 1.0f) < 0.001f, "so nothing patched is wide open");
+    check(amp.drivenParam(1) == 0, "mod drives the gain knob");
+    check(amp.drivenParam(0) == -1, "and the audio input drives nothing");
 }
 
 /** 120bpm at 48k: 24000 frames a beat, so the default 1/8 step is 12000. */
@@ -2901,7 +2892,7 @@ int main() {
     envEndsTheNotesOfASourceThatWasUnpatched();
     envMatchesAnOffAgainstItsOwnSource();
     aMixChannelIsAGainThatCanBeShut();
-    anAmpMultipliesAndIsOpenWithNothingPatched();
+    anAmpMultipliesByTheGainItIsHanded();
     aPolySubpatchGivesEachNoteItsOwnInstance();
     aPolySubpatchUsesOnlyTheInstancesItsKnobAllows();
     stealingAnInstanceEndsTheNoteItWasHolding();

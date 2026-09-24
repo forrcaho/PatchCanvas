@@ -243,6 +243,17 @@ data class Param(
      * about Euclid, 2026-09-19.
      */
     val degree: Boolean = false,
+    /**
+     * The input port that sweeps this knob, per sample, or -1 for an ordinary knob.
+     *
+     * A driven knob's jack is built in: with nothing in the port the knob is the value, and
+     * with something patched the row grows brackets like an exposed knob's and the port's
+     * signal sweeps between them -- every sample, where an exposed knob moves once a block.
+     * It cannot also be exposed, since that would be a second jack on the same number: Amp's
+     * gain had both for a while, and the same envelope patched into each was applied twice.
+     * The engine's side is Node::drivenParam.
+     */
+    val drivenBy: Int = -1,
 ) {
     /**
      * How many options a stepped parameter offers.
@@ -846,16 +857,17 @@ object Types {
      * subpatch is Env and the thing Env opens, and that should be one cable rather than
      * opening a Mix, exposing a knob, setting its brackets and then patching.
      *
-     * Its modulation input is a *port*, not a jack on a knob, which is the other half of
-     * why it exists: a port is read per sample where a parameter is applied once a block,
-     * and a 5ms attack through a 1500Hz control rate is a staircase. With nothing patched
-     * there the port reads as fully open and this is a gain knob -- see Node::unityInputs
-     * in node.h, which exists for exactly this port.
+     * Its `mod` port is the gain's own jack ([Param.drivenBy]): with nothing in it the knob
+     * is the gain, and with something patched the gain row grows brackets and the signal
+     * sweeps between them, from 0 up to the knob until they are moved -- which is the VCA's
+     * `in * mod * gain`. A *port* rather than an exposed knob, because a port is read per
+     * sample where a parameter is applied once a block, and a 5ms attack through a 1500Hz
+     * control rate is a staircase.
      */
     val Amp = ModuleType(
         "Amp", listOf(Port("in", A), Port("mod", M)), listOf(Port("out", A)),
         Color(0xFFA890A8),
-        params = listOf(Param("gain", 0f, 2f, 1f, "", LIN)),
+        params = listOf(Param("gain", 0f, 2f, 1f, "", LIN, drivenBy = 1)),
     )
     val Mix = ModuleType(
         "Mix",
@@ -1282,7 +1294,28 @@ class PatchModule(
      * knob adds and removes nodes, which is not something a modulator can be allowed to do
      * once a block.
      */
-    fun canExpose(index: Int): Boolean = !isPinned && !type.structural && index in type.rowParams
+    fun canExpose(index: Int): Boolean =
+        !isPinned && !type.structural && index in type.rowParams && !isDriven(index)
+
+    /** Whether knob [index] is swept by one of this module's own ports; see [Param.drivenBy]. */
+    fun isDriven(index: Int): Boolean = (type.params.getOrNull(index)?.drivenBy ?: -1) >= 0
+
+    /**
+     * Whether knob [index] has a jack of its own -- a range stored for it, and it is not a
+     * driven knob, whose range belongs to the port that drives it and gets no second jack.
+     */
+    fun isExposed(index: Int): Boolean = index in modRanges && !isDriven(index)
+
+    /** The exposed knobs, which are what the band of modulation jacks is made of. */
+    val exposed: Set<Int> get() = modRanges.keys.filterTo(sortedSetOf()) { !isDriven(it) }
+
+    /**
+     * What a driven knob sweeps when its port is patched: the brackets it was given, or from
+     * silence up to the knob -- `in * mod * gain`, which is what an Amp did before it had
+     * brackets. Stored only once a bracket moves.
+     */
+    fun drivenRange(index: Int): ModRange =
+        modRanges[index] ?: ModRange(0f, params.getOrElse(index) { type.params[index].default })
 
     /**
      * The degree shown on the grid's top row.
@@ -1323,7 +1356,7 @@ class PatchModule(
      * grows downward, below the side jacks, which [portIn] places from the top -- so exposing
      * a parameter never moves a jack already on the module.
      */
-    val height: Float get() = HEADER + portsBody + modBandFor(type, modRanges.keys)
+    val height: Float get() = HEADER + portsBody + modBandFor(type, exposed)
 
     /**
      * The ports' band. Equal to the body, now that opening a module leaves the canvas.
@@ -1338,7 +1371,7 @@ class PatchModule(
     val bounds: Rect get() = Rect(position, Size(width, height))
 
     /**
-     * The side jacks. Empty for [PortDirection.MOD], whose ports are [modRanges].
+     * The side jacks. Empty for [PortDirection.MOD], whose ports are [exposed].
      *
      * A subpatch's come from [subpatchPorts]: the box takes inputs and gives outputs, and inside,
      * the left rail gives the subpatch's inputs to what is there and the right rail takes its
@@ -1734,10 +1767,13 @@ internal fun panelBracketX(row: Rect, d: Float, param: Param, value: Float, clos
  * of at all. Where the two brackets coincide, the side the finger landed on decides.
  */
 internal fun panelBracketAt(
-    panel: Rect, d: Float, module: PatchModule, rows: List<ParamRow>, at: Offset,
+    panel: Rect, d: Float, module: PatchModule, rows: List<ParamRow>,
+    /** The brackets a row shows; [Patch.rangeOf], which alone can see a driven knob's cable. */
+    rangeOf: (ParamRow) -> ModRange?,
+    at: Offset,
 ): Pair<ParamRow, Boolean>? {
     rows.forEachIndexed { slot, entry ->
-        val range = entry.owner.modRanges[entry.index] ?: return@forEachIndexed
+        val range = rangeOf(entry) ?: return@forEachIndexed
         val row = panelRowAt(panel, d, module.type, rows.size, slot)
         val reach = PatchModule.BRACKET_REACH * d
         val zone = Rect(row.left - reach, row.top - 6f * d, row.right + reach, row.bottom + 6f * d)
@@ -1767,14 +1803,16 @@ enum class ValueTarget { VALUE, LOW, HIGH }
  * A stepped row has no reading: its lit button is the value, and there is nothing to type.
  */
 internal fun panelValueAt(
-    panel: Rect, d: Float, module: PatchModule, rows: List<ParamRow>, at: Offset,
+    panel: Rect, d: Float, module: PatchModule, rows: List<ParamRow>,
+    rangeOf: (ParamRow) -> ModRange?,
+    at: Offset,
     widthOf: (String) -> Float,
 ): Pair<ParamRow, ValueTarget>? {
     rows.forEachIndexed { slot, entry ->
         val param = entry.param
         if (param.buttons) return@forEachIndexed
         val row = panelRowAt(panel, d, module.type, rows.size, slot)
-        val range = entry.owner.modRanges[entry.index]
+        val range = rangeOf(entry)
         val text = if (range != null) rangeReading(param, range)
             else param.format(entry.owner.params.getOrElse(entry.index) { param.default })
         val width = widthOf(text)
@@ -1810,18 +1848,20 @@ internal fun rangeReading(param: Param, range: ModRange): String =
 internal fun Patch.moveBracket(
     row: ParamRow, bar: Rect, closing: Boolean, screenX: Float,
 ) {
-    val range = row.owner.modRanges[row.index] ?: return
+    val range = rangeOf(row.owner, row.index) ?: return
     val value = row.param.valueAt(panelKnobPosition(bar, screenX))
-    expose(row.owner, row.index, if (closing) range.copy(high = value) else range.copy(low = value))
+    setRange(row.owner, row.index, if (closing) range.copy(high = value) else range.copy(low = value))
 }
 
 internal fun panelKnobAt(
-    panel: Rect, d: Float, module: PatchModule, rows: List<ParamRow>, at: Offset,
+    panel: Rect, d: Float, module: PatchModule, rows: List<ParamRow>,
+    rangeOf: (ParamRow) -> ModRange?,
+    at: Offset,
 ): ParamRow? {
     rows.forEachIndexed { slot, entry ->
-        // An exposed row's knob is not the hand's. It shows where the modulator has taken the
+        // A bracketed row's knob is not the hand's. It shows where the modulator has taken the
         // parameter, and dragging it would set a value nothing is listening to.
-        if (entry.index in entry.owner.modRanges) return@forEachIndexed
+        if (rangeOf(entry) != null) return@forEachIndexed
         // Generous vertically: the rows are the only targets on the panel, so a near
         // miss should still land rather than do nothing.
         if (panelRowAt(panel, d, module.type, rows.size, slot).inflate(6f * d).contains(at)) return entry
@@ -2631,7 +2671,7 @@ class Patch {
         if (ref.dir != PortDirection.MOD) return module.ports(ref.dir).getOrNull(ref.index)
         // A parameter's jack, which exists only while the parameter is exposed. Modulation
         // by definition -- it is the one thing a knob knows how to be driven by.
-        if (ref.index !in module.modRanges) return null
+        if (!module.isExposed(ref.index)) return null
         val param = module.type.params.getOrNull(ref.index) ?: return null
         return Port(param.short, SignalKind.MODULATION)
     }
@@ -3342,7 +3382,7 @@ class Patch {
 
     /** Takes a parameter's jack away, and whatever was patched into it. */
     fun unexpose(module: PatchModule, index: Int) {
-        if (index !in module.modRanges) return
+        if (!module.isExposed(index)) return
         val jack = PortRef(module.id, PortDirection.MOD, index)
         // Before the cable goes, since the cable is what says which port reached this jack.
         val ports = subpatchPortsOn(module.parent, setOf(jack))
@@ -3351,6 +3391,28 @@ class Patch {
         // The jack is not coming back, so a subpatch port that reached only it has nothing
         // left to reach: it would be a jack on the box that quietly went nowhere.
         dropOrphanedSubpatchPorts(module.parent, ports)
+    }
+
+    /**
+     * The brackets knob [index] of [module] shows, or null for a plain knob.
+     *
+     * An exposed knob has them whether or not anything is in its jack, as it always has. A
+     * driven knob has them only while its port is patched, since that is when the port is
+     * sweeping it -- with nothing there, the knob is the value and is dragged like any other.
+     * One function for the drawing, the hit tests and the keypad, so the three cannot
+     * disagree about which rows are bracketed.
+     */
+    fun rangeOf(module: PatchModule, index: Int): ModRange? {
+        val driver = module.type.params.getOrNull(index)?.drivenBy ?: return null
+        if (driver < 0) return module.modRanges[index]
+        val port = PortRef(module.id, PortDirection.INPUT, driver)
+        return if (connections.any { it.to == port }) module.drivenRange(index) else null
+    }
+
+    /** Moves a row's brackets: an exposed knob's through [expose], a driven knob's in place. */
+    fun setRange(module: PatchModule, index: Int, range: ModRange) {
+        if (module.isDriven(index)) module.modRanges = module.modRanges + (index to range)
+        else expose(module, index, range)
     }
 
     /** A disabled input rail cannot be patched from, so it reads as present but inert. */
@@ -4199,7 +4261,7 @@ private fun portScreen(
 ): Offset? {
     val module = patch.module(ref.moduleId) ?: return null
     if (ref.dir == PortDirection.MOD) {
-        if (module.isPinned || ref.index !in module.modRanges) return null
+        if (module.isPinned || !module.isExposed(ref.index)) return null
         return camera.toScreen(
             modPortIn(module.bounds, 1f, module.type, ref.index, module.portsBody),
         )
@@ -4380,10 +4442,13 @@ fun PatchCanvas(
     // same reasons as the playing step. Only the parameters with a cable in them: an exposed
     // one with nothing patched is simply its knob, and needs nothing from the engine.
     val modulated = openModule?.let { m ->
-        patch.connections
-            .filter { it.to.moduleId == m.id && it.to.dir == PortDirection.MOD }
-            .map { it.to.index }
-            .sorted()
+        (
+            patch.connections
+                .filter { it.to.moduleId == m.id && it.to.dir == PortDirection.MOD }
+                .map { it.to.index } +
+                // And a driven knob whose port is patched, which is swept the same way.
+                m.type.params.indices.filter { m.isDriven(it) && patch.rangeOf(m, it) != null }
+            ).sorted()
     }.orEmpty()
     var liveParams by remember { mutableStateOf(emptyMap<Int, Float>()) }
     LaunchedEffect(openModule?.id, modulated) {
@@ -4577,8 +4642,11 @@ fun PatchCanvas(
                             // The rows this panel shows: its own knobs, or -- for a subpatch --
                             // the ones promoted to its edge, which belong to modules inside it.
                             val rows = patch.panelRows(open)
+                            // What each row is bracketed by, for every hit test below: only the
+                            // patch can see the cable that brackets a driven knob.
+                            val rangeOfRow = { row: ParamRow -> patch.rangeOf(row.owner, row.index) }
                             val typed = if (onHistory) null else panelValueAt(
-                                panel, frame.density, open, rows, down.position,
+                                panel, frame.density, open, rows, rangeOfRow, down.position,
                             ) { screenMeasurer.measure(it, PanelValueStyle).size.width.toFloat() }
                             if (typed != null) {
                                 waitForUpRelease()
@@ -4601,7 +4669,7 @@ fun PatchCanvas(
                             if (chipRow != null) {
                                 waitForUpRelease()
                                 val index = chipRow.value.index
-                                if (index in open.modRanges) {
+                                if (open.isExposed(index)) {
                                     patch.unexpose(open, index)
                                 } else {
                                     val param = open.type.params[index]
@@ -4628,10 +4696,10 @@ fun PatchCanvas(
                             // end of the range, and leaves the knob where it is.
                             val bracket =
                                 if (onHistory) null
-                                else panelBracketAt(panel, frame.density, open, rows, down.position)
+                                else panelBracketAt(panel, frame.density, open, rows, rangeOfRow, down.position)
                             val knob =
                                 if (onHistory || bracket != null) null
-                                else panelKnobAt(panel, frame.density, open, rows, down.position)
+                                else panelKnobAt(panel, frame.density, open, rows, rangeOfRow, down.position)
                             // The bar each is measured along: its own row, which with two columns
                             // is half the panel.
                             val barOf = { entry: ParamRow ->
@@ -5711,7 +5779,7 @@ private fun NumberKeypad(patch: Patch, target: NumberTarget, onDone: () -> Unit)
         LaunchedEffect(Unit) { onDone() }
         return
     }
-    val range = (target as? NumberTarget.Knob)?.let { module?.modRanges?.get(it.index) }
+    val range = (target as? NumberTarget.Knob)?.let { knob -> module?.let { patch.rangeOf(it, knob.index) } }
     val current = when {
         target is NumberTarget.Tempo -> param.format(patch.tempo)
         target is NumberTarget.SegmentTime ->
@@ -5763,9 +5831,9 @@ private fun NumberKeypad(patch: Patch, target: NumberTarget, onDone: () -> Unit)
                     when {
                         range == null -> m.setParam(target.index, value)
                         target.end == ValueTarget.LOW ->
-                            patch.expose(m, target.index, range.copy(low = value))
+                            patch.setRange(m, target.index, range.copy(low = value))
                         target.end == ValueTarget.HIGH ->
-                            patch.expose(m, target.index, range.copy(high = value))
+                            patch.setRange(m, target.index, range.copy(high = value))
                         // A row being modulated has no plain value to type: its reading is
                         // its range, and the tap that got here landed on one end of it.
                         else -> Unit
@@ -5910,7 +5978,7 @@ private fun Patch.hitPort(
             }
         }
         // The bottom band's jacks, which ports() does not list -- see PortDirection.MOD.
-        module.modRanges.keys.forEach { index ->
+        module.exposed.forEach { index ->
             val ref = PortRef(module.id, PortDirection.MOD, index)
             val at = portScreen(this, ref, camera, frame) ?: return@forEach
             val dist = (at - screen).getDistance()
@@ -8236,7 +8304,7 @@ private fun DrawScope.drawModuleBox(
 
     // The bottom band: a jack for each exposed parameter, its short name above it, under a
     // hairline that says the band is part of this module rather than a module below it.
-    if (module.modRanges.isNotEmpty() && !module.isPinned) {
+    if (module.exposed.isNotEmpty() && !module.isPinned) {
         val bandTop = rect.top + (PatchModule.HEADER + module.portsBody) * unit
         drawLine(
             color = module.type.accent.copy(alpha = 0.3f * alpha),
@@ -8244,7 +8312,7 @@ private fun DrawScope.drawModuleBox(
             end = Offset(rect.right - PatchModule.CORNER * unit, bandTop),
             strokeWidth = strokeWidth,
         )
-        module.modRanges.keys.sorted().forEach { index ->
+        module.exposed.forEach { index ->
             val ref = PortRef(module.id, PortDirection.MOD, index)
             val at = modPortIn(rect, unit, module.type, index, module.portsBody * unit)
             val lit = ref == armed
@@ -8372,7 +8440,7 @@ private fun DrawScope.drawPanel(
     // A jack for each exposed parameter on the bottom edge, in the order of the rows, with a
     // stub down past the edge when patched. Labeled below the edge rather than above it:
     // a panel with four or five rows fills its body, and above would be on the last bar.
-    module.modRanges.keys.sorted().forEach { index ->
+    module.exposed.forEach { index ->
         val ref = PortRef(module.id, PortDirection.MOD, index)
         val at = panelModPort(panel, d, module.type, index)
         val patched = patch.connections.any { it.to == ref }
@@ -8466,7 +8534,7 @@ private fun DrawScope.drawPanel(
         val own = owner.id == module.id
         val accent = if (own) module.type.accent else owner.type.accent
         val row = panelRowAt(panel, d, module.type, rows.size, slot)
-        val range = owner.modRanges[index]
+        val range = patch.rangeOf(owner, index)
         // Where the modulator has taken it this frame, for a parameter being modulated; its
         // knob for anything else. Polled against the open module, so a promoted row shows
         // its knob rather than a value read off the wrong node.

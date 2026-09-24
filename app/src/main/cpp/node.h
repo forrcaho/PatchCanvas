@@ -153,17 +153,26 @@ public:
     virtual uint32_t noteOutputs() const { return 0; }
 
     /**
-     * Signal inputs whose *unpatched* value is 1.0 rather than 0.0, one bit per port index.
+     * The parameter signal input [port] sweeps, per sample, or -1 for an ordinary input.
      *
-     * Silence is the right idle for an input that is summed or filtered, and the wrong one
-     * for an input that multiplies. An Amp with nothing on its modulation input is a VCA
-     * with no control voltage, which in hardware is a module that does nothing audible and
-     * on a phone is a module you assume is broken -- there is no panel meter to tell you
-     * which. So the port says what its own silence means, and the graph hands it a buffer
-     * of ones instead. Patching then crossfades from unity to the modulator and unpatching
-     * fades back, which is the same three cases repatch() already gets right.
+     * For such a port the graph hands the node the *parameter*, not the signal: every sample
+     * is the knob's value while nothing is patched, and the modulator mapped between the
+     * parameter's range once something is -- from the low bracket at 0 to the high one at 1,
+     * clamped as modulatedValue clamps. Crossfading between those is the same three cases
+     * repatch() gets right for any cable, so patching fades from the knob into the sweep and
+     * unpatching fades back to it.
+     *
+     * Why the graph and not the node: the graph already holds the knob (ParamRef::base), the
+     * range (low, high) and the fade, and a node that mapped its own input could not tell a
+     * modulator resting at 1.0 from nothing patched. This replaced unityInputs(), whose buffer
+     * of ones was the same idea one step short -- it made an unpatched Amp open, but only by
+     * making its knob and its port two gains multiplied together, and with the knob exposed as
+     * well there were two jacks on one number.
      */
-    virtual uint32_t unityInputs() const { return 0; }
+    virtual int32_t drivenParam(int32_t port) const {
+        (void) port;
+        return -1;
+    }
 
     virtual void prepare(int32_t sampleRate) { sampleRate_ = sampleRate; }
 

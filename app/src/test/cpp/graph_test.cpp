@@ -991,52 +991,150 @@ struct ModPatch {
 };
 
 /**
- * An Amp with nothing on its modulation input passes its audio, and patching one fades.
+ * A sine through an Amp to the output, with a held envelope ready to patch into its `mod`.
  *
- * The node's side of this is in node_test; what is checked here is the wiring, because the
- * substitution is the graph's -- an unpatched input is pointed at a buffer of ones rather
- * than at silence_, and so is the *previous* side of a crossfade, or patching a modulator
- * would fade up from zero and unpatching would fade down to it.
+ * The envelope is ModPatch's: one segment that rises at once and parks, so what it is worth
+ * is a level rather than a moment in a shape. Levels are kept below 0.4 through Out, whose
+ * limiter is transparent only down there -- see ModPatch.
  */
-void anUnpatchedAmpIsOpenAndPatchingOneFades() {
-    std::printf("an unpatched amp is open, and patching one fades\n");
+struct AmpRig {
     Graph graph;
-    graph.setSampleRate(48000);
+    AmpRig() {
+        graph.setSampleRate(48000);
+        graph.postAdd(5, NodeType::Drone);
+        graph.postAdd(1, NodeType::Osc);
+        graph.postAdd(2, NodeType::Amp);
+        graph.postAdd(3, NodeType::Out);
+        graph.postAdd(4, NodeType::Env);
+        graph.postSetStep(5, 0, 0, true); // one note, held for the whole test
+        graph.postSetParam(1, 0, 3.0f);   // a sine: a saw's own reset is a step, and a big one
+        graph.postSetSegment(4, 0, 0.001f, 0.002f, 0.0f, true);
+        graph.postSetSegment(4, 1, 0.0f, 0.0f, 0.0f, false);
+        graph.postSetSegment(4, 2, 0.0f, 0.0f, 0.0f, false);
+        graph.postConnect(5, 0, 1, 0);
+        graph.postConnect(5, 0, 4, 0);
+        graph.postConnect(1, 0, 2, 0);
+        graph.postConnect(2, 0, 3, 0);
+        // What GraphSync sends every new node: all of its knobs.
+        graph.postSetParam(2, 0, 0.2f);
+        graph.applyCommands();
+        render(graph, 64);
+    }
+    void knob(float gain) {
+        graph.postSetParam(2, 0, gain);
+        graph.applyCommands();
+    }
+    void level(float value) {
+        graph.postSetSegment(4, 0, 0.001f, value, 0.0f, true);
+        graph.applyCommands();
+        render(graph, 480); // past the 5ms glide and any 30ms fade
+    }
+    void patch() {
+        graph.postConnect(4, 0, 2, 1);
+        graph.applyCommands();
+        render(graph, 64);
+    }
+    /** How loud the output is, over more than a cycle of the sine. */
+    float loudness() { return peakOf(render(graph, 16)); }
+};
 
-    graph.postAdd(1, NodeType::Drone);
-    graph.postAdd(2, NodeType::Osc);
-    graph.postAdd(3, NodeType::Amp);
-    graph.postAdd(4, NodeType::Lfo);
-    graph.postAdd(5, NodeType::Out);
-    graph.postConnect(1, 0, 2, 0);
-    graph.postConnect(2, 0, 3, 0);
-    graph.postConnect(3, 0, 5, 0);
-    graph.postSetStep(1, 0, 0, true); // a held note, so there is a tone to pass
-    graph.postSetParam(2, 0, 3.0f);   // a sine: a saw's own reset is a step, and a big one
-    graph.postSetParam(4, 0, 0.02f);  // the slowest LFO, so it is near its own floor
-    graph.postSetParam(5, 0, 0.25f);
-    graph.applyCommands();
+/**
+ * With nothing in `mod`, an Amp's knob is its gain -- and nothing else is, because the port
+ * is not a second gain any more.
+ *
+ * Until format 15 the port read as 1.0 when idle and multiplied the knob, which was right on
+ * its own and wrong beside an exposed gain: the same envelope patched into both was applied
+ * twice. What arrives on the port now is the gain itself, the knob while it is idle.
+ */
+void anAmpsKnobIsItsGainWithNothingPatched() {
+    std::printf("an amp's knob is its gain with nothing patched\n");
+    AmpRig rig;
+    const float at02 = rig.loudness();
+    check(at02 > 0.05f, "an amp with nothing patched passes its audio");
+    rig.knob(0.1f);
+    render(rig.graph, 4);
+    const float at01 = rig.loudness();
+    check(std::fabs(at02 / at01 - 2.0f) < 0.1f,
+          "and half the knob is half as loud, " + std::to_string(at02) + " against " +
+                  std::to_string(at01));
+    check(std::fabs(rig.graph.paramOf(2, 0) - 0.1f) < 0.001f, "and reports the knob as its gain");
+}
 
-    render(graph, 4);
-    const auto open = render(graph, 64);
-    check(energy(open.data(), static_cast<int32_t>(open.size())) > 0.0f,
-          "nothing patched to mod, and the amp passes its audio");
-    const float steady = maxStep(open);
+/**
+ * Patched, `mod` sweeps the gain between its brackets, every sample: the low bracket at 0,
+ * the high one at 1. The low bracket is a floor and not silence -- a tremolo that never
+ * closes is two brackets, where the port on its own could only ever sweep from nothing.
+ */
+void aPatchedAmpSweepsItsGainBetweenItsBrackets() {
+    std::printf("a patched amp sweeps its gain between its brackets\n");
+    AmpRig rig;
+    rig.graph.postSetModRange(2, 0, 0.1f, 0.3f, false);
+    rig.graph.applyCommands();
+    rig.patch();
 
-    // A saw LFO starts at zero and climbs, so the amp shuts as the crossfade lands.
-    // Measured across the join, not from the first sample after it: the step this is
-    // looking for is between the last sample the old routing produced and the first the
-    // new one does, which is exactly the boundary a vector starting at the connect misses.
-    auto joined = render(graph, 2);
-    graph.postConnect(4, 0, 3, 1);
-    graph.applyCommands();
-    const auto fading = render(graph, 45); // 1440 frames: the whole crossfade
+    rig.level(1.0f);
+    check(std::fabs(rig.graph.paramOf(2, 0) - 0.3f) < 0.002f, "full modulation is the high bracket");
+    const float top = rig.loudness();
+    rig.level(0.0f);
+    check(std::fabs(rig.graph.paramOf(2, 0) - 0.1f) < 0.002f, "none is the low bracket, not silence");
+    const float floor = rig.loudness();
+    rig.level(0.5f);
+    check(std::fabs(rig.graph.paramOf(2, 0) - 0.2f) < 0.002f, "and half is halfway between");
+    check(std::fabs(top / floor - 3.0f) < 0.15f,
+          "and the audio follows the gain, " + std::to_string(top) + " against " +
+                  std::to_string(floor));
+    // The knob is not in it while something is patched: the brackets are the whole story.
+    rig.knob(1.5f);
+    render(rig.graph, 4);
+    check(std::fabs(rig.graph.paramOf(2, 0) - 0.2f) < 0.002f, "and the knob waits for the cable to go");
+}
+
+/**
+ * A range that never arrived sweeps from nothing up to the knob -- `in * mod * gain`, the VCA
+ * this was before it had brackets. The interface always sends one, so this is the graph's
+ * own fallback agreeing with PatchModule.drivenRange rather than a case the app reaches.
+ */
+void anAmpWithNoRangeSweepsFromNothingToItsKnob() {
+    std::printf("an amp with no range sweeps from nothing to its knob\n");
+    AmpRig rig;
+    rig.knob(0.4f);
+    rig.patch();
+    rig.level(0.5f);
+    check(std::fabs(rig.graph.paramOf(2, 0) - 0.2f) < 0.002f, "half an envelope on a 0.4 knob is 0.2");
+    rig.level(0.0f);
+    check(rig.graph.paramOf(2, 0) < 0.001f, "and a closed envelope closes it");
+}
+
+/**
+ * Patching fades from the knob into the sweep, and unpatching fades back to it -- the graph's
+ * ordinary 30ms crossfade, over the gain rather than over the signal. Without it, patching a
+ * closed envelope into an open Amp drops a full sine to nothing in one sample.
+ */
+void patchingAndUnpatchingAnAmpFade() {
+    std::printf("patching and unpatching an amp fade\n");
+    AmpRig rig;
+    rig.level(0.0f); // parked shut, so the patch takes the gain from the knob to nothing
+    const float steady = maxStep(render(rig.graph, 64));
+
+    auto joined = render(rig.graph, 2);
+    rig.graph.postConnect(4, 0, 2, 1);
+    rig.graph.applyCommands();
+    const auto fading = render(rig.graph, 45); // 1440 frames: the whole crossfade
     joined.insert(joined.end(), fading.begin(), fading.end());
-    // Against the tone's own slope rather than an absolute: fading from silence instead of
-    // from unity would drop a full-amplitude sine to nothing in one sample.
-    check(maxStep(joined) < 2.0f * steady,
-          "and patching one fades rather than steps, " + std::to_string(maxStep(joined)) +
-                  " against " + std::to_string(steady));
+    check(maxStep(joined) < 1.5f * steady,
+          "patching fades rather than steps, " + std::to_string(maxStep(joined)) + " against " +
+                  std::to_string(steady));
+    check(rig.loudness() < 0.001f, "and lands on the envelope, which is shut");
+
+    auto back = render(rig.graph, 2);
+    rig.graph.postDisconnect(4, 0, 2, 1);
+    rig.graph.applyCommands();
+    const auto opening = render(rig.graph, 45);
+    back.insert(back.end(), opening.begin(), opening.end());
+    check(maxStep(back) < 1.5f * steady,
+          "unpatching fades back, " + std::to_string(maxStep(back)) + " against " +
+                  std::to_string(steady));
+    check(std::fabs(rig.graph.paramOf(2, 0) - 0.2f) < 0.001f, "and lands on the knob");
 }
 
 /**
@@ -1148,8 +1246,7 @@ void anIdIsOnlyUniqueToItsOwnSource() {
  * same time, and that both reach the output through the sum.
  *
  * Each copy is an Osc with no envelope and an Amp, so each instance is a voice the way one
- * would actually be built; the Amps are left wide open, since an unpatched modulation input
- * reads as unity.
+ * would actually be built; the Amps are left wide open, a knob of 1 with nothing in `mod`.
  */
 void aFlattenedPolySubpatchSoundsTwoNotesAtOnce() {
     std::printf("a flattened poly subpatch sounds two notes at once\n");
@@ -1177,6 +1274,7 @@ void aFlattenedPolySubpatchSoundsTwoNotesAtOnce() {
         graph.postConnect(kEdge, k, osc[k], 0);
         graph.postConnect(osc[k], 0, amp[k], 0);
         graph.postConnect(amp[k], 0, kSum, k);
+        graph.postSetParam(amp[k], 0, 1.0f); // as GraphSync sends every knob of a new node
     }
     graph.postConnect(kSum, 0, kOut, 0);
     graph.postSetParam(kOut, 0, 0.2f); // below the limiter, so two voices measure as two
@@ -1448,7 +1546,10 @@ int main() {
     aRemovedSourceEndsTheNotesItStarted();
     twoSequencersMergeIntoOnePolySubpatch();
     anIdIsOnlyUniqueToItsOwnSource();
-    anUnpatchedAmpIsOpenAndPatchingOneFades();
+    anAmpsKnobIsItsGainWithNothingPatched();
+    aPatchedAmpSweepsItsGainBetweenItsBrackets();
+    anAmpWithNoRangeSweepsFromNothingToItsKnob();
+    patchingAndUnpatchingAnAmpFade();
     aFlattenedPolySubpatchSoundsTwoNotesAtOnce();
     aModulatorDrivesAParameterAcrossItsRange();
     anExponentialRangeSweepsGeometrically();

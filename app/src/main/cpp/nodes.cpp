@@ -1084,13 +1084,9 @@ void PolySumNode::process(int32_t frames) {
 
 void AmpNode::process(int32_t frames) {
     const float *in = input(0);
-    const float *mod = input(1);
+    const float *gain = input(1);  // the gain knob, per sample: see drivenParam
     float *o = out(0);
-    for (int32_t i = 0; i < frames; ++i) o[i] = in[i] * mod[i] * gain_;
-}
-
-void AmpNode::setParam(int32_t index, float value) {
-    if (index == 0) gain_ = clampf(value, 0.0f, 2.0f);
+    for (int32_t i = 0; i < frames; ++i) o[i] = in[i] * gain[i];
 }
 
 void MixNode::process(int32_t frames) {

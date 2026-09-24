@@ -676,6 +676,60 @@ void Graph::applyModulation(Record &record, int32_t slot, int32_t frames) {
     if (published) telemetry_[slot].id.store(record.id, std::memory_order_relaxed);
 }
 
+void Graph::sweep(const ParamRef &param, int32_t index, int32_t port, int32_t frames,
+                  float *into) const {
+    if (index < 0 || !nodes_[index].used) {
+        std::fill(into, into + frames, param.base);
+        return;
+    }
+    // A range always arrives with the node from the interface, which sends a driven knob's
+    // effective range whether or not a bracket was moved. The fallback is that same default --
+    // from nothing up to the knob -- for a graph driven without an interface, as the tests are.
+    const float low = param.ranged ? param.low : 0.0f;
+    const float high = param.ranged ? param.high : param.base;
+    const bool geometric = param.ranged && param.exponential && low > 0.0f && high > 0.0f;
+    const float *signal = nodes_[index].node->output(port);
+    for (int32_t i = 0; i < frames; ++i) {
+        // Clamped as modulatedValue clamps, so a bracket means the same on a driven knob as
+        // on an exposed one; NaN compares false both ways and lands on the low bracket.
+        const float x = signal[i];
+        const float amount = x > 1.0f ? 1.0f : (x > 0.0f ? x : 0.0f);
+        into[i] = geometric ? low * std::pow(high / low, amount) : low + amount * (high - low);
+    }
+}
+
+const float *Graph::drivenInput(Record &record, int32_t slot, int32_t port, int32_t paramIndex,
+                                int32_t frames) {
+    InputRef &ref = record.inputs[port];
+    const ParamRef &param = record.params[paramIndex];
+    float *into = ramp_[port].data();
+    sweep(param, ref.sourceIndex, ref.sourcePort, frames, into);
+    if (ref.rampRemaining > 0) {
+        // From the knob into the sweep on a patch, back on an unpatch, and from one sweep to
+        // the other on a replacement -- the same smoothstep as every other cable, over values
+        // of the parameter rather than of the signal.
+        float *from = drivenFrom_.data();
+        sweep(param, ref.fromIndex, ref.fromPort, frames, from);
+        for (int32_t i = 0; i < frames; ++i) {
+            const float linear = ref.rampRemaining > 0
+                    ? 1.0f - static_cast<float>(ref.rampRemaining) /
+                             static_cast<float>(ref.rampLength)
+                    : 1.0f;
+            const float t = linear * linear * (3.0f - 2.0f * linear);
+            into[i] = from[i] * (1.0f - t) + into[i] * t;
+            if (ref.rampRemaining > 0) --ref.rampRemaining;
+        }
+    } else {
+        ref.fromIndex = -1;
+    }
+    // Where the port has taken the knob, for the panel's bar, as applyModulation publishes an
+    // exposed knob's. The block's last sample: a bar drawn at sixty frames a second cannot
+    // show anything finer.
+    telemetry_[slot].params[paramIndex].store(into[frames - 1], std::memory_order_relaxed);
+    telemetry_[slot].id.store(record.id, std::memory_order_relaxed);
+    return into;
+}
+
 void Graph::setLiveInput(const float *mono) {
     if (inIndex_ < 0 || !nodes_[inIndex_].used) return;
     static_cast<InNode *>(nodes_[inIndex_].node)->setSource(mono);
@@ -715,11 +769,12 @@ void Graph::process(int32_t frames) {
                 continue;
             }
             InputRef &ref = record.inputs[p];
-            // What nothing reads as on this port. Zero everywhere but a port that
-            // multiplies, which says so through unityInputs() -- see Node.
-            const float *idle = (node->unityInputs() & (1u << static_cast<uint32_t>(p))) != 0
-                    ? unity_.data()
-                    : silence_.data();
+            const int32_t driven = node->drivenParam(p);
+            if (driven >= 0 && driven < kMaxParams) {
+                node->setInput(p, drivenInput(record, order_[i], p, driven, frames));
+                continue;
+            }
+            const float *idle = silence_.data();
             const bool live = ref.sourceIndex >= 0 && nodes_[ref.sourceIndex].used;
             const float *source = live
                     ? nodes_[ref.sourceIndex].node->output(ref.sourcePort)

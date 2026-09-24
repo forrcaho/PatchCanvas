@@ -786,24 +786,18 @@ private:
  * retired all the same: that module took a control voltage, and there is no such thing
  * here any more.
  *
- * Per sample, not per block -- it reads the modulator as a signal rather than as a
- * parameter, so an attack of a millisecond is an attack of a millisecond. A parameter is
- * applied once per block, which is 1500Hz, and a plucked envelope through one is a
- * staircase.
- *
- * With nothing patched to [mod] the port reads as 1.0 and this is a gain knob; see
- * Node::unityInputs.
+ * Per sample, not per block -- [mod] drives the gain knob (Node::drivenParam), so what
+ * arrives on it is the gain itself, every sample: the knob with nothing patched, and the
+ * modulator swept between the gain's brackets with something there. An attack of a
+ * millisecond is an attack of a millisecond, where a parameter applied once per block, at
+ * 1500Hz, would make a plucked envelope a staircase.
  */
 class AmpNode : public Node {
 public:
     int32_t inputCount() const override { return 2; }  // in, mod
     int32_t outputCount() const override { return 1; }
-    uint32_t unityInputs() const override { return 1u << 1; }
+    int32_t drivenParam(int32_t port) const override { return port == 1 ? 0 : -1; }
     void process(int32_t frames) override;
-    void setParam(int32_t index, float value) override;
-
-private:
-    float gain_ = 1.0f;
 };
 
 /** Sums its inputs. Necessary because an input takes exactly one source. */

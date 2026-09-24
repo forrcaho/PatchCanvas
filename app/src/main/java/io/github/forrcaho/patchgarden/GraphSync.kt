@@ -215,6 +215,21 @@ object EngineCommands : GraphCommands {
 }
 
 /**
+ * The ranges the engine is told about for [module]: every stored one, and each driven knob's
+ * *effective* range whether stored or not -- see [PatchModule.drivenRange].
+ *
+ * Sent always rather than left to a default in the engine, so the two sides cannot disagree
+ * about what an unmoved bracket means, and so an undo that takes a stored range away is a
+ * range sent -- the default again -- rather than one the engine quietly goes on using. No
+ * command removes a range, which is harmless for an exposed knob with nothing in its jack and
+ * would not be for a driven one.
+ */
+internal fun rangesFor(module: PatchModule): Map<Int, ModRange> =
+    module.modRanges + module.type.params.indices
+        .filter { module.isDriven(it) }
+        .associateWith { module.drivenRange(it) }
+
+/**
  * Keeps the audio graph tracking the patch.
  *
  * Diffing a shadow copy rather than emitting commands at each mutation point, because
@@ -350,11 +365,11 @@ class GraphSync(private val commands: GraphCommands = EngineCommands) {
         // wrong -- but only until the range arrived, and a queue drained partway through a
         // sync would let a block render in between. Every range of a node that was just
         // made, because the engine's node knows none of them.
-        val ranges = sounding.associate { it.id to it.module?.modRanges.orEmpty() }
+        val ranges = sounding.associate { it.id to it.module?.let(::rangesFor).orEmpty() }
         sounding.forEach { node ->
             val type = node.module?.type ?: return@forEach
             val previous = if (node.id in fresh) null else syncedRanges[node.id]
-            node.module.modRanges.forEach { (index, range) ->
+            ranges.getValue(node.id).forEach { (index, range) ->
                 if (previous?.get(index) != range) {
                     val exponential = type.params.getOrNull(index)?.curve == ParamCurve.EXPONENTIAL
                     commands.setModRange(node.id, index, range.low, range.high, exponential)

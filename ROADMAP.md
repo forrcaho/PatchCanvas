@@ -3480,6 +3480,41 @@ menu dismissed it and sent nothing; "Remove" took a node away and undo put it ba
 milliseconds typed into a middle segment packed its chip beside the attack's. **What has not
 been judged is the picture on the reference device**: whether the blue reads as "after the
 note ends" on the phone's own screen, and whether the chips' text fits at its density.
+Judged the same evening and both were right.
+
+### Amp's port is its gain's jack, and format 15, 2026-09-23
+
+**"mod is a permanent port, and seems to work whether gain is set to modulate or not."** It
+did, and that was the problem: Amp had two ways into one number. The `mod` port multiplied
+every sample with no depth control, and the gain knob could be exposed like any other, with
+brackets but only once a block. The phone's own patch had the same envelope in both, so it
+was applied twice: `in * env * (0.6 + 0.8 * env)`. Each route was half of a proper VCA input.
+
+**The port became the knob's jack.** With nothing in `mod`, the knob is the gain and is dragged
+like any knob; patched, the gain row grows brackets as an exposed row does and the modulator
+sweeps between them every sample; and the gain can no longer be exposed, since the port
+already is its jack. Unmoved brackets run from nothing up to the knob, which is the VCA this
+was -- and a floor above zero is a tremolo that never closes, which the bare port could not
+do. The two alternatives lost on what they gave up: forbidding the exposure left the one
+modulation input in the app with no depth control, and retiring the port for a per-sample
+exposed knob brought back the expose step Amp was created to skip and broke every Env to Amp
+cable ever made.
+
+**The graph hands the node the parameter, not the signal** (`Node::drivenParam`). It already
+held the knob (`ParamRef::base`), the range and the fade, and a node mapping its own input
+could not have told a modulator resting at 1.0 from nothing patched -- which is exactly the
+ambiguity `unityInputs()` papered over with a buffer of ones, and it went. Patching fades from
+the knob into the sweep and unpatching fades back, the same smoothstep as any cable. On the
+interface side a driven knob's range lives where an exposed one's does but never counts as a
+jack, `Patch.rangeOf` is the one answer to "is this row bracketed", since only the patch can
+see the cable, and **GraphSync always sends the effective range**: no command removes a range,
+so an undone bracket left to a default in the engine would have gone on sounding.
+
+**Format 15 reads nothing but 15.** A 14 Amp with its gain exposed and patched has two
+modulators on one number, which 15 cannot say, so it could only be refused. The choice was
+between refusing just those files -- the first refusal to look inside a file rather than at its
+version -- and refusing every 14. Forrest took the second: during development there is no
+patch worth keeping.
 
 ### The fm port comes back to Osc
 

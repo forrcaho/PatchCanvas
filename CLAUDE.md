@@ -173,7 +173,11 @@ ended at 14, which reads nothing but 14**: an `Env` is segments, and A/D/S/R can
 restated as segments, only converted. DaisySP's stages are one-pole *time constants* toward
 targets they never reach -- a release from sustain S actually lasts `R*ln(1 + 100S)`, about
 four times the knob -- where a segment covers a stated distance in a stated time. The mapping
-exists and using it would be the silent conversion 10 was drawn against. **A knob or
+exists and using it would be the silent conversion 10 was drawn against. **15 reads nothing
+but 15 as well**: Amp's `mod` port became its gain's own jack, and a 14 Amp whose gain was
+exposed *and* patched had two modulators on one number, which 15 cannot say. Forrest chose
+refusing every 14 file over a refusal that looks inside the file, since nothing saved during
+development is worth keeping. **A knob or
 a port added to an existing module bumps the version too**, for that same reason: knobs are
 keyed by name and port indices are positional, so an 11 build would read a bandpass, ignore
 the two knobs it does not know, and autosave it as a lowpass. **Adding a module type bumps the version** even though
@@ -439,12 +443,21 @@ impossible, and why this redesign happened. Shaping is an `Env` inside a poly su
 where there is one per note. `FM` lost Chowning's brightness-follows-loudness with it:
 expose `index`, patch an `Env`, and the two envelopes no longer have to be one envelope.
 
-**An input that multiplies says so.** Silence is the right idle for an input that is summed
-or filtered and the wrong one for `Amp`'s modulation port, which with nothing patched would
-make the module silent and look broken -- there is no panel meter to say otherwise. A node
-declares such a port in `unityInputs()` and the graph hands it a buffer of ones, on the
-*previous* side of a crossfade as well as the current one, or patching a modulator would
-fade up from zero.
+**A knob has one way in.** `Amp`'s `mod` port multiplied its gain knob, and the knob could be
+exposed as well, so the same envelope patched into both was applied twice -- found in the
+phone's own patch as `in * env * (0.6 + 0.8 * env)`. The port is the knob's jack now: a
+*driven* knob (`Param.drivenBy` in Kotlin, `Node::drivenParam` in C++) is plain while its port
+is empty, grows brackets like an exposed knob's while it is patched, and cannot be exposed.
+**The graph hands the node the parameter, not the signal**: every sample is the knob while
+nothing is patched and the modulator swept between the brackets once something is, faded by
+the ordinary crossfade -- because only the graph holds the knob, the range and the fade, and a
+node mapping its own input could not tell a modulator resting at 1.0 from nothing patched.
+That replaced `unityInputs()`, whose buffer of ones made an idle Amp open by making the knob
+and the port two gains multiplied together. An unmoved range is from nothing up to the knob,
+which is the VCA's `in * mod * gain`, and **GraphSync always sends a driven knob's effective
+range** -- stored or not -- since no command removes a range and an undone bracket would
+otherwise go on sounding. `Patch.rangeOf` is the one answer to "is this row bracketed", for
+the drawing, the hit tests and the keypad alike, because only the patch can see the cable.
 
 **A stack means several of this sound at once**, and exactly two types draw one:
 `Types.Poly`, a voice the engine stamps out per note, and `Sf`, whose voices are

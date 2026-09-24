@@ -35,8 +35,7 @@ constexpr std::size_t kCommandCapacity = 256;
  */
 class Graph {
 public:
-    /** Only to fill the unity buffer; see unityInputs() in node.h. */
-    Graph() { unity_.fill(1.0f); }
+    Graph() = default;
 
     /**
      * Frees whatever is still owned. Safe only once no callback can be running, which
@@ -342,6 +341,14 @@ private:
      * where each has got to under [slot].
      */
     void applyModulation(Record &record, int32_t slot, int32_t frames);
+    /**
+     * A driven port's input: its parameter, per sample, faded as any cable is. Written into
+     * that port's ramp_ buffer, which is what the node is handed. See Node::drivenParam.
+     */
+    const float *drivenInput(Record &record, int32_t slot, int32_t port, int32_t paramIndex,
+                             int32_t frames);
+    /** [param] as swept by output [port] of node [index] -- or its knob, where that is nothing. */
+    void sweep(const ParamRef &param, int32_t index, int32_t port, int32_t frames, float *into) const;
     /** Gathers a note input's sources into one buffer, in offset order, tagged by slot. */
     const NoteBuffer &mergeNotes(const Record &record, int32_t port);
     /** Frees nodes whose fade-out has run. Audio thread, end of each block. */
@@ -389,8 +396,11 @@ private:
     int32_t rampInSamples_ = 1454;  // ~30ms at 48k, recomputed in setSampleRate
     int32_t rampOutSamples_ = 1454; // ~30ms at 48k
     std::array<float, kBlockSize> silence_{};
-    /** What an unpatched input reads when its node declares it a unityInputs() port. */
-    std::array<float, kBlockSize> unity_{};
+    /**
+     * Where a driven port's parameter is fading from, sample by sample; see Node::drivenParam.
+     * Scratch, overwritten per port: what the node reads is built in that port's ramp_ buffer.
+     */
+    std::array<float, kBlockSize> drivenFrom_{};
 
     // One per port index, not per node: only one node is processing at a time, so the
     // scratch a ramp renders into can be reused across the whole graph.

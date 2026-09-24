@@ -49,8 +49,13 @@ import java.io.File
  * conversion and not a restatement, which is exactly the line 10 was drawn on. An ADSR read
  * as four segments with the wrong curvature is a patch that loads, plays, and is not the
  * sound that was saved.
+ * 15: Amp's `mod` port is its gain's own jack, sweeping it between brackets, and the gain
+ * can no longer be exposed. 15 reads nothing but 15 as well: a 14 Amp whose gain was exposed
+ * and patched had two modulators on one number, which nothing in 15 can say. Forrest's call,
+ * with no patch worth keeping during development -- going clean was cheaper than a refusal
+ * that looks inside the file.
  */
-private const val FORMAT_VERSION = 14
+private const val FORMAT_VERSION = 15
 
 /**
  * The older formats this build reads as they stand. See [upgrade].
@@ -298,7 +303,10 @@ private fun restoreSegments(module: PatchModule, stored: JSONArray?) {
     }
 }
 
-/** Exposed parameters, keyed by name like the knobs, each as its low and high. */
+/**
+ * Every stored range, keyed by name like the knobs, each as its low and high: an exposed
+ * knob's, and a driven knob's once its brackets have been moved.
+ */
 private fun modOf(module: PatchModule): JSONObject {
     val out = JSONObject()
     module.modRanges.keys.sorted().forEach { i ->
@@ -312,14 +320,15 @@ private fun modOf(module: PatchModule): JSONObject {
 /**
  * Clamped into the parameter's own range, because the file is untrusted: a bracket past the
  * end of a knob would sweep it somewhere the knob itself cannot go. Anything that is not two
- * numbers, or names a parameter that cannot be exposed, is dropped.
+ * numbers, or names a parameter that can have no range -- neither exposable nor driven -- is
+ * dropped.
  */
 private fun restoreMod(module: PatchModule, stored: JSONObject?) {
     if (stored == null) return
     val restored = mutableMapOf<Int, ModRange>()
     module.type.params.forEachIndexed { i, p ->
         val pair = stored.optJSONArray(p.name) ?: return@forEachIndexed
-        if (pair.length() != 2 || !module.canExpose(i)) return@forEachIndexed
+        if (pair.length() != 2 || !(module.canExpose(i) || module.isDriven(i))) return@forEachIndexed
         val lowest = minOf(p.min, p.max)
         val highest = maxOf(p.min, p.max)
         fun bracket(at: Int) = pair.optDouble(at, Double.NaN).toFloat()
@@ -520,7 +529,7 @@ private fun upgrade(root: JSONObject): JSONObject? {
 private fun Patch.portRefOrNull(moduleId: Long, dir: PortDirection, index: Int): PortRef? {
     val module = module(moduleId) ?: return null
     if (dir == PortDirection.MOD) {
-        return if (index in module.modRanges) PortRef(moduleId, dir, index) else null
+        return if (module.isExposed(index)) PortRef(moduleId, dir, index) else null
     }
     if (index < 0 || index >= module.ports(dir).size) return null
     return PortRef(moduleId, dir, index)

@@ -33,6 +33,9 @@ class ModulationPanelTest {
     /** The rows a panel shows for an ordinary module: its own, in order. */
     private fun rows(module: PatchModule) = module.type.rowParams.map { ParamRow(module, it) }
 
+    /** What bracket each row in [patch] shows, exactly as the gesture loop asks for it. */
+    private fun bracketsIn(patch: Patch): (ParamRow) -> ModRange? = { patch.rangeOf(it.owner, it.index) }
+
     /**
      * A finger on a drone's grid, at the reference device's size. The hit test and the
      * drawing derive their geometry separately, so a cell that lights and a cell that
@@ -139,19 +142,19 @@ class ModulationPanelTest {
         val y = row.center.y
         val middle = (low + high) / 2f
 
-        assertEquals(ParamRow(filter, 0) to false, panelBracketAt(panel, d, filter, rows(filter), Offset(low, y)))
-        assertEquals(ParamRow(filter, 0) to true, panelBracketAt(panel, d, filter, rows(filter), Offset(high, y)))
-        assertEquals(ParamRow(filter, 0) to false, panelBracketAt(panel, d, filter, rows(filter), Offset(middle - 5f, y)))
-        assertEquals(ParamRow(filter, 0) to true, panelBracketAt(panel, d, filter, rows(filter), Offset(middle + 5f, y)))
+        assertEquals(ParamRow(filter, 0) to false, panelBracketAt(panel, d, filter, rows(filter), bracketsIn(patch), Offset(low, y)))
+        assertEquals(ParamRow(filter, 0) to true, panelBracketAt(panel, d, filter, rows(filter), bracketsIn(patch), Offset(high, y)))
+        assertEquals(ParamRow(filter, 0) to false, panelBracketAt(panel, d, filter, rows(filter), bracketsIn(patch), Offset(middle - 5f, y)))
+        assertEquals(ParamRow(filter, 0) to true, panelBracketAt(panel, d, filter, rows(filter), bracketsIn(patch), Offset(middle + 5f, y)))
         assertEquals(
             "far along the bar is still the nearer one",
             ParamRow(filter, 0) to true,
-            panelBracketAt(panel, d, filter, rows(filter), Offset(row.right - 1f, y)),
+            panelBracketAt(panel, d, filter, rows(filter), bracketsIn(patch), Offset(row.right - 1f, y)),
         )
-        assertNull("another row is not this one", panelBracketAt(panel, d, filter, rows(filter), Offset(low, row.top - 40f * d)))
+        assertNull("another row is not this one", panelBracketAt(panel, d, filter, rows(filter), bracketsIn(patch), Offset(low, row.top - 40f * d)))
         assertNull(
             "an unexposed row has none",
-            panelBracketAt(panel, d, filter, rows(filter), Offset(low, panelRow(panel, d, filter.type, 1).center.y)),
+            panelBracketAt(panel, d, filter, rows(filter), bracketsIn(patch), Offset(low, panelRow(panel, d, filter.type, 1).center.y)),
         )
     }
 
@@ -174,7 +177,7 @@ class ModulationPanelTest {
         assertEquals("the new range starts at the end of the bar", row.left, low, 0.5f)
         assertEquals(
             ParamRow(pluck, PLUCK_RELEASE) to false,
-            panelBracketAt(panel, d, pluck, rows(pluck), Offset(row.left - 15f * d, row.center.y)),
+            panelBracketAt(panel, d, pluck, rows(pluck), bracketsIn(patch), Offset(row.left - 15f * d, row.center.y)),
         )
     }
 
@@ -183,9 +186,9 @@ class ModulationPanelTest {
         val patch = Patch()
         val filter = patch.add(Types.Filter, Offset.Zero)!!
         val at = panelRow(panel, d, filter.type, 0).center
-        assertEquals(ParamRow(filter, 0), panelKnobAt(panel, d, filter, rows(filter), at))
+        assertEquals(ParamRow(filter, 0), panelKnobAt(panel, d, filter, rows(filter), bracketsIn(patch), at))
         patch.expose(filter, 0, ModRange(400f, 2000f))
-        assertNull(panelKnobAt(panel, d, filter, rows(filter), at))
+        assertNull(panelKnobAt(panel, d, filter, rows(filter), bracketsIn(patch), at))
     }
 
     @Test
@@ -268,7 +271,7 @@ class ModulationPanelTest {
         )
         // And the knob under it is the filter's, reached through the subpatch's panel.
         val at = panelRowAt(panel, d, Types.Subpatch, rows.size, 0).center
-        assertEquals(ParamRow(filter, 0), panelKnobAt(panel, d, subpatch, rows, at))
+        assertEquals(ParamRow(filter, 0), panelKnobAt(panel, d, subpatch, rows, bracketsIn(patch), at))
     }
 
     /**

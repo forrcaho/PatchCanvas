@@ -1218,6 +1218,37 @@ class ModulationSyncTest {
         sync.sync(patch)
         assertTrue(Cmd.SetModRange(filter.id, 0, 400f, 2000f, true) in rec.log)
     }
+
+    /**
+     * An Amp's range is sent with the node whether or not a bracket ever moved, and an undo
+     * that takes a moved one away sends the default back.
+     *
+     * No command removes a range -- harmless for an exposed knob, whose range does nothing
+     * without a cable in its jack, and not for a driven one, which would go on sweeping
+     * between brackets the patch no longer has. Sending the effective range always is what
+     * keeps the two sides agreeing.
+     */
+    @Test
+    fun `an Amp's range is always sent, and an undone bracket sends the default back`() {
+        val patch = Patch()
+        val amp = patch.add(Types.Amp, Offset.Zero)!!
+        amp.setParam(0, 0.8f)
+        sync.sync(patch)
+        assertTrue(
+            "sent with the node, from nothing up to the knob: ${rec.log}",
+            Cmd.SetModRange(amp.id, 0, 0f, 0.8f, false) in rec.log,
+        )
+
+        rec.clear()
+        patch.setRange(amp, 0, ModRange(0.3f, 0.6f))
+        sync.sync(patch)
+        assertEquals(listOf<Cmd>(Cmd.SetModRange(amp.id, 0, 0.3f, 0.6f, false)), rec.log)
+
+        rec.clear()
+        amp.modRanges = emptyMap() // what undoing the bracket move restores
+        sync.sync(patch)
+        assertEquals(listOf<Cmd>(Cmd.SetModRange(amp.id, 0, 0f, 0.8f, false)), rec.log)
+    }
 }
 
 /**
