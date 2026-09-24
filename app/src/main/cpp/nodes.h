@@ -7,6 +7,8 @@
 
 #include "adsr.h"
 #include "dcblock.h"
+#include "delayline.h"
+#include "reverb.h"
 #include "KarplusString.h"
 #include "limiter.h"
 #include "oscillator.h"
@@ -811,6 +813,86 @@ private:
     float pink_[7] = {};
     /** Brown is white integrated, with a leak so it cannot wander off to a DC offset. */
     float brown_ = 0.0f;
+};
+
+/**
+ * An echo: the input again after a time, fed back into itself.
+ *
+ * The time is a note division of the transport, or -- one past the last division -- free, in
+ * milliseconds. A synced time is read from the tempo whether or not the transport is running
+ * (Node::tempo_), since an eighth is an eighth long either way.
+ *
+ * **A changed time glides.** The read point moves toward the new time rather than jumping,
+ * which bends the pitch of what is in the line the way tape does and never steps it -- a jump
+ * in the read point is a jump in the waveform, heard as a click every time a tempo or a knob
+ * moves. It moves at most half a sample per sample, so the bend is at most an octave down or a
+ * fifth up. The line itself is 4 seconds at 48kHz, allocated with the node on the interface's
+ * thread; a time past it is held at the end of it.
+ */
+class DelayNode : public Node {
+public:
+    static constexpr int32_t kMaxSamples = 192000;
+    /** The division index that means "free": one past kIntervals. Mirrors FREE_TIME. */
+    static constexpr int32_t kFree = kIntervalCount;
+
+    DelayNode() { line_.Init(); }
+    int32_t inputCount() const override { return 1; }
+    int32_t outputCount() const override { return 1; }
+    void process(int32_t frames) override;
+    void setParam(int32_t index, float value) override;
+
+    /** Where the read point is heading, in samples: what the knobs and the tempo say now. */
+    float targetSamples() const;
+
+private:
+    daisysp::DelayLine<float, kMaxSamples> line_;
+    int32_t interval_ = kDefaultInterval;
+    float timeMs_ = 250.0f;
+    float feedback_ = 0.35f;
+    float mix_ = 0.35f;
+    /**
+     * Where the read point is, in samples; negative until the first block places it. A double,
+     * because the last of an approach is steps smaller than a float can add to 19200: it
+     * stalled two samples short of 400ms.
+     */
+    double delay_ = -1.0;
+};
+
+/**
+ * A reverb, mono in and stereo out, as a room or as a plate -- two algorithms behind one knob,
+ * to be chosen between by ear (see reverb.h for both).
+ *
+ * Both run all the time and the knob crossfades between them over 50ms, as Filter keeps its
+ * second stage running and Noise all three colors: switching is exactly what comparing them
+ * by ear means doing, and a tail cut off at the switch, or one starting from an empty tank,
+ * would make the comparison about the switch. The two are levelled against each other so a
+ * switch changes the space and not the loudness.
+ */
+class ReverbNode : public Node {
+public:
+    int32_t inputCount() const override { return 1; }
+    int32_t outputCount() const override { return 2; } // L, R
+    void prepare(int32_t sampleRate) override;
+    void process(int32_t frames) override;
+    void setParam(int32_t index, float value) override;
+
+    /**
+     * Each algorithm's wet level, measured to match: see node_test. The room's 3 is Freeverb's
+     * own "scalewet", which its input gain assumes; without it the room sat 10dB under the
+     * plate, and a switch between them would have been a volume knob.
+     */
+    static constexpr float kRoomGain = 3.0f;
+    static constexpr float kPlateGain = 1.0f;
+
+private:
+    reverb::Room room_;
+    reverb::Plate plate_;
+    int32_t type_ = 0; // room, plate: mirrors REVERB_TYPES
+    float size_ = 0.5f;
+    float damp_ = 0.5f;
+    float mix_ = 0.3f;
+    /** 0 is the room and 1 the plate, moving toward type_ so a switch crossfades. */
+    float blend_ = 0.0f;
 };
 
 class LfoNode : public Node {

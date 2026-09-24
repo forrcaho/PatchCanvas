@@ -79,6 +79,8 @@ enum class NodeType(val id: Int) {
             "Euclid" -> Euclid
             "Amp" -> Amp
             "Noise" -> Noise
+            "Delay" -> Delay
+            "Reverb" -> Reverb
             else -> Unknown
         }
     }

@@ -2992,12 +2992,430 @@ void twoNoisesAreUncorrelated() {
     check(std::fabs(r) < 0.02, "correlation " + std::to_string(r));
 }
 
+// ---------------------------------------------------------------- Delay
+
+/**
+ * Runs [node] over [input], a block at a time, and returns everything it produced. The input is
+ * padded with silence to a whole number of blocks.
+ */
+std::vector<float> through(Node &node, std::vector<float> input) {
+    while (input.size() % kBlockSize != 0) input.push_back(0.0f);
+    std::vector<float> all;
+    for (std::size_t at = 0; at < input.size(); at += kBlockSize) {
+        node.setInput(0, input.data() + at);
+        node.process(kBlockSize);
+        const float *o = node.output(0);
+        all.insert(all.end(), o, o + kBlockSize);
+    }
+    return all;
+}
+
+std::vector<float> impulse(std::size_t length) {
+    std::vector<float> x(length, 0.0f);
+    x[0] = 1.0f;
+    return x;
+}
+
+/** Where the loudest sample in [x] is, from [from] on. */
+std::size_t loudestAt(const std::vector<float> &x, std::size_t from = 1) {
+    std::size_t best = from;
+    for (std::size_t i = from; i < x.size(); ++i) {
+        if (std::fabs(x[i]) > std::fabs(x[best])) best = i;
+    }
+    return best;
+}
+
+/** Seconds [from] to [to] of [x]. */
+std::vector<float> slice(const std::vector<float> &x, double from, double to) {
+    return {x.begin() + static_cast<long>(from * kRate), x.begin() + static_cast<long>(to * kRate)};
+}
+
+DelayNode &freeDelay(DelayNode &delay, float ms, float feedback, float mix) {
+    delay.prepare(kRate);
+    delay.setParam(0, static_cast<float>(DelayNode::kFree));
+    delay.setParam(1, ms);
+    delay.setParam(2, feedback);
+    delay.setParam(3, mix);
+    return delay;
+}
+
+void aDelayRepeatsItsInputAfterItsTime() {
+    std::printf("a delay repeats its input after its time\n");
+    DelayNode delay;
+    freeDelay(delay, 100.0f, 0.0f, 1.0f);
+    const auto out = through(delay, impulse(kRate / 2));
+    const std::size_t at = loudestAt(out);
+    check(at == 4800, "100ms is 4800 samples, got " + std::to_string(at));
+    check(std::fabs(out[at] - 1.0f) < 0.001f, "and arrives whole, " + std::to_string(out[at]));
+    check(out[0] == 0.0f, "fully wet, nothing of the dry signal is left");
+}
+
+/**
+ * Synced, the time is a note length at the tempo -- and the tempo is read whether or not the
+ * transport runs, since an eighth is an eighth long either way. Reading the running rate, which
+ * is zero while stopped, would make a stopped delay no length at all.
+ */
+void aSyncedDelayIsANoteLongAtTheTempo() {
+    std::printf("a synced delay is a note long at the tempo\n");
+    DelayNode delay;
+    delay.prepare(kRate);
+    delay.setParam(0, 3.0f); // an eighth
+    delay.setParam(2, 0.0f);
+    delay.setParam(3, 1.0f);
+    delay.setTiming(0.0, false, nullptr, 90.0 / 60.0 / kRate); // stopped, at 90bpm
+    const std::size_t at = loudestAt(through(delay, impulse(kRate)));
+    // Half a beat at 90bpm is a third of a second: 16000 samples.
+    check(at == 16000, "an eighth at 90bpm is 16000 samples, stopped, got " + std::to_string(at));
+
+    DelayNode triplet;
+    triplet.prepare(kRate);
+    triplet.setParam(0, 7.0f); // an eighth triplet: a third of a beat
+    triplet.setParam(2, 0.0f);
+    triplet.setParam(3, 1.0f);
+    triplet.setTiming(120.0 / 60.0 / kRate, true, nullptr, 120.0 / 60.0 / kRate);
+    const std::size_t t = loudestAt(through(triplet, impulse(kRate)));
+    check(t == 8000, "an eighth triplet at 120bpm is 8000 samples, got " + std::to_string(t));
+}
+
+/** Each echo is the last one times the feedback, so the tail is a geometric series and ends. */
+void aDelaysFeedbackRepeatsEachEchoQuieter() {
+    std::printf("a delay's feedback repeats each echo quieter\n");
+    DelayNode delay;
+    freeDelay(delay, 50.0f, 0.5f, 1.0f);
+    const auto out = through(delay, impulse(kRate / 2));
+    check(std::fabs(out[2400] - 1.0f) < 0.001f, "the first echo is whole");
+    check(std::fabs(out[4800] - 0.5f) < 0.001f, "the second is half, " + std::to_string(out[4800]));
+    check(std::fabs(out[7200] - 0.25f) < 0.001f, "the third a quarter, " + std::to_string(out[7200]));
+}
+
+/**
+ * A changed time glides: the read point moves, which bends what is in the line like tape and
+ * never steps it -- and never faster than half a sample per sample, so the bend is at most a
+ * fifth up. Measured with a sine, whose own steps are small: a jump in the read point would be a
+ * jump in the waveform as big as its whole swing, and a read point racing to a far-off time
+ * multiplies the sine's steps by how fast it goes. The first version, an exponential slew,
+ * raced at 7.5 samples a sample and stepped 6.4 times the sine's own.
+ */
+void aDelaysTimeGlidesRatherThanJumps() {
+    std::printf("a delay's time glides rather than jumps\n");
+    std::vector<float> sine(static_cast<std::size_t>(kRate) * 3);
+    for (std::size_t i = 0; i < sine.size(); ++i) {
+        sine[i] = std::sin(2.0 * M_PI * 220.0 * static_cast<double>(i) / kRate);
+    }
+    const std::vector<float> first(sine.begin(), sine.begin() + kRate);
+    const std::vector<float> rest(sine.begin() + kRate, sine.end());
+    // Longer and shorter: a longer time reads the line slower and lowers it, a shorter one
+    // reads it faster and raises it, which is the direction that could step.
+    for (const auto &move : {std::pair<float, float>{100.0f, 400.0f}, {400.0f, 100.0f}}) {
+        DelayNode delay;
+        freeDelay(delay, move.first, 0.0f, 1.0f);
+        const auto before = through(delay, first);
+        const float steady = maxStep(std::vector<float>(before.begin() + kRate / 2, before.end()));
+        delay.setParam(1, move.second);
+        auto after = through(delay, rest);
+        after.insert(after.begin(), before.end() - 1, before.end()); // across the join
+        check(maxStep(after) < 1.6f * steady,
+              "moving " + std::to_string(static_cast<int>(move.first)) + "ms to " +
+                      std::to_string(static_cast<int>(move.second)) + "ms steps by " +
+                      std::to_string(maxStep(after)) + " against " + std::to_string(steady));
+        through(delay, std::vector<float>(kRate / 2, 0.0f)); // the sine out of the line first
+        const std::size_t at = loudestAt(through(delay, impulse(kRate)));
+        check(std::abs(static_cast<int>(at) - static_cast<int>(move.second * 48.0f)) <= 1,
+              "and lands on the new time, " + std::to_string(at));
+    }
+}
+
+/**
+ * A glide is clean: a sine read by a moving read point is a sine at another pitch and nothing
+ * else. What would break it is a read point that steps -- rounded to whole samples, it plays each
+ * sample twice at half speed, a staircase whose images fill the top of the spectrum. Measured
+ * mid-glide, with the read point at its full half a sample a sample: the 1kHz input comes out at
+ * 500Hz, and the band above 4kHz has to be far below it.
+ *
+ * A capture on the emulator did show a haze through a glide, 50dB under the tone and repeated at
+ * every echo, and this test is what cleared the delay of it: reproduced here with the same tone,
+ * feedback, mix and times, the delay alone stayed 115dB clean, linear read or Hermite. The haze
+ * was the Reverb after it, smearing a tone sweeping an octave.
+ */
+void aDelaysGlideIsClean() {
+    std::printf("a delay's glide is clean\n");
+    std::vector<float> sine(static_cast<std::size_t>(kRate) * 3);
+    for (std::size_t i = 0; i < sine.size(); ++i) {
+        sine[i] = 0.5f * static_cast<float>(std::sin(2.0 * M_PI * 1000.0 * static_cast<double>(i) / kRate));
+    }
+    DelayNode delay;
+    freeDelay(delay, 50.0f, 0.0f, 1.0f);
+    through(delay, slice(sine, 0.0, 1.0));
+    delay.setParam(1, 3000.0f); // far enough that the whole next second is at full speed
+    const auto gliding = through(delay, slice(sine, 1.0, 2.0));
+    const auto middle = slice(gliding, 0.25, 0.75);
+    const double tone = noiseDb(middle, 500.0f);
+    double haze = -1000.0;
+    for (float hz : {4500.0f, 8500.0f, 12500.0f, 16500.0f, 20500.0f, 23500.0f}) haze = std::max(haze, noiseDb(middle, hz));
+    std::printf("  tone %.1f haze %.1f\n", tone, haze);
+    check(tone - haze > 60.0,
+          "the haze above 4kHz is " + std::to_string(tone - haze) + "dB under the tone");
+}
+
+/** At the most feedback the knob allows, a loud input for ten seconds is still finite. */
+void aDelayAtFullFeedbackStaysFinite() {
+    std::printf("a delay at full feedback stays finite\n");
+    NoiseNode noise;
+    const auto loud = [&] {
+        std::vector<float> x(static_cast<std::size_t>(kRate) * 10);
+        for (auto &v : x) v = noise.white();
+        return x;
+    }();
+    DelayNode delay;
+    freeDelay(delay, 30.0f, 1.0f, 1.0f); // asks for 1.0, which the knob holds at 0.95
+    const auto out = through(delay, loud);
+    bool finite = true;
+    for (float v : out) finite = finite && std::isfinite(v);
+    check(finite, "every sample finite");
+    // Full-scale noise into a loop at 0.95 settles at an RMS of 1/sqrt(1 - 0.95^2).
+    check(peak(out) < 20.0f, "and bounded, peaking at " + std::to_string(peak(out)));
+}
+
+void aDryDelayIsItsInputExactly() {
+    std::printf("a dry delay is its input exactly\n");
+    DelayNode delay;
+    freeDelay(delay, 10.0f, 0.9f, 0.0f);
+    NoiseNode noise;
+    std::vector<float> x(4096);
+    for (auto &v : x) v = noise.white();
+    const auto out = through(delay, x);
+    bool same = true;
+    for (std::size_t i = 0; i < x.size(); ++i) same = same && out[i] == x[i];
+    check(same, "mix 0 passes the input untouched");
+}
+
+/**
+ * A tail that has died away is zero, not a denormal: a decaying loop spends a long time in
+ * numbers some processors take hundreds of cycles over, for a sound nobody can hear.
+ */
+void aDelaysTailEndsInTrueSilence() {
+    std::printf("a delay's tail ends in true silence\n");
+    DelayNode delay;
+    freeDelay(delay, 5.0f, 0.95f, 1.0f);
+    // 0.95 per 5ms echo is below 1e-20 after about 900 echoes, four and a half seconds.
+    const auto out = through(delay, impulse(static_cast<std::size_t>(kRate) * 8));
+    bool silent = true;
+    for (std::size_t i = static_cast<std::size_t>(kRate) * 7; i < out.size(); ++i) silent = silent && out[i] == 0.0f;
+    check(silent, "eight seconds later the line holds exact zeros");
+}
+
+// ---------------------------------------------------------------- Reverb
+
+/** Both channels of [node] over [input], a block at a time, padded to whole blocks. */
+std::pair<std::vector<float>, std::vector<float>> throughStereo(Node &node, std::vector<float> input) {
+    while (input.size() % kBlockSize != 0) input.push_back(0.0f);
+    std::vector<float> left, right;
+    for (std::size_t at = 0; at < input.size(); at += kBlockSize) {
+        node.setInput(0, input.data() + at);
+        node.process(kBlockSize);
+        left.insert(left.end(), node.output(0), node.output(0) + kBlockSize);
+        right.insert(right.end(), node.output(1), node.output(1) + kBlockSize);
+    }
+    return {left, right};
+}
+
+void setReverb(ReverbNode &reverb, int type, float size, float damp, float mix) {
+    reverb.prepare(kRate);
+    reverb.setParam(0, static_cast<float>(type));
+    reverb.setParam(1, size);
+    reverb.setParam(2, damp);
+    reverb.setParam(3, mix);
+}
+
+std::vector<float> whiteNoise(std::size_t length, float level) {
+    NoiseNode noise;
+    std::vector<float> x(length);
+    for (auto &v : x) v = noise.white() * level;
+    return x;
+}
+
+const char *kReverbNames[2] = {"room", "plate"};
+
+/**
+ * The room and the plate sit at about the same level, so the knob changes the space and not
+ * the loudness -- and about the level of what went in, so a mix knob at halfway is halfway.
+ */
+void reverbsAreLevelledAgainstEachOther() {
+    std::printf("reverbs are levelled against each other\n");
+    const auto noise = whiteNoise(static_cast<std::size_t>(kRate) * 8, 0.5f);
+    const double input = rms(noise);
+    double level[2];
+    for (int type = 0; type < 2; ++type) {
+        ReverbNode reverb;
+        setReverb(reverb, type, 0.5f, 0.5f, 1.0f);
+        const auto out = throughStereo(reverb, noise);
+        level[type] = rms(slice(out.first, 4.0, 8.0));
+        std::printf("  %s: %.4f RMS against %.4f in\n", kReverbNames[type], level[type], input);
+        check(level[type] > input * 0.5 && level[type] < input * 2.0,
+              std::string(kReverbNames[type]) + " is within 6dB of its input, " +
+                      std::to_string(level[type]));
+    }
+    const double apart = 20.0 * std::log10(level[1] / level[0]);
+    check(std::fabs(apart) < 1.5, "and within 1.5dB of each other, " + std::to_string(apart) + "dB");
+}
+
+/** A tail dies away, and a bigger space takes longer to: energy a second on against the start. */
+void aReverbsTailDiesAndABiggerOneLasts() {
+    std::printf("a reverb's tail dies, and a bigger one lasts\n");
+    for (int type = 0; type < 2; ++type) {
+        double kept[2];
+        const float sizes[2] = {0.3f, 0.9f};
+        for (int k = 0; k < 2; ++k) {
+            ReverbNode reverb;
+            setReverb(reverb, type, sizes[k], 0.3f, 1.0f);
+            const auto out = throughStereo(reverb, impulse(static_cast<std::size_t>(kRate) * 4));
+            const double early = rms(slice(out.first, 0.0, 0.5));
+            kept[k] = rms(slice(out.first, 1.0, 1.5)) / early;
+            const double late = rms(slice(out.first, 3.5, 4.0)) / early;
+            check(late < kept[k] && late < 0.5,
+                  std::string(kReverbNames[type]) + " at size " + std::to_string(sizes[k]) +
+                          " dies away, " + std::to_string(late));
+        }
+        check(kept[1] > 2.0 * kept[0],
+              std::string(kReverbNames[type]) + " lasts longer when bigger, " +
+                      std::to_string(kept[0]) + " then " + std::to_string(kept[1]));
+    }
+}
+
+/**
+ * At its largest and least damped, twenty seconds of full-scale noise is finite and has stopped
+ * growing. Not small: the room's combs at 0.98 feedback resonate some fifty times over, and full
+ * scale noise into that peaks near ten, as Freeverb's always has -- Out's limiter is what meets
+ * it. What would be wrong is a loop above unity, and that is a level still rising at the end.
+ */
+void aReverbAtItsLargestStaysFinite() {
+    std::printf("a reverb at its largest stays finite\n");
+    const auto noise = whiteNoise(static_cast<std::size_t>(kRate) * 20, 1.0f);
+    for (int type = 0; type < 2; ++type) {
+        ReverbNode reverb;
+        setReverb(reverb, type, 1.0f, 0.0f, 1.0f);
+        const auto out = throughStereo(reverb, noise);
+        bool finite = true;
+        for (float v : out.first) finite = finite && std::isfinite(v);
+        for (float v : out.second) finite = finite && std::isfinite(v);
+        check(finite, std::string(kReverbNames[type]) + ": every sample finite");
+        const double middle = rms(slice(out.first, 10.0, 15.0));
+        const double end = rms(slice(out.first, 15.0, 20.0));
+        check(end < 1.2 * middle,
+              std::string(kReverbNames[type]) + ": settled, " + std::to_string(middle) + " then " +
+                      std::to_string(end) + " RMS");
+        check(peak(out.first) < 50.0f && peak(out.second) < 50.0f,
+              std::string(kReverbNames[type]) + ": and bounded, peaking at " + std::to_string(peak(out.first)));
+    }
+}
+
+/** The two channels are two: a reverb whose left and right agreed would be a mono one. */
+void aReverbsChannelsDiffer() {
+    std::printf("a reverb's channels differ\n");
+    const auto noise = whiteNoise(static_cast<std::size_t>(kRate) * 4, 0.5f);
+    for (int type = 0; type < 2; ++type) {
+        ReverbNode reverb;
+        setReverb(reverb, type, 0.6f, 0.4f, 1.0f);
+        const auto out = throughStereo(reverb, noise);
+        const auto l = slice(out.first, 1.0, 4.0);
+        const auto r = slice(out.second, 1.0, 4.0);
+        double lr = 0.0, ll = 0.0, rr = 0.0;
+        for (std::size_t i = 0; i < l.size(); ++i) {
+            lr += static_cast<double>(l[i]) * r[i];
+            ll += static_cast<double>(l[i]) * l[i];
+            rr += static_cast<double>(r[i]) * r[i];
+        }
+        const double correlation = lr / std::sqrt(ll * rr);
+        check(std::fabs(correlation) < 0.5,
+              std::string(kReverbNames[type]) + " channels correlate " + std::to_string(correlation));
+    }
+}
+
+void aDryReverbIsItsInputExactly() {
+    std::printf("a dry reverb is its input exactly\n");
+    const auto noise = whiteNoise(4096, 0.5f);
+    for (int type = 0; type < 2; ++type) {
+        ReverbNode reverb;
+        setReverb(reverb, type, 0.8f, 0.2f, 0.0f);
+        const auto out = throughStereo(reverb, noise);
+        bool same = true;
+        for (std::size_t i = 0; i < noise.size(); ++i) same = same && out.first[i] == noise[i] && out.second[i] == noise[i];
+        check(same, std::string(kReverbNames[type]) + ": mix 0 is the input on both sides");
+    }
+}
+
+/**
+ * Switching room for plate crossfades, since both are running: comparing them by ear is exactly
+ * a switch while sound plays, and a step at the switch would make the comparison about the step.
+ * Measured with a sine, against the larger of the two algorithms' own steps on it.
+ */
+void switchingAReverbCrossfades() {
+    std::printf("switching a reverb crossfades\n");
+    std::vector<float> sine(static_cast<std::size_t>(kRate) * 6);
+    for (std::size_t i = 0; i < sine.size(); ++i) {
+        sine[i] = 0.5f * static_cast<float>(std::sin(2.0 * M_PI * 220.0 * static_cast<double>(i) / kRate));
+    }
+    const auto first = slice(sine, 0.0, 3.0);
+    const auto rest = slice(sine, 3.0, 6.0);
+    float steady = 0.0f;
+    for (int type = 0; type < 2; ++type) {
+        ReverbNode reverb;
+        setReverb(reverb, type, 0.5f, 0.5f, 1.0f);
+        const auto out = throughStereo(reverb, sine);
+        steady = std::max({steady, maxStep(slice(out.first, 2.0, 6.0)), maxStep(slice(out.second, 2.0, 6.0))});
+    }
+    ReverbNode reverb;
+    setReverb(reverb, 0, 0.5f, 0.5f, 1.0f);
+    const auto before = throughStereo(reverb, first);
+    reverb.setParam(0, 1.0f);
+    auto after = throughStereo(reverb, rest);
+    after.first.insert(after.first.begin(), before.first.end() - 1, before.first.end());
+    check(maxStep(after.first) < 1.3f * steady,
+          "room to plate steps by " + std::to_string(maxStep(after.first)) + " against " +
+                  std::to_string(steady));
+}
+
+/** A tail that has died away is zero, not a denormal, in both algorithms: they both run. */
+void aReverbsTailEndsInTrueSilence() {
+    std::printf("a reverb's tail ends in true silence\n");
+    ReverbNode reverb;
+    setReverb(reverb, 0, 0.0f, 0.5f, 1.0f);
+    auto input = whiteNoise(static_cast<std::size_t>(kRate) / 2, 0.5f);
+    input.resize(static_cast<std::size_t>(kRate) * 20, 0.0f);
+    const auto out = throughStereo(reverb, input);
+    bool silent = true;
+    for (std::size_t i = static_cast<std::size_t>(kRate) * 19; i < out.first.size(); ++i) {
+        silent = silent && out.first[i] == 0.0f && out.second[i] == 0.0f;
+    }
+    check(silent, "twenty seconds on, both channels are exact zeros");
+    reverb.setParam(0, 1.0f); // the plate has been running all along; its tail must be gone too
+    const auto plate = throughStereo(reverb, std::vector<float>(static_cast<std::size_t>(kRate) / 4, 0.0f));
+    bool plateSilent = true;
+    for (float v : plate.first) plateSilent = plateSilent && v == 0.0f;
+    check(plateSilent, "and so is the plate's, heard by switching to it");
+}
+
 int main() {
     oscPlaysTheRequestedPitch();
     anOscsTuneMovesItsPitchByCents();
     noiseHasTheSlopeItsNameSays();
     noiseColorsAreAboutAsLoudAsEachOther();
     twoNoisesAreUncorrelated();
+    aDelayRepeatsItsInputAfterItsTime();
+    aSyncedDelayIsANoteLongAtTheTempo();
+    aDelaysFeedbackRepeatsEachEchoQuieter();
+    aDelaysTimeGlidesRatherThanJumps();
+    aDelaysGlideIsClean();
+    aDelayAtFullFeedbackStaysFinite();
+    aDryDelayIsItsInputExactly();
+    aDelaysTailEndsInTrueSilence();
+    reverbsAreLevelledAgainstEachOther();
+    aReverbsTailDiesAndABiggerOneLasts();
+    aReverbAtItsLargestStaysFinite();
+    aReverbsChannelsDiffer();
+    aDryReverbIsItsInputExactly();
+    switchingAReverbCrossfades();
+    aReverbsTailEndsInTrueSilence();
     oscStaysBandLimited();
     filterCutoffFollowsItsKnob();
     aFilterHasFourKinds();

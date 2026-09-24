@@ -117,6 +117,7 @@ being edited out from under it.
 | `transport.h` | musical time: one position every clocked node divides, header-only |
 | `scales.h` | scale tables and the looping scale list; where a degree becomes a pitch |
 | `nodes.{h,cpp}` | the module set, DaisySP-backed |
+| `reverb.h` | Reverb's two algorithms, a Freeverb room and a Dattorro plate, header-only |
 | `processors.{h,cpp}` | notes in, notes out: Chance, Chord, Arp, Euclid |
 | `soundfont.{h,cpp}` | the SF node over TinySoundFont; a SoundFont loaded once and shared |
 | `synth.h` | `MonoSynth` and `GateRamp`: one note's pitch, glide and declick |
@@ -549,6 +550,17 @@ holds a note as it holds a `Steps` note; the part step left over is counted in f
 the tick it starts on. A note shorter than one step has no whole steps at all, so its part
 starts on the tick it does -- which is why `SeqNode::onTick` counts the tails out *after*
 the starts rather than beside the ends.
+
+**A knob that means nothing is faint, not gone.** `Param.liveWhen` names another knob and the
+value it must hold -- a Delay's time is live only while its interval is "free" -- and such a
+row is drawn at a third of its brightness and answers no finger while it does not apply.
+Hiding it would move every row under it, and leaving it bright would be a control nobody is
+listening to.
+
+**Timed in beats but not by the transport reads `tempo_`.** `setTiming` hands every node the
+running rate, which is zero while stopped so anything stepping in beats holds still, *and*
+the tempo, which is not. A synced Delay reads the second: an eighth is an eighth long whether
+or not anything is playing, and reading the first made a stopped delay no length at all.
 
 **Nothing carries a pulse yet, and the kind stays anyway.** `Env` was the last thing taking
 a gate and it takes *notes* now: a pulse is an event with no duration, so it could never

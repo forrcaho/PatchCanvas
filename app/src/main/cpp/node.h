@@ -240,11 +240,18 @@ public:
      * it is moving at all, and the patch's scales. Zero beats per frame while stopped, so
      * anything timed in beats holds still with it. No scales yet reads as twelve equal
      * steps.
+     *
+     * [tempo] is the other reading of the same number: how far a frame *would* move the
+     * transport at its tempo, running or not. For what keeps time without advancing -- a delay
+     * set to an eighth is an eighth long whether or not anything is playing, and reading the
+     * zero above would make it no length at all. Zero from a caller that never set a tempo.
      */
-    void setTiming(double beatsPerFrame, bool running, const ScaleList *scales = nullptr) {
+    void setTiming(double beatsPerFrame, bool running, const ScaleList *scales = nullptr,
+                   double tempo = 0.0) {
         beatsPerFrame_ = beatsPerFrame;
         running_ = running;
         scales_ = scales;
+        tempo_ = tempo;
     }
 
     /**
@@ -316,6 +323,8 @@ protected:
     /** See setTiming. */
     double beatsPerFrame_ = 0.0;
     bool running_ = false;
+    /** See setTiming: beats per frame at the tempo, whether or not the transport runs. */
+    double tempo_ = 0.0;
     /** Owned by the graph, and valid for the block it was set for. */
     const ScaleList *scales_ = nullptr;
 

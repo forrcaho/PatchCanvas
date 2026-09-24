@@ -1233,6 +1233,106 @@ void NoiseNode::setParam(int32_t index, float value) {
     if (index == 0) type_ = static_cast<int32_t>(clampf(value, 0.0f, 2.0f) + 0.5f);
 }
 
+// ---------------------------------------------------------------- Delay
+
+float DelayNode::targetSamples() const {
+    float samples;
+    if (interval_ >= kFree) {
+        samples = timeMs_ * 0.001f * static_cast<float>(sampleRate_);
+    } else {
+        // 120bpm until a graph says otherwise, which only a test that never sets one does.
+        const double perFrame = tempo_ > 0.0 ? tempo_ : 2.0 / static_cast<double>(sampleRate_);
+        const Interval &step = kIntervals[interval_];
+        samples = static_cast<float>(static_cast<double>(step.num) / step.den / perFrame);
+    }
+    // Two short of the line, since a fractional read looks one sample past where it points.
+    return clampf(samples, 1.0f, static_cast<float>(kMaxSamples - 2));
+}
+
+void DelayNode::process(int32_t frames) {
+    const float *in = input(0);
+    float *o = out(0);
+    const double target = targetSamples();
+    if (delay_ < 0.0) delay_ = target; // the first block starts where it is going
+    // Smoothly into place over about 40ms when the move is small, and never faster than half
+    // a sample per sample when it is large. The limit is the pitch: a read point moving at
+    // speed v plays what is in the line at 1 - v times its pitch, and the exponential on its own
+    // moved a 300ms change at 7.5 samples a sample -- a dive six times deeper than tape's,
+    // measured as steps six times the sine's own. At half a sample, the line bends by at most
+    // an octave down or a fifth up while a time changes, and a small change -- or a modulator
+    // wobbling it -- never reaches the limit at all. The Filter's cutoff found the same thing:
+    // a smooth moves most in the first moment, which for a large jump is the wrong moment.
+    const double approach = 1.0 / (0.04 * static_cast<double>(sampleRate_));
+    constexpr double kMaxGlide = 0.5;
+    for (int32_t i = 0; i < frames; ++i) {
+        delay_ += std::clamp((target - delay_) * approach, -kMaxGlide, kMaxGlide);
+        // Linear, between the two samples either side. Hermite was tried when a capture showed
+        // a haze through a glide, and measured no different: the haze was the Reverb after it,
+        // smearing a tone that was sweeping an octave, which is what a reverb is for.
+        const float echo = line_.Read(static_cast<float>(delay_));
+        float back = in[i] + feedback_ * echo;
+        // A decaying tail spends a long time in denormal numbers, which some processors take
+        // hundreds of cycles over. Flushed well below anything audible.
+        if (std::fabs(back) < 1e-20f) back = 0.0f;
+        line_.Write(back);
+        o[i] = in[i] + mix_ * (echo - in[i]);
+    }
+}
+
+void DelayNode::setParam(int32_t index, float value) {
+    switch (index) {
+        case 0: interval_ = static_cast<int32_t>(clampf(value, 0.0f, static_cast<float>(kFree)) + 0.5f); break;
+        case 1: timeMs_ = clampf(value, 1.0f, 4000.0f); break;
+        // Below 1, so every echo is quieter than the one before and the tail always ends.
+        case 2: feedback_ = clampf(value, 0.0f, 0.95f); break;
+        case 3: mix_ = clampf(value, 0.0f, 1.0f); break;
+        default: break;
+    }
+}
+
+// ---------------------------------------------------------------- Reverb
+
+void ReverbNode::prepare(int32_t sampleRate) {
+    Node::prepare(sampleRate);
+    room_.prepare(static_cast<float>(sampleRate));
+    plate_.prepare(static_cast<float>(sampleRate));
+    room_.set(size_, damp_);
+    plate_.set(size_, damp_);
+}
+
+void ReverbNode::process(int32_t frames) {
+    const float *in = input(0);
+    float *left = out(0);
+    float *right = out(1);
+    const float target = static_cast<float>(type_);
+    const float step = 1.0f / (0.05f * static_cast<float>(sampleRate_));
+    for (int32_t i = 0; i < frames; ++i) {
+        blend_ += clampf(target - blend_, -step, step);
+        // Smoothstep over the linear blend, as every crossfade here is: a straight ramp is
+        // continuous in level but not in slope, and both corners are heard.
+        const float t = blend_ * blend_ * (3.0f - 2.0f * blend_);
+        float roomL, roomR, plateL, plateR;
+        room_.process(in[i], roomL, roomR);
+        plate_.process(in[i], plateL, plateR);
+        const float wetL = kRoomGain * roomL * (1.0f - t) + kPlateGain * plateL * t;
+        const float wetR = kRoomGain * roomR * (1.0f - t) + kPlateGain * plateR * t;
+        left[i] = in[i] + mix_ * (wetL - in[i]);
+        right[i] = in[i] + mix_ * (wetR - in[i]);
+    }
+}
+
+void ReverbNode::setParam(int32_t index, float value) {
+    switch (index) {
+        case 0: type_ = static_cast<int32_t>(clampf(value, 0.0f, 1.0f) + 0.5f); break;
+        case 1: size_ = clampf(value, 0.0f, 1.0f); break;
+        case 2: damp_ = clampf(value, 0.0f, 1.0f); break;
+        case 3: mix_ = clampf(value, 0.0f, 1.0f); break;
+        default: return;
+    }
+    room_.set(size_, damp_);
+    plate_.set(size_, damp_);
+}
+
 // ---------------------------------------------------------------- factory
 
 Node *makeNode(NodeType type) {
@@ -1243,6 +1343,8 @@ Node *makeNode(NodeType type) {
         case NodeType::Mix: return new MixNode();
         case NodeType::Amp: return new AmpNode();
         case NodeType::Noise: return new NoiseNode();
+        case NodeType::Delay: return new DelayNode();
+        case NodeType::Reverb: return new ReverbNode();
         case NodeType::PolyIn: return new PolyInNode();
         case NodeType::PolySum: return new PolySumNode();
         case NodeType::Osc: return new OscNode();

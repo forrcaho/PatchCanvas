@@ -65,4 +65,63 @@ class CatalogTest {
         assertTrue("a source: nothing goes in", Types.Noise.inputs.isEmpty())
         assertEquals(listOf(SignalKind.AUDIO), Types.Noise.outputs.map { it.kind })
     }
+
+    @Test
+    fun `Delay is a module, synced in its header or free in milliseconds`() {
+        assertAModule(Types.Delay, NodeType.Delay)
+        val interval = Types.Delay.params[Types.Delay.intervalParam]
+        assertTrue("the interval is a header chip", interval.header)
+        assertEquals(
+            "which offers every division, then free",
+            INTERVALS + FREE_TIME, intervalChoices(Types.Delay),
+        )
+        assertEquals("and defaults to an eighth", DEFAULT_INTERVAL.toFloat(), interval.default)
+        assertEquals("a sequencer's chip has no free", INTERVALS, intervalChoices(Types.Seq))
+    }
+
+    /**
+     * Synced, the time knob is a number nobody is listening to: drawn faint, and neither dragged
+     * nor typed. It is not hidden, since that would move every row under it.
+     */
+    @Test
+    fun `a Delay's time knob is live only while the interval is free`() {
+        val patch = Patch()
+        val delay = patch.add(Types.Delay, Offset.Zero)!!
+        val time = Types.Delay.params.indexOfFirst { it.name == "time" }
+        assertTrue(!delay.isLive(time))
+        delay.setParam(Types.Delay.intervalParam, INTERVALS.size.toFloat())
+        assertTrue("free, the knob is the time", delay.isLive(time))
+        assertTrue("and every other knob always is", delay.isLive(time + 1))
+
+        val frame = Frame(
+            canvas = androidx.compose.ui.geometry.Size(2404f, 1080f), density = 2.4375f,
+            insetLeft = 160f, insetTop = 54f, insetRight = 0f, insetBottom = 58f,
+        )
+        val d = frame.density
+        val panel = panelRect(frame)
+        val rows = patch.panelRows(delay)
+        val brackets = { row: ParamRow -> patch.rangeOf(row.owner, row.index) }
+        val slot = rows.indexOfFirst { it.index == time }
+        val on = panelRowAt(panel, d, Types.Delay, rows.size, slot).center
+        assertEquals(ParamRow(delay, time), panelKnobAt(panel, d, delay, rows, brackets, on))
+        delay.setParam(Types.Delay.intervalParam, 3f) // back to an eighth
+        assertEquals("synced, a finger on it takes nothing", null, panelKnobAt(panel, d, delay, rows, brackets, on))
+    }
+
+    @Test
+    fun `Reverb is a module, mono in and stereo out`() {
+        assertAModule(Types.Reverb, NodeType.Reverb)
+        assertEquals(listOf("room", "plate"), REVERB_TYPES)
+        assertEquals(listOf("in"), Types.Reverb.inputs.map { it.name })
+        assertEquals(listOf("L", "R"), Types.Reverb.outputs.map { it.name })
+        assertTrue(Types.Reverb.outputs.all { it.kind == SignalKind.AUDIO })
+    }
+
+    /** kMaxParams is the engine's ceiling on knobs, and a module past it would lose the rest. */
+    @Test
+    fun `tonight's modules fit the engine's knobs`() {
+        listOf(Types.Osc, Types.Noise, Types.Delay, Types.Reverb).forEach {
+            assertTrue("${it.name} has ${it.params.size}", it.params.size <= MAX_PARAMS)
+        }
+    }
 }

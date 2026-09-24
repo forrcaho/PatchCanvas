@@ -196,6 +196,9 @@ enum class ParamCurve { LINEAR, EXPONENTIAL, STEPPED }
  * instead of "0.63". The range and the curve belong here, with the thing being
  * described.
  */
+/** See [Param.liveWhen]: knob [param] must hold [value]. */
+data class LiveWhen(val param: Int, val value: Int)
+
 /**
  * What a stepped parameter's options look like on the panel.
  *
@@ -254,6 +257,14 @@ data class Param(
      * The engine's side is Node::drivenParam.
      */
     val drivenBy: Int = -1,
+    /**
+     * Another knob, and the value it must hold for this one to mean anything; null for a knob
+     * that always does. A Delay's time is live only while its interval is "free": synced, the
+     * tempo decides the time and the knob is a number nobody is listening to. Such a row is
+     * drawn faint and answers no finger while it is not live, rather than disappearing -- which
+     * would move every row under it -- or pretending to be a control.
+     */
+    val liveWhen: LiveWhen? = null,
 ) {
     /**
      * How many options a stepped parameter offers.
@@ -639,6 +650,47 @@ object Types {
         Color(0xFF5C6440),
         params = listOf(Param("type", 0f, (NOISE_TYPES.size - 1).toFloat(), 0f, "", STEP, Choice.NOISE)),
     )
+    /**
+     * An echo: the input again after a time, fed back into itself.
+     *
+     * The time is a note division, chosen in the header like a sequencer's interval, or "free"
+     * -- one past the divisions -- when the time knob takes over in milliseconds. Synced, the
+     * knob is drawn faint and is not a control ([Param.liveWhen]). The feedback stops short of
+     * 1 so the tail always ends. Order mirrors DelayNode::setParam.
+     */
+    val Delay = ModuleType(
+        "Delay", listOf(Port("in", A)), listOf(Port("out", A)),
+        Color(0xFF00B8F8),
+        params = listOf(
+            Param(
+                "interval", 0f, INTERVALS.size.toFloat(), DEFAULT_INTERVAL.toFloat(),
+                curve = STEP, choice = Choice.DIVISION, header = true,
+            ),
+            Param(
+                "time", 1f, 4000f, 250f, "ms", EXP,
+                liveWhen = LiveWhen(0, INTERVALS.size),
+            ),
+            Param("feedback", 0f, 0.95f, 0.35f, "", LIN, short = "fb"),
+            Param("mix", 0f, 1f, 0.35f, "", LIN),
+        ),
+    )
+    /**
+     * A reverb, mono in and stereo out: a room or a plate, the two algorithms in reverb.h, to
+     * be chosen between by ear. Both run all the time and the `type` knob crossfades, so
+     * comparing them while something plays never cuts a tail short. `size` is how long the
+     * space rings, `damp` how quickly its highs die, `mix` how much of it is heard. Order
+     * mirrors ReverbNode::setParam.
+     */
+    val Reverb = ModuleType(
+        "Reverb", listOf(Port("in", A)), listOf(Port("L", A), Port("R", A)),
+        Color(0xFFF0B0B0),
+        params = listOf(
+            Param("type", 0f, (REVERB_TYPES.size - 1).toFloat(), 0f, "", STEP, Choice.REVERB),
+            Param("size", 0f, 1f, 0.5f, "", LIN),
+            Param("damp", 0f, 1f, 0.5f, "", LIN),
+            Param("mix", 0f, 1f, 0.3f, "", LIN),
+        ),
+    )
     val Lfo = ModuleType(
         "LFO", emptyList(), listOf(Port("out", M)),
         Color(0xFFEC7AEF),
@@ -923,7 +975,7 @@ object Types {
      * needed a module, and that is Mix.
      */
     val palette =
-        listOf(Osc, Pluck, Fm, Sf, Noise, Drone, Seq, Euclid, Arp, Chord, Chance, Filter, Env, Lfo, Amp, Mix)
+        listOf(Osc, Pluck, Fm, Sf, Noise, Drone, Seq, Euclid, Arp, Chord, Chance, Filter, Delay, Reverb, Env, Lfo, Amp, Mix)
 
     /**
      * Modules collapsed into one box. Its ports are its own rather than its type's -- they
@@ -1333,6 +1385,13 @@ class PatchModule(
      */
     fun drivenRange(index: Int): ModRange =
         modRanges[index] ?: ModRange(0f, params.getOrElse(index) { type.params[index].default })
+
+    /** Whether knob [index] means anything as the other knobs stand; see [Param.liveWhen]. */
+    fun isLive(index: Int): Boolean {
+        val needs = type.params.getOrNull(index)?.liveWhen ?: return true
+        val holds = params.getOrElse(needs.param) { type.params[needs.param].default }
+        return holds.roundToInt() == needs.value
+    }
 
     /**
      * The degree shown on the grid's top row.
@@ -1827,7 +1886,7 @@ internal fun panelValueAt(
 ): Pair<ParamRow, ValueTarget>? {
     rows.forEachIndexed { slot, entry ->
         val param = entry.param
-        if (param.buttons) return@forEachIndexed
+        if (param.buttons || !entry.owner.isLive(entry.index)) return@forEachIndexed
         val row = panelRowAt(panel, d, module.type, rows.size, slot)
         val range = rangeOf(entry)
         val text = if (range != null) rangeReading(param, range)
@@ -1879,6 +1938,8 @@ internal fun panelKnobAt(
         // A bracketed row's knob is not the hand's. It shows where the modulator has taken the
         // parameter, and dragging it would set a value nothing is listening to.
         if (rangeOf(entry) != null) return@forEachIndexed
+        // Nor is a row that means nothing as the other knobs stand; see Param.liveWhen.
+        if (!entry.owner.isLive(entry.index)) return@forEachIndexed
         // Generous vertically: the rows are the only targets on the panel, so a near
         // miss should still land rather than do nothing.
         if (panelRowAt(panel, d, module.type, rows.size, slot).inflate(6f * d).contains(at)) return entry
@@ -4626,7 +4687,7 @@ fun PatchCanvas(
                             // no knob. Anywhere dismisses it, including the chip itself.
                             val intervalParam = open.type.intervalParam
                             if (intervalParam >= 0 && intervalMenu) {
-                                val tiles = panelTiles(panel, frame.density, INTERVALS.size)
+                                val tiles = panelTiles(panel, frame.density, intervalChoices(open.type).size)
                                 waitForUpRelease()
                                 val hit = tiles.indexOfFirst { it.contains(down.position) }
                                 if (hit >= 0) open.setParam(intervalParam, hit.toFloat())
@@ -7020,7 +7081,7 @@ private fun DrawScope.drawChoices(
             drawWave(box, d, i, ink)
         } else {
             val word = when (param.choice) {
-                Choice.DIVISION -> INTERVALS.getOrNull(i)?.label.orEmpty()
+                Choice.DIVISION -> (INTERVALS + FREE_TIME).getOrNull(i)?.label.orEmpty()
                 Choice.ARP -> ARP_MODES.getOrNull(i).orEmpty()
                 Choice.FILTER -> FILTER_TYPES.getOrNull(i).orEmpty()
                 Choice.SLOPE -> SLOPES.getOrNull(i).orEmpty()
@@ -7913,6 +7974,18 @@ internal val INTERVALS = listOf(
 /** Mirrors kDefaultInterval: an eighth. */
 internal const val DEFAULT_INTERVAL = 3
 
+/**
+ * One past the divisions: a time in milliseconds rather than a note length, offered only by an
+ * interval that reaches this far -- a Delay's. Mirrors DelayNode::kFree.
+ */
+internal val FREE_TIME = Interval("free", "time in ms", 0, 0)
+
+/** What [type]'s interval chip offers: the divisions, and "free" where it reaches one past them. */
+internal fun intervalChoices(type: ModuleType): List<Interval> {
+    val param = type.params.getOrNull(type.intervalParam) ?: return INTERVALS
+    return if (param.max.roundToInt() >= INTERVALS.size) INTERVALS + FREE_TIME else INTERVALS
+}
+
 /** The transport's rate. The range mirrors kMinTempo and kMaxTempo in transport.h. */
 internal val TEMPO = Param("tempo", 20f, 300f, 120f, " bpm")
 
@@ -8489,7 +8562,8 @@ private fun DrawScope.drawPanel(
     val intervalParam = module.type.intervalParam
     val chosenInterval = if (intervalParam < 0) -1
         else module.params.getOrElse(intervalParam) { DEFAULT_INTERVAL.toFloat() }.roundToInt()
-    INTERVALS.getOrNull(chosenInterval)?.let {
+    val intervals = intervalChoices(module.type)
+    intervals.getOrNull(chosenInterval)?.let {
         drawChip(panelIntervalChip(panel, d), d, it.label, intervalMenu, scaleAccent, measurer)
     }
 
@@ -8520,8 +8594,8 @@ private fun DrawScope.drawPanel(
             topLeft = panelBody(panel, d).topLeft,
             size = panelBody(panel, d).size,
         )
-        panelTiles(panel, d, INTERVALS.size).forEachIndexed { i, tile ->
-            drawTile(tile, d, INTERVALS[i].label, INTERVALS[i].detail, i == chosenInterval, measurer)
+        panelTiles(panel, d, intervals.size).forEachIndexed { i, tile ->
+            drawTile(tile, d, intervals[i].label, intervals[i].detail, i == chosenInterval, measurer)
         }
         return
     }
@@ -8577,9 +8651,11 @@ private fun DrawScope.drawPanel(
 
         // On a subpatch's panel the module is named too: "cutoff" alone says which knob but
         // not whose, and a subpatch is exactly where two of them can be side by side.
+        // Faint while it means nothing; see Param.liveWhen.
+        val faint = if (owner.isLive(index)) 1f else 0.35f
         val label = if (own) param.name else "${owner.title}  \u00b7  ${param.name}"
         val name = measurer.measure(label, PanelParamStyle)
-        drawText(name, topLeft = Offset(row.left, row.top + 4f * d))
+        drawText(name, topLeft = Offset(row.left, row.top + 4f * d), alpha = faint)
 
         // A stepped parameter shows no numeric readout: the lit button is the reading,
         // and "0" next to a picture of a sawtooth is noise.
@@ -8594,6 +8670,7 @@ private fun DrawScope.drawPanel(
             drawText(
                 reading,
                 topLeft = Offset(row.right - reading.size.width, row.top + 2f * d),
+                alpha = faint,
             )
         }
 
@@ -8622,6 +8699,7 @@ private fun DrawScope.drawPanel(
             topLeft = Offset(row.left, barTop),
             size = Size(filled.coerceAtLeast(barHeight), barHeight),
             cornerRadius = radius,
+            alpha = faint,
         )
 
         if (param.marks) {

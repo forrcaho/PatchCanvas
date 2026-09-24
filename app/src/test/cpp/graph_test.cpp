@@ -1138,6 +1138,47 @@ void patchingAndUnpatchingAnAmpFade() {
 }
 
 /**
+ * A delay synced to the transport keeps time while the transport is stopped, at the tempo the
+ * graph was given -- which only works because the graph hands every node the tempo as well as
+ * the running rate (Node::setTiming). The running rate is zero while stopped, and a node that
+ * read it would make an eighth no length at all.
+ */
+void aSyncedDelayKeepsTheGraphsTempoWhileStopped() {
+    std::printf("a synced delay keeps the graph's tempo while stopped\n");
+    Graph graph;
+    graph.setSampleRate(48000);
+    graph.postAdd(1, NodeType::In);
+    graph.postAdd(2, NodeType::Delay);
+    graph.postAdd(3, NodeType::Out);
+    graph.postConnect(1, 0, 2, 0);
+    graph.postConnect(2, 0, 3, 0);
+    graph.postSetParam(1, 0, 1.0f);  // the input at unity
+    graph.postSetParam(2, 0, 3.0f);  // an eighth
+    graph.postSetParam(2, 2, 0.0f);  // one echo
+    graph.postSetParam(2, 3, 1.0f);  // and only the echo
+    graph.postSetParam(3, 0, 0.25f); // well under the limiter
+    graph.postSetTempo(90.0f);
+    graph.applyCommands();
+    render(graph, 64); // past every cable's fade-in, so the impulse meets a settled graph
+
+    std::array<float, kBlockSize> click{};
+    click[0] = 1.0f;
+    const std::array<float, kBlockSize> quiet{};
+    std::vector<float> out;
+    for (int b = 0; b < 48000 / kBlockSize; ++b) {
+        graph.setLiveInput(b == 0 ? click.data() : quiet.data());
+        graph.process(kBlockSize);
+        out.insert(out.end(), graph.outputL(), graph.outputL() + kBlockSize);
+    }
+    std::size_t at = 0;
+    for (std::size_t i = 0; i < out.size(); ++i) {
+        if (std::fabs(out[i]) > std::fabs(out[at])) at = i;
+    }
+    // Half a beat at 90bpm is a third of a second.
+    check(at == 16000, "an eighth at 90bpm, stopped, lands at 16000, got " + std::to_string(at));
+}
+
+/**
  * Two note sources into one input, and a disconnect that names only one of them.
  *
  * Through a poly subpatch, because that is where two notes sound at once now: every synth
@@ -1550,6 +1591,7 @@ int main() {
     aPatchedAmpSweepsItsGainBetweenItsBrackets();
     anAmpWithNoRangeSweepsFromNothingToItsKnob();
     patchingAndUnpatchingAnAmpFade();
+    aSyncedDelayKeepsTheGraphsTempoWhileStopped();
     aFlattenedPolySubpatchSoundsTwoNotesAtOnce();
     aModulatorDrivesAParameterAcrossItsRange();
     anExponentialRangeSweepsGeometrically();

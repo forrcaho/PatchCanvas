@@ -3589,7 +3589,60 @@ crowded now: only a dozen audio shades sit 15 or more from every existing border
 lightness to be seen. `Noise` is an olive gray, `Delay` an azure and `Reverb` a rose, each
 about 15 from its nearest neighbor. **They need an eye**, which the search is not.
 
+**`Delay`'s time is a note division or free.** The division is a header chip like a
+sequencer's, whose chooser offers one tile more -- "free" -- and in free the time knob takes
+over in milliseconds; synced, that knob is drawn faint and answers nothing (`Param.liveWhen`).
+A synced time needs the tempo while the transport is stopped, where the running rate every node
+is handed is zero on purpose, so `setTiming` now carries the tempo as well. The line is four
+seconds at 48kHz, allocated with the node on the interface's thread.
+
+**A changed time bends, and the first version bent too far.** The read point moves toward a new
+time rather than jumping, since a jump in the read point is a jump in the waveform. An
+exponential slew moved a 300ms change at 7.5 samples a sample -- a dive six times deeper than
+tape's, measured as steps 6.4 times the sine's own -- so it is rate-limited at half a sample per
+sample, the same lesson the Filter's tracked cutoff learned: a smooth moves most in the first
+moment, which for a large jump is the wrong moment. At half a sample the line bends at most an
+octave down or a fifth up. That also means **going from 1/4 to 1/2 drops the echoes an octave
+for a whole second**, seen in the capture's pitch track. Tape does exactly that; whether it is
+wanted here is a question for an ear, and the alternative is crossfading between the old time
+and the new rather than gliding. Tracking the read point in a float stalled two samples short of
+400ms -- the last of an approach is steps smaller than a float can add to 19200 -- so it is a
+double.
+
+**`Reverb` is two algorithms behind one knob, and both always run.** A Freeverb room and a
+Dattorro plate (`reverb.h`), written from Jezar's public-domain design and from Dattorro's 1997
+paper, since DaisySP's `ReverbSc` sits in the LGPL half this project keeps out. Mono in, stereo
+out. The `type` knob crossfades over 50ms, because comparing the two by ear is exactly a switch
+while something plays, and a tail cut at the switch would make the comparison about the switch.
+They are levelled against each other and against their input: the room needed Freeverb's own
+wet scale of 3, without which it sat 10dB under the plate. Every loop flushes below 1e-20 so a
+dying tail never idles in denormals, and both tails are asserted to reach exact zero.
+
+**On the emulator, with a capture read by `find_clicks.py`.** A test patch -- a Drone into a sine
+`Osc` into `Delay` into `Reverb` into both outputs -- written as a file and loaded, because
+building it by taps costs a screenshot per tap. The add menu holds all eighteen modules at font
+scale 1.5; the division chooser shows its tenth tile; a tap on the faint time row sends nothing;
+and through a delay glide from 500ms to 1000ms and a switch from room to plate, **zero
+discontinuities on either channel**. The spectrogram did show a haze through the glide, 50dB
+under the tone and repeated at every echo, and the delay was cleared of it by reproducing the
+scene on the host without the reverb: 115dB clean with a linear read or a Hermite one. The haze
+is the room smearing a tone that sweeps an octave, which is what a reverb does. (The capture's
+steady tone also carries odd harmonics about 45dB down; that is `Out`'s limiter at 0.4, which
+the Phase 10 notes already measured as no longer transparent there.)
+
+**For the morning, by ear**, since none of this has been heard:
+- the three new colors, and especially `Noise`'s olive, which is faint against the canvas;
+- `Noise`'s three colors at their levels, through an `Amp` an `Env` opens;
+- a delay time changed while it sounds: tape bend, or a crossfade instead?
+- room against plate, switched while something plays -- and which one to keep, or both;
+- `size` and `damp` across their ranges on each, and the plate's shimmer, which is its 1Hz
+  modulation and may want to be slower;
+- an `Osc`'s tune exposed and patched from an `LFO`, as a vibrato.
+
 ### Noise, and then delay and reverb
+
+> **Built 2026-09-23**, overnight: see *The overnight run* above, which is the current answer
+> where this plan and it differ.
 
 White, pink and brown, from one module with a `type`. The DaisySP caveat applies before any
 of it is vendored: anything calling `rand()` is edited first, because Bionic's takes a mutex
