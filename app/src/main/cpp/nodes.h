@@ -48,6 +48,9 @@ enum class NodeType : int32_t {
     /** A poly subpatch's two edges. Neither is a module: see PolyInNode. */
     PolyIn = 22,
     PolySum = 23,
+    Noise = 24,
+    Delay = 25,
+    Reverb = 26,
 };
 
 /**
@@ -777,6 +780,39 @@ private:
  * and the reason the waveform order matches the oscillator's, so the panel draws the same
  * four pictures.
  */
+/**
+ * White, pink or brown noise: a source with no input and no notes, for a voice to shape.
+ *
+ * Its own generator rather than DaisySP's WhiteNoise, which calls rand() -- and Bionic's rand()
+ * takes a mutex, which the audio thread may never do. A xorshift is three shifts and three
+ * xors, has no state beyond one word, and is seeded differently for every node made: inside a
+ * poly subpatch each instance is a node of its own, and four copies of the *same* noise would
+ * sum coherently, twice as loud as four independent ones and with none of their width.
+ *
+ * All three colors run all the time and the knob only chooses which is heard, as Filter keeps
+ * its second stage running at 12dB: a pink or brown generator restarted from zero on a switch
+ * would begin with a slow drift up out of silence rather than the noise it is.
+ */
+class NoiseNode : public Node {
+public:
+    NoiseNode();
+    int32_t inputCount() const override { return 0; }
+    int32_t outputCount() const override { return 1; }
+    void process(int32_t frames) override;
+    void setParam(int32_t index, float value) override;
+
+    /** Uniform in [-1, 1). Public for the test that checks two nodes are uncorrelated. */
+    float white();
+
+private:
+    uint32_t state_;
+    int32_t type_ = 0; // white, pink, brown: mirrors NOISE_TYPES in PatchCanvas.kt
+    /** Paul Kellet's refined pink filter: seven one-poles summed, within 0.05dB of -3dB/oct. */
+    float pink_[7] = {};
+    /** Brown is white integrated, with a leak so it cannot wander off to a DC offset. */
+    float brown_ = 0.0f;
+};
+
 class LfoNode : public Node {
 public:
     int32_t inputCount() const override { return 0; }

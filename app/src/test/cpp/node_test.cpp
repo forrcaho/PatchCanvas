@@ -2900,9 +2900,104 @@ void aParkedEnvelopeFollowsItsLevel() {
     check(std::fabs(run(env, 60).back() - 0.2f) < 0.01f, "and it arrives within the glide");
 }
 
+// ---------------------------------------------------------------- Noise
+
+/**
+ * The average power of a noise near [hz], in dB: magnitudeAt squared, over every 2048-sample
+ * frame and five neighboring frequencies. One bin of one frame of noise is a random number
+ * with a spread of several dB; a few thousand of them average to within a fraction of one.
+ */
+double noiseDb(const std::vector<float> &samples, float hz) {
+    double total = 0.0;
+    int count = 0;
+    constexpr std::size_t kFrame = 2048;
+    for (std::size_t start = 0; start + kFrame <= samples.size(); start += kFrame) {
+        const std::vector<float> frame(samples.begin() + static_cast<long>(start),
+                                       samples.begin() + static_cast<long>(start + kFrame));
+        for (int k = -2; k <= 2; ++k) {
+            const float m = magnitudeAt(frame, hz * (1.0f + 0.02f * static_cast<float>(k)));
+            total += static_cast<double>(m) * m;
+            ++count;
+        }
+    }
+    return 10.0 * std::log10(total / count);
+}
+
+double rms(const std::vector<float> &samples) {
+    double sum = 0.0;
+    for (float x : samples) sum += static_cast<double>(x) * x;
+    return std::sqrt(sum / static_cast<double>(samples.size()));
+}
+
+std::vector<float> noiseOf(int type, int seconds) {
+    NoiseNode noise;
+    noise.prepare(kRate);
+    noise.setParam(0, static_cast<float>(type));
+    run(noise, kRate / kBlockSize); // past the pink and brown filters' own start from zero
+    return run(noise, seconds * kRate / kBlockSize);
+}
+
+/**
+ * White is flat, pink falls 3dB an octave and brown 6: measured three octaves apart, from 500Hz
+ * to 4kHz, so 0, -9 and -18dB. Brown's leak puts a corner near 150Hz, far enough below 500 to
+ * cost a third of a dB.
+ */
+void noiseHasTheSlopeItsNameSays() {
+    std::printf("noise has the slope its name says\n");
+    const char *names[3] = {"white", "pink", "brown"};
+    const double expected[3] = {0.0, -9.0, -18.0};
+    for (int type = 0; type < 3; ++type) {
+        const auto samples = noiseOf(type, 10);
+        const double fall = noiseDb(samples, 4000.0f) - noiseDb(samples, 500.0f);
+        check(std::fabs(fall - expected[type]) < 1.5,
+              std::string(names[type]) + " falls " + std::to_string(fall) + "dB over three octaves");
+    }
+}
+
+/**
+ * The three colors sit at about the same loudness, so the knob changes the color and not the
+ * level -- and none of them reaches full scale, where Out's limiter would start to act on it.
+ */
+void noiseColorsAreAboutAsLoudAsEachOther() {
+    std::printf("noise colors are about as loud as each other\n");
+    const char *names[3] = {"white", "pink", "brown"};
+    for (int type = 0; type < 3; ++type) {
+        const auto samples = noiseOf(type, 10);
+        const double level = rms(samples);
+        check(level > 0.17 && level < 0.23,
+              std::string(names[type]) + " is " + std::to_string(level) + " RMS");
+        check(peak(samples) < 1.0f,
+              std::string(names[type]) + " peaks at " + std::to_string(peak(samples)));
+    }
+}
+
+/**
+ * Two noise nodes are two noises. Inside a poly subpatch every instance is a node, and four
+ * copies of one sequence would sum coherently -- twice the level of four independent noises,
+ * and none of their width. A seed shared between nodes is the mutation this catches.
+ */
+void twoNoisesAreUncorrelated() {
+    std::printf("two noises are uncorrelated\n");
+    NoiseNode a;
+    NoiseNode b;
+    double ab = 0.0, aa = 0.0, bb = 0.0;
+    for (int i = 0; i < kRate; ++i) {
+        const double x = a.white();
+        const double y = b.white();
+        ab += x * y;
+        aa += x * x;
+        bb += y * y;
+    }
+    const double r = ab / std::sqrt(aa * bb);
+    check(std::fabs(r) < 0.02, "correlation " + std::to_string(r));
+}
+
 int main() {
     oscPlaysTheRequestedPitch();
     anOscsTuneMovesItsPitchByCents();
+    noiseHasTheSlopeItsNameSays();
+    noiseColorsAreAboutAsLoudAsEachOther();
+    twoNoisesAreUncorrelated();
     oscStaysBandLimited();
     filterCutoffFollowsItsKnob();
     aFilterHasFourKinds();

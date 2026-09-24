@@ -46,4 +46,23 @@ class CatalogTest {
         val osc = Patch().add(Types.Osc, Offset.Zero)!!
         assertTrue("a modulator reaches it through an exposed jack", osc.canExpose(1))
     }
+
+    /** Everything a new module has to be to exist: offered, named in a file, and sent. */
+    private fun assertAModule(type: ModuleType, node: NodeType) {
+        assertTrue("${type.name} is offered", type in Types.palette)
+        assertEquals("a file can name it", type, Types.byName[type.name])
+        assertEquals("the engine is told what it is", node, NodeType.of(type))
+        val patch = Patch()
+        val module = patch.add(type, Offset.Zero)!!
+        val back = patchFromJson(patch.toJson())!!
+        assertEquals("and it survives the file", type, back.module(module.id)?.type)
+    }
+
+    @Test
+    fun `Noise is a module, and its colors are named`() {
+        assertAModule(Types.Noise, NodeType.Noise)
+        assertEquals(listOf("white", "pink", "brown"), NOISE_TYPES)
+        assertTrue("a source: nothing goes in", Types.Noise.inputs.isEmpty())
+        assertEquals(listOf(SignalKind.AUDIO), Types.Noise.outputs.map { it.kind })
+    }
 }

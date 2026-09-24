@@ -4,6 +4,7 @@
 #include "soundfont.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 
@@ -1174,6 +1175,64 @@ void InNode::setParam(int32_t index, float value) {
     if (index == 0) gain_ = clampf(value, 0.0f, 64.0f);
 }
 
+// ---------------------------------------------------------------- Noise
+
+namespace {
+/**
+ * Each noise node's seed: a counter stepped by the golden ratio's bits, so no two nodes made
+ * in one run start from the same state or from states a few steps apart. Nodes are made on
+ * the interface's thread, but the tests make them on others, so it is atomic anyway.
+ */
+std::atomic<uint32_t> noiseSeed{0x9E3779B9u};
+} // namespace
+
+NoiseNode::NoiseNode() {
+    state_ = noiseSeed.fetch_add(0x9E3779B9u, std::memory_order_relaxed);
+    if (state_ == 0) state_ = 1; // the one state a xorshift never leaves
+}
+
+float NoiseNode::white() {
+    // Marsaglia's xorshift32.
+    state_ ^= state_ << 13;
+    state_ ^= state_ >> 17;
+    state_ ^= state_ << 5;
+    // The top 24 bits, as a float in [-1, 1): exact, since a float's mantissa is 24 bits.
+    return static_cast<float>(state_ >> 8) * (2.0f / 16777216.0f) - 1.0f;
+}
+
+void NoiseNode::process(int32_t frames) {
+    float *o = out(0);
+    for (int32_t i = 0; i < frames; ++i) {
+        const float w = white();
+        // Kellet's coefficients are for 44.1kHz; at 48 the corners move up a tenth of an
+        // octave, which is well inside the 0.05dB the filter is quoted to.
+        pink_[0] = 0.99886f * pink_[0] + w * 0.0555179f;
+        pink_[1] = 0.99332f * pink_[1] + w * 0.0750759f;
+        pink_[2] = 0.96900f * pink_[2] + w * 0.1538520f;
+        pink_[3] = 0.86650f * pink_[3] + w * 0.3104856f;
+        pink_[4] = 0.55000f * pink_[4] + w * 0.5329522f;
+        pink_[5] = -0.7616f * pink_[5] - w * 0.0168980f;
+        const float pink = pink_[0] + pink_[1] + pink_[2] + pink_[3] + pink_[4] + pink_[5] +
+                           pink_[6] + w * 0.5362f;
+        pink_[6] = w * 0.115926f;
+        brown_ = (brown_ + 0.02f * w) / 1.02f;
+
+        // Scaled to about the same loudness, around 0.2 RMS, so switching the color changes
+        // the color and not the level. Measured, not derived: see node_test. Not higher,
+        // because pink and brown are Gaussian where white is uniform -- at 0.3 RMS they
+        // peaked past full scale, where white at the same level never gets above 0.52.
+        switch (type_) {
+            case 1: o[i] = pink * 0.115f; break;
+            case 2: o[i] = brown_ * 3.5f; break;
+            default: o[i] = w * 0.35f; break;
+        }
+    }
+}
+
+void NoiseNode::setParam(int32_t index, float value) {
+    if (index == 0) type_ = static_cast<int32_t>(clampf(value, 0.0f, 2.0f) + 0.5f);
+}
+
 // ---------------------------------------------------------------- factory
 
 Node *makeNode(NodeType type) {
@@ -1183,6 +1242,7 @@ Node *makeNode(NodeType type) {
         case NodeType::Steps: return new StepsNode();
         case NodeType::Mix: return new MixNode();
         case NodeType::Amp: return new AmpNode();
+        case NodeType::Noise: return new NoiseNode();
         case NodeType::PolyIn: return new PolyInNode();
         case NodeType::PolySum: return new PolySumNode();
         case NodeType::Osc: return new OscNode();

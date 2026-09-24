@@ -53,7 +53,10 @@ enum class NodeType(val id: Int) {
      * a menu and no file names them. See Patch.engineGraph.
      */
     PolyIn(22),
-    PolySum(23);
+    PolySum(23),
+    Noise(24),
+    Delay(25),
+    Reverb(26);
 
     companion object {
         fun of(type: ModuleType): NodeType = when (type.name) {
@@ -75,6 +78,7 @@ enum class NodeType(val id: Int) {
             "Arp" -> Arp
             "Euclid" -> Euclid
             "Amp" -> Amp
+            "Noise" -> Noise
             else -> Unknown
         }
     }

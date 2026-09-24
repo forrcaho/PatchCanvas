@@ -3574,6 +3574,21 @@ patched from an `LFO` it is one. It applies to the note already sounding, includ
 because a knob that only reached the next note would be a pitch that changes between notes
 rather than a vibrato -- which is the mutation that fails its test.
 
+**`Noise` is white, pink or brown**, from a generator of its own: DaisySP's `WhiteNoise` calls
+`rand()`, and Bionic's takes a mutex. A xorshift seeded differently for every node matters
+more than it looks, because inside a poly subpatch each instance is a node, and four copies of
+one sequence would sum coherently -- twice as loud as four independent noises and with none of
+their width. The slopes are measured rather than trusted (0, -9 and -18dB across the three
+octaves from 500Hz to 4kHz), and the three colors are levelled to about 0.2 RMS, lower than
+first tried because pink and brown are Gaussian where white is uniform: at 0.3 they peaked
+past full scale. All three run all the time and the knob chooses which is heard, as Filter
+keeps its second stage running, so a switch never starts a pink filter from silence.
+
+The three new modules' colors were chosen by search, as the rest were -- and the palette is
+crowded now: only a dozen audio shades sit 15 or more from every existing border with the
+lightness to be seen. `Noise` is an olive gray, `Delay` an azure and `Reverb` a rose, each
+about 15 from its nearest neighbor. **They need an eye**, which the search is not.
+
 ### Noise, and then delay and reverb
 
 White, pink and brown, from one module with a `type`. The DaisySP caveat applies before any

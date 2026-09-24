@@ -204,7 +204,7 @@ enum class ParamCurve { LINEAR, EXPONENTIAL, STEPPED }
  * reading it needs no translation from the word "saw". DIVISION is a note length from
  * [INTERVALS], and the one choice a panel shows in its header rather than as a row.
  */
-enum class Choice { NUMBER, WAVE, DIVISION, PRESET, ARP, FILTER, SLOPE }
+enum class Choice { NUMBER, WAVE, DIVISION, PRESET, ARP, FILTER, SLOPE, NOISE, REVERB }
 
 data class Param(
     val name: String,
@@ -629,6 +629,16 @@ object Types {
      * that parameter across the range stored there, which is why it is unipolar -- see
      * LfoNode. Its output is modulation, which is now a kind in its own right.
      */
+    /**
+     * White, pink or brown noise: a source with no input, for a voice to shape -- the breath in
+     * a flute patch, the snare in a drum voice, a wind behind everything. Audio out, so it is
+     * colored as a sound source; loudness is an Amp's job, as it is for an Osc.
+     */
+    val Noise = ModuleType(
+        "Noise", emptyList(), listOf(Port("out", A)),
+        Color(0xFF5C6440),
+        params = listOf(Param("type", 0f, (NOISE_TYPES.size - 1).toFloat(), 0f, "", STEP, Choice.NOISE)),
+    )
     val Lfo = ModuleType(
         "LFO", emptyList(), listOf(Port("out", M)),
         Color(0xFFEC7AEF),
@@ -913,7 +923,7 @@ object Types {
      * needed a module, and that is Mix.
      */
     val palette =
-        listOf(Osc, Pluck, Fm, Sf, Drone, Seq, Euclid, Arp, Chord, Chance, Filter, Env, Lfo, Amp, Mix)
+        listOf(Osc, Pluck, Fm, Sf, Noise, Drone, Seq, Euclid, Arp, Chord, Chance, Filter, Env, Lfo, Amp, Mix)
 
     /**
      * Modules collapsed into one box. Its ports are its own rather than its type's -- they
@@ -7014,6 +7024,8 @@ private fun DrawScope.drawChoices(
                 Choice.ARP -> ARP_MODES.getOrNull(i).orEmpty()
                 Choice.FILTER -> FILTER_TYPES.getOrNull(i).orEmpty()
                 Choice.SLOPE -> SLOPES.getOrNull(i).orEmpty()
+                Choice.NOISE -> NOISE_TYPES.getOrNull(i).orEmpty()
+                Choice.REVERB -> REVERB_TYPES.getOrNull(i).orEmpty()
                 Choice.NUMBER -> (param.min + i).toInt().toString()
                 // Never a row: a preset is chosen from its own page, off the header, and a
                 // waveform is drawn rather than named a few lines above.
@@ -7834,6 +7846,12 @@ internal val FILTER_TYPES = listOf("low", "high", "band", "notch")
 
 /** How steeply a Filter rolls off: one pole pair, or two of them in series. */
 internal val SLOPES = listOf("12dB", "24dB")
+
+/** A Noise's colors, in the order NoiseNode reads them. Appended to, never reordered. */
+internal val NOISE_TYPES = listOf("white", "pink", "brown")
+
+/** A Reverb's two algorithms, in the order ReverbNode reads them. See [Types.Reverb]. */
+internal val REVERB_TYPES = listOf("room", "plate")
 
 /** A Euclid's longest pattern. Mirrors EuclidNode::kMaxSteps. */
 internal const val EUCLID_STEPS = 32
