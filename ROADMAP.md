@@ -3553,6 +3553,27 @@ is `wave`, so there is no way to vibrato one at all: a slow modulator into a pha
 port shifts phase rather than pitch, so it produces no vibrato for its trouble. A `tune` in
 cents, exposable like any other parameter, is the other half of this and a separate feature.
 
+### The overnight run, 2026-09-23: tune, Noise, Delay, Reverb, format 16
+
+Built unattended while Forrest slept, from three answers given before he went: the release
+fix waits (an `Env`'s release is still silent on `Osc` and `FM`); `Delay`'s time is a note
+division from the transport or a free time in milliseconds; and `Reverb` is two algorithms
+behind a `type` knob, to be chosen between by ear. **Nothing below has been heard.** The
+phone locks overnight and GrapheneOS cuts USB data when it does, so every check is a test, the
+emulator, or a capture read by `find_clicks.py`.
+
+**Format 16 reads 15.** Every change tonight is additive -- a knob whose default restates what
+the file sounded like, and module types a 15 file cannot name -- so this bump is for the older
+build's sake, not the newer one's. All four share one number because no build was installed
+between them.
+
+**An `Osc` has a tune knob**, in cents over the same two octaves as every transpose and ticked
+at the scale's degrees like them. It is the gap the fm-port section above named: with a
+`wave` and nothing else, there was no way to put a vibrato on an oscillator at all. Exposed and
+patched from an `LFO` it is one. It applies to the note already sounding, including mid-glide,
+because a knob that only reached the next note would be a pitch that changes between notes
+rather than a vibrato -- which is the mutation that fails its test.
+
 ### Noise, and then delay and reverb
 
 White, pink and brown, from one module with a `type`. The DaisySP caveat applies before any

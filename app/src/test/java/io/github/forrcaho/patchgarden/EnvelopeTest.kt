@@ -116,7 +116,7 @@ class EnvelopeTest {
         env.segments.add(EnvSegment(0.3f, 0.7f, -0.4f))
         env.segments.add(EnvSegment(1.25f, 0.2f, 0.9f, sustain = true))
         val json = patch.toJson()
-        assertTrue(json.contains("\"version\":15"))
+        assertTrue(json.contains("\"version\":16"))
         // Legible in the file, which is why velocity and these go through Float.toString:
         // widening 0.3f to a double writes 0.30000001192092896.
         assertTrue("and readable with cat: $json", json.contains("[0.3,0.7,-0.4,0]"))

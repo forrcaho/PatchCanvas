@@ -773,12 +773,19 @@ object Types {
     val Osc = ModuleType(
         "Osc", listOf(Port("notes", N)), listOf(Port("out", A)),
         Color(0xFF6090C3),
-        // One knob, where there were five. The envelope went to Env, which inside a poly
+        // Two knobs, where there were five. The envelope went to Env, which inside a poly
         // subpatch is one per note and can be patched anywhere -- an envelope built into a
         // synth was one envelope for every voice it had and reached nothing else, which is
         // the whole thing this redesign is about. What is left in OscNode is a 5ms gate
         // ramp, enough that a note does not click on and off and nothing more.
-        params = listOf(Param("wave", 0f, 3f, 0f, "", STEP, Choice.WAVE)),
+        //
+        // The tune came later, and is what an Osc could not do at all without it: vibrato.
+        // Exposed and patched from an LFO it is one, in cents like every tuning control here,
+        // ticked at the scale's degrees like the transposes so a fixed interval is findable.
+        params = listOf(
+            Param("wave", 0f, 3f, 0f, "", STEP, Choice.WAVE),
+            Param("tune", -TUNE_RANGE, TUNE_RANGE, 0f, "\u00A2", LIN, marks = true),
+        ),
     )
     /**
      * A plucked string: Karplus-Strong, one delay line, one note at a time.

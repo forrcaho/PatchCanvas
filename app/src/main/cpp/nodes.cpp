@@ -726,8 +726,8 @@ void OscVoice::init(float sampleRate) {
     gate.init(sampleRate);
 }
 
-void OscVoice::strike(float hz, float strength, bool stolen) {
-    osc.SetFreq(hz);
+void OscVoice::strike(float note, float strength, bool stolen) {
+    setFreq(note);
     // Through the ramp rather than into the oscillator's own amplitude. SetAmp here was a
     // step the moment a note landed on a voice still sounding, which is what two abutting
     // notes at different velocities are -- see GateRamp.
@@ -759,6 +759,12 @@ void OscNode::setParam(int32_t index, float value) {
                     voice().osc.SetWaveform(kWaves[wave]);
             break;
         }
+        case 1:
+            // Cents, never semitones: a semitone is a fact about 12-TET and means nothing in
+            // the tunings this knob has to work in. The same two octaves either way as every
+            // other cents knob here (TUNE_RANGE).
+            voice().setTune(clampf(value, -2400.0f, 2400.0f));
+            break;
         default: break;
     }
 }

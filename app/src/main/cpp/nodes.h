@@ -594,10 +594,26 @@ struct OscVoice {
     GateRamp gate;
     /** How hard this note was struck. Applied by [gate], which glides to it; see GateRamp. */
     float velocity = 1.0f;
+    /** The note's own pitch, before [tune]: kept so a turned knob retunes the note sounding. */
+    float hz = 261.63f;
+    /** The tune knob as a ratio, 2^(cents/1200). */
+    float tune = 1.0f;
 
     void init(float sampleRate);
     void strike(float hz, float strength, bool stolen);
-    void setFreq(float hz) { osc.SetFreq(hz); }
+    void setFreq(float note) {
+        hz = note;
+        osc.SetFreq(hz * tune);
+    }
+    /**
+     * Cents, applied on top of whatever the note is -- including mid-glide and while held, so
+     * a modulator on it is a vibrato. The phase runs on through the change, so a pitch that
+     * moves once a block is a frequency that steps, never a waveform that does.
+     */
+    void setTune(float cents) {
+        tune = std::exp2(cents / 1200.0f);
+        osc.SetFreq(hz * tune);
+    }
     float render(bool open, bool &finished);
 };
 
@@ -612,8 +628,8 @@ struct OscVoice {
  */
 class OscNode : public MonoSynth<OscVoice> {
 public:
-    // One note at a time, and one knob: the waveform. Polyphony is a Poly subpatch around
-    // it -- see MonoSynth.
+    // One note at a time, and two knobs: the waveform, and a tune in cents. Polyphony is a
+    // Poly subpatch around it -- see MonoSynth.
     void setParam(int32_t index, float value) override;
 };
 

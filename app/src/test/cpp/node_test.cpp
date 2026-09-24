@@ -148,6 +148,36 @@ void oscPlaysTheRequestedPitch() {
     check(std::abs(doubled - 523) <= 4, "degree 12 is an octave up, got " + std::to_string(doubled));
 }
 
+/**
+ * The tune knob moves the note it is on by cents -- the note sounding, not only the next, so
+ * a modulator on it is a vibrato rather than a pitch that changes between notes.
+ */
+void anOscsTuneMovesItsPitchByCents() {
+    std::printf("an osc's tune moves its pitch by cents\n");
+    OscNode osc;
+    holdDegree(osc, 0, noteAt(NoteKind::On, 1, 0, 0));
+    osc.setParam(1, 1200.0f); // before a second has run: the held note moves with it
+    const int octave = countCycles(run(osc, kRate / kBlockSize));
+    check(std::abs(octave - 523) <= 4, "+1200 cents is an octave up, got " + std::to_string(octave));
+
+    osc.setParam(1, -1200.0f);
+    run(osc, 4);
+    const int below = countCycles(run(osc, kRate / kBlockSize));
+    check(std::abs(below - 131) <= 2, "-1200 is an octave down, got " + std::to_string(below));
+
+    osc.setParam(1, 700.0f);
+    run(osc, 4);
+    const int fifth = countCycles(run(osc, kRate / kBlockSize));
+    // 261.63 * 2^(7/12) = 391.99: cents on top of the note, not on top of the knob before.
+    check(std::abs(fifth - 392) <= 3, "+700 cents is a tempered fifth, got " + std::to_string(fifth));
+
+    osc.setParam(1, 0.0f);
+    osc.setParam(0, 3.0f); // the waveform is the other knob, and does not disturb the tune
+    run(osc, 4);
+    const int home = countCycles(run(osc, kRate / kBlockSize));
+    check(std::abs(home - 262) <= 2, "and 0 is the note itself, got " + std::to_string(home));
+}
+
 void oscStaysBandLimited() {
     std::printf("osc stays band limited\n");
 
@@ -2872,6 +2902,7 @@ void aParkedEnvelopeFollowsItsLevel() {
 
 int main() {
     oscPlaysTheRequestedPitch();
+    anOscsTuneMovesItsPitchByCents();
     oscStaysBandLimited();
     filterCutoffFollowsItsKnob();
     aFilterHasFourKinds();

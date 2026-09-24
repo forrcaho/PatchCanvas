@@ -54,8 +54,13 @@ import java.io.File
  * and patched had two modulators on one number, which nothing in 15 can say. Forrest's call,
  * with no patch worth keeping during development -- going clean was cheaper than a refusal
  * that looks inside the file.
+ * 16: an Osc has a tune knob, and Noise, Delay and Reverb arrived. Additive, so 15 still
+ * reads: an Osc that names no tune was in tune, which is what it comes back as, and a 15
+ * file names none of the new modules. The bump is for the older build, which would ignore a
+ * tune it does not know and read the new modules as retired, then autosave without either.
+ * All four landed in one night with no build installed between them, so they share it.
  */
-private const val FORMAT_VERSION = 15
+private const val FORMAT_VERSION = 16
 
 /**
  * The older formats this build reads as they stand. See [upgrade].
@@ -64,7 +69,7 @@ private const val FORMAT_VERSION = 15
  * file already sounded like. Anything that would have to be *converted* is not on this list
  * and never will be.
  */
-private val READABLE = setOf(FORMAT_VERSION)
+private val READABLE = setOf(15, FORMAT_VERSION)
 private const val TAG = "PatchStore"
 
 fun Patch.toJson(): String {
