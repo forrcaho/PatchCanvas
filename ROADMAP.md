@@ -66,9 +66,10 @@ knob out of one sends a playing patch nothing (Phases 7 and 10).
 
 **No synth has an envelope.** Shaping is an `Env` inside a poly subpatch, one per note. An
 `Env` shapes a note while it is held; a tail that outlives the note needs a module that
-keeps sounding, which is one reason delay and reverb are in Phase 11. *Under discussion
-since 2026-09-25 -- how an envelope reaches a synth, and who owns the release, are open in
-Open work, and the answer may be a level with its own jack on every synth.*
+keeps sounding, which is one reason delay and reverb are in Phase 11. *Revised by
+decision, 2026-09-25: every synth gets a level with its own jack, and a synth whose level an
+envelope holds keeps sounding until it reaches zero (Open work, 7). Still no envelope inside a
+synth -- the envelope stays a module you patch.*
 
 **A poly subpatch may not contain another.** Instances would multiply, and the id space
 that numbers them is one level deep on purpose. A plain subpatch nests as deep as you like,
@@ -92,17 +93,19 @@ they are the work the theme implies. Where each stands after Forrest's review of
 2026-09-25 is in *Open work*, below; the notes here say which part of it.
 
 - **The add menu offers every built-in module before a subpatch.** The palette comes first,
-  and the empty `Subpatch` and `Poly` follow it. *Part of the menu redesign, which is up for
-  discussion.*
+  and the empty `Subpatch` and `Poly` follow it. *Decided: the menu's Boxes
+  category (Open work, 5).*
 - **A saved subpatch does not sit beside the built-ins.** The library is its own menu behind
   "Load...", where Phase 7's *Choosing from a library* said the picker has to treat a built-in
   `Osc` and a saved `BassVoice` the same. That menu stops at twelve tiles
   (`MAX_SAVED_TILES`) with no list past them, and a saved subpatch cannot be deleted from
-  inside the app. *Wanted, and more visible: part of the menu redesign.*
+  inside the app. *Decided: saved subpatches listed in Boxes, scrolling, deleted
+  by a long press (Open work, 5).*
 - **A knob promotes one level and no further.** A subpatch's own panel has no promote chip,
   so a knob two boxes down stops at the first edge; and a promoted knob cannot be given a
-  jack from outside. *Wanted. The subpatch's own panel gets the promote chip -- present but
-  disabled at the top of the patch, where there is nothing further to promote to.*
+  jack from outside. *Decided: the subpatch's own panel gets the promote chip -- present but
+  disabled at the top of the patch, where there is nothing further to promote to (Open
+  work, 2).*
 - **A module moves between scopes only by making or unpacking a subpatch.** A subpatch
   loaded into the wrong one can only be unpacked out of it. *Cut, copy and paste would answer
   it; later, unless the menu or the selection design needs it sooner.*
@@ -111,70 +114,76 @@ they are the work the theme implies. Where each stands after Forrest's review of
 - **A subpatch's panel opens only from its long-press menu**, because a tap goes inside.
   That was chosen on purpose in Phase 7 and is worth watching, since the promoted knobs are
   the whole of a subpatch's face from outside. *There is nothing better from outside; from
-  inside, a chip could reach the same panel.*
+  inside, a Controls chip beside the breadcrumb will reach the same panel (Open work, 2).*
 
 ## Open work
 
 **Revised 2026-09-25**, from Forrest's answers to a review of everything the phases below
-left open. This is the one list; the phases keep the reasoning, and where one of them
+left open, and then his choices among the options that review raised. This is the one list; the phases keep the reasoning, and where one of them
 disagrees with this, this is current. v0.2.1, released 2026-09-24, is the first build shared
 with anyone.
 
-### Wanted, and settled enough to build
+### Decided 2026-09-25, in this order
 
-- **A knob promotes through every level**, from the subpatch's own panel, and a promoted knob
-  can be given a jack from outside. The menu item that opens that panel is called "Knobs...",
-  and a knob suggests a rotary dial: **"Controls..."** is Forrest's suggestion, open to others.
-- **The patch library, finished**: a saved subpatch or patch can be deleted, the library
-  scrolls past twelve, and loading is visible rather than behind "Load...". Rethought as part
-  of the menu redesign, below.
-- **Always-on recording** (Phase 8's rolling window), with the saved file somewhere other
-  than app-specific storage -- see *Files* below.
-- **Smaller release builds**: `isMinifyEnabled`, and a check that nothing reflective breaks.
-- **Gesture tests through Compose's test tools.** Every gesture fault in this project was
-  found by a finger; a test that drives the real loop is the missing layer.
-- **The `fm` port on `Osc`** (Phase 11), medium priority. The tune knob, its other half, is in.
-- **A ladder filter** (Phase 11), medium priority.
-- **LFO synced to the beat**, as `Delay` is -- and the division controls shared by `Seq`,
-  `LFO` and `Delay` in one place, so a change to how time is divided is one change.
+Forrest took the recommended option on every item that was open for discussion, and the
+order below. Each is the plan, not yet the build; where building one turns something up,
+that goes in its own section as it always has.
 
-### For discussion
+1. **Smaller release builds.** `isMinifyEnabled`, and a check that nothing reflective breaks
+   -- the JNI entry points above all, which are found by name.
+2. **Controls.** A knob promotes through every level: the subpatch's own panel gets the
+   promote chip, present but disabled at the top of the patch. A promoted knob can be given a
+   jack from outside. "Knobs..." becomes **"Controls..."**, since a knob reads as a rotary
+   dial, and inside a subpatch a **Controls** chip beside the breadcrumb opens the same panel.
+3. **Gesture tests through Compose's test tools**, before the menu redesign changes the
+   gesture loop. Every gesture fault in this project was found by a finger; a test that
+   drives the real loop is the missing layer.
+4. **Shared time divisions, and LFO synced to the beat.** A step is 1/n of a beat for any n
+   from 1 to 16 -- five to a beat is n = 5 -- plus lengths of whole beats for slow LFOs and
+   long delays; the transport's beats per bar is the other half. One definition, shared by
+   `Seq`, `LFO`, `Delay` and the rest, so a change to how time is divided is one change. The
+   interface to try first: the division chip opens a row of steps-per-beat numbers, with
+   "1/8" and "1/8T" as labels on the ones they are. Settled on the phone, by trial.
+5. **The add menu in categories**, two taps to a module, grouped by what a module sends --
+   which is what its color already says: **Synths** (Osc, Pluck, FM, SF, Noise), **Notes**
+   (Seq, Drone, Euclid), **Note fx** (Arp, Chord, Chance), **Effects** (Filter, Delay, Reverb,
+   Gain, Mixer), **Mod** (Env, LFO), **Boxes** (a new Subpatch or Poly, empty or made from a
+   selection, then the saved subpatches as a list that scrolls, each deleted by a long press)
+   and **Patch** (open, save, new, settings). This finishes the patch library. With it, the
+   **module catalog** tidied on the Kotlin side: one declaration per module carrying its
+   engine id and its category, with the name map and the menu derived from it. The larger
+   version -- the engine declaring its modules and the interface reading them at startup --
+   is not worth its plumbing.
+6. **Files, Settings and recording.** A PatchGarden folder chosen once through the system's
+   folder picker, as Pagan does, holding `soundfonts/`, `scales/`, `subpatches/` and
+   `recordings/` -- somewhere another app can be pointed at the same SoundFonts. The first
+   launch offers to move what is in app-specific storage now. A small **Settings** page
+   changes the folder, sets the recording's length, and shows the version and the licenses,
+   which move there from the add menu. Always-on recording saves into `recordings/`.
+7. **A level on every synth, `Gain`, and the release.** Every sound source gets a `level` with
+   its own jack, as `Amp`'s gain has now -- the base every synth shares, and the natural home
+   for `tune` too. An `Env` patches straight into the synth, and because the synth then knows
+   an envelope has its level, it keeps sounding after note-off until that level reaches zero:
+   `Env`'s release becomes audible, which is the Bespoke and Helio answer without a fixed
+   ADSR. With nothing patched, a note still stops at note-off. `Amp` is renamed **`Gain`** and
+   stays, for after effects and anything else a VCA is for. Before 8, since both new sounds
+   would build on it.
+8. **The `fm` port on `Osc`, then the ladder filter.**
 
-Options were put to Forrest on 2026-09-25; none of these is decided.
+**Decided alongside, to fit wherever they land:**
 
-- **The add menu, in categories**, two taps to a module. Bespoke's are synths, modulators,
-  audio effects, instruments and note effects, where "instruments" are its sequencers and
-  keyboards -- a name that reads as another word for synths. Names have to fit a tile, and
-  the saved subpatches, the patch's own actions and perhaps settings need a place.
-- **`Env` and `Amp`.** The pair is unwieldy. `Amp` reads as amp simulation, and "Gain" is
-  what it is. The options are a level with its own jack on every synth -- which raises the
-  question of a base every sound source shares -- or `Env` and `Amp` as one module, with
-  notes and audio in and audio out, which would also work after a delay or a reverb.
-- **The release on `Osc` and `FM`.** A synth with no envelope stops at note-off, and that is
-  a defensible answer: "the note stops there". But `Env`'s editor draws a release that
-  nothing can hear on those two. Elsewhere the release belongs to something: Bespoke's
-  oscillator and Helio's built-in synth carry their own ADSR, a SoundFont preset brings its
-  own, and in Eurorack the oscillator never stops and the VCA's envelope decides. Tied to the
-  `Env` and `Amp` question.
-- **Stereo.** `Reverb` is the only module with two outputs. A mixer with a pan and a level per
-  input, and a configurable number of inputs, is wanted -- a mixer of one being a gain.
-- **Time divisions beyond Bespoke's**: five beats a bar with five subdivisions each should be
-  possible. The interface needs investigating and probably some trial and error.
-- **Files.** SoundFonts, tunings, patches and recordings live in app-specific storage, which is
-  obscure, and a SoundFont may be wanted by more than one app. Pagan moved its projects out
-  of that storage in 1.7.7 and keeps a SoundFont folder chosen through the system's folder
-  picker; Helio opens SF2s through the system's file picker. Whether this needs a Settings
-  page is part of it.
-- **A poly subpatch's sliders** animate while simultaneous notes hold different values,
-  which is confusing: they show the first instance, whatever the others are doing.
-- **A module turning notes into modulation** (Phase 11's *The cutoff follows the note*):
-  pitch, velocity or gate as a modulation signal any knob can follow, like Bespoke's
-  `pitchtocv` and `velocitytocv`.
-- **The module catalog** (Phase 4's *Growing the library*): an internal question -- a module is
-  declared in about eight places across Kotlin and C++ -- with a user-facing edge once modules
-  have categories.
-- **Collapsing a module to a title strip**, which saves space and has to say what happens to
-  its ports.
+- **Stereo stays at the end of the chain.** Cables stay mono; a new **Mixer** replaces `Mix`,
+  with one to eight inputs, a level and a pan on each, and a left and right out. `Reverb`
+  keeps its pair; a ping-pong `Delay` can come later. Making every cable stereo would double
+  every module for a phone that has no room to spare.
+- **A poly subpatch's sliders draw a thin mark per sounding voice**, rather than one bar
+  following whichever instance happens to be first.
+- **A module turning notes into modulation** -- pitch, velocity or gate as a signal any knob can
+  follow, like Bespoke's `pitchtocv` and `velocitytocv` -- waits for a patch that needs it.
+  Velocity to a filter's cutoff is the likeliest first.
+- **Collapsing a module to a title strip**: it shows its title alone, and its cables meet at
+  its left and right edges; expand it to patch it. Low priority, since subpatches already save
+  most of that space.
 
 ### Later
 
@@ -604,8 +613,8 @@ from parts, which is exactly when a curated module earns its place.
 Some variety is already paid for: `Svf` has low, high, band, notch and peak taps, so a
 mode parameter turns one module into five filters.
 
-**Fix the cost of adding one before adding the fifth.** *Still open, 2026-09-25, when a
-module touched about eight places: see Open work.* A module currently touches five
+**Fix the cost of adding one before adding the fifth.** *Decided 2026-09-25, when a module
+touched about eight places: tidied on the Kotlin side only (Open work, 5).* A module currently touches five
 places across two languages -- a C++ node class, the C++ enum, the Kotlin enum, a
 `ModuleType`, and the palette -- and the two enums must agree. There is already a test
 asserting they do, which is a smell rather than a solution. The engine should own the
