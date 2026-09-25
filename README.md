@@ -14,6 +14,26 @@ Since 2026-09-23 it is `io.github.forrcaho.patchgarden`, so Android treats it as
 different app from PatchCanvas: an installed PatchCanvas (v0.1.0 or a debug build)
 will not update into it, and the two install side by side.
 
+## Trying it
+
+Download the APK from the latest [release](https://github.com/forrcaho/PatchGarden/releases)
+and install it -- Android will ask you to allow installs from the app you downloaded it
+with. It needs Android 13 or later, and it runs in landscape.
+
+- **Sound starts off.** Tap the **Out** rail on the right edge to switch it on, and again to
+  switch it off.
+- **Long-press empty canvas** for the add menu. Long-press a module for its own menu:
+  duplicate, rename, delete.
+- **Patch by tapping**: tap an output, then an input. Tap an input that is already patched,
+  then the same one again, to unplug it.
+- **Tap a module** to open its panel, and tap outside the panel to close it. A number on a
+  panel can be tapped to type it.
+
+A first sound: add a **Drone**, an **Osc** and nothing else; patch the Drone's `notes` into
+the Osc, and the Osc's `out` into both of Out's inputs; switch Out on; open the Drone and tap
+a cell to hold a note. From there, **Poly** in the add menu is a box you build one voice in
+and play several of -- an Osc, an Env and the Amp the Env opens is the usual inside.
+
 The interaction model departs from the drag-a-cable convention in three ways
 (see the comment at the top of `PatchCanvas.kt`):
 
@@ -49,9 +69,9 @@ not a redundancy. The Compose compiler is applied as
 | `app/src/main/java/io/github/forrcaho/patchgarden/PatchCanvas.kt` | Model, camera, gestures, drawing |
 | `app/src/main/java/io/github/forrcaho/patchgarden/MainActivity.kt` | Full-bleed host for the canvas |
 
-`rememberDemoPatch()` supplies the starting patch: a sequencer into a poly subpatch
-called Voice — an oscillator, an envelope and the amp it opens, one of each — then a
-filter. Every synth but the SoundFont player is monophonic; polyphony is the box around it.
+A new install, or a patch this version cannot read, opens on an empty canvas with only the
+In and Out rails. Every synth but the SoundFont player is monophonic; polyphony is the box
+around it.
 
 ## Tunings and SoundFonts
 
@@ -78,5 +98,6 @@ Planned dependencies are permissively licensed and compatible: Oboe (Apache-2.0)
 the DaisySP core (MIT, which itself bundles the Plaits and Soundpipe MIT notices)
 and TinySoundFont (MIT). The `DaisySP-LGPL` submodule is deliberately *not* used -- clone DaisySP
 without `--recursive` -- so nothing here carries a copyleft relinking obligation.
-Shipping those notices in an in-app licenses screen is a release requirement, not
-a courtesy.
+Their notices ship with every copy: in the APK as
+[`THIRD_PARTY_NOTICES.txt`](app/src/main/assets/THIRD_PARTY_NOTICES.txt), and beside the APK on
+each release. A screen in the app that shows them is still to come.

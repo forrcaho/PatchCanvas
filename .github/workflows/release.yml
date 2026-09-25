@@ -88,6 +88,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # The notices ride along beside the APK as well as inside it: the licenses of what
+          # the app bundles ask for them with every copy, and a release page is a copy.
           gh release create "$GITHUB_REF_NAME" "$APK_NAME" \
+            app/src/main/assets/THIRD_PARTY_NOTICES.txt \
             --title "$GITHUB_REF_NAME" \
             --generate-notes

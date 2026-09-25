@@ -2263,6 +2263,9 @@ buys back a good deal of the same screen space for far less work.
   a saved recording carry the patch that made it.
 - In-app open-source licenses screen. MIT requires the notice ship with the binary;
   DaisySP alone brings three (DaisySP, Plaits, Soundpipe) and Oboe brings Apache-2.0.
+  *(Half done for v0.2.0, the first release shared with anyone: the notices ship inside the
+  APK as `assets/THIRD_PARTY_NOTICES.txt` and beside it on every release, which is what the
+  licenses ask. v0.1.0 carried none. What is left is the screen that shows them.)*
 - Turn `isMinifyEnabled` on for release and confirm nothing reflective breaks.
 - MIDI in over USB/BLE via `android.media.midi`, translated at the edge into Phase 6's
   note events, if it still seems worth it by then.
