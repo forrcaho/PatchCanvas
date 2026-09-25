@@ -101,11 +101,11 @@ they are the work the theme implies. Where each stands after Forrest's review of
   (`MAX_SAVED_TILES`) with no list past them, and a saved subpatch cannot be deleted from
   inside the app. *Decided: saved subpatches listed in Boxes, scrolling, deleted
   by a long press (Open work, 5).*
-- **A knob promotes one level and no further.** A subpatch's own panel has no promote chip,
-  so a knob two boxes down stops at the first edge; and a promoted knob cannot be given a
-  jack from outside. *Decided: the subpatch's own panel gets the promote chip -- present but
-  disabled at the top of the patch, where there is nothing further to promote to (Open
-  work, 2).*
+- ~~**A knob promotes one level and no further.**~~ A subpatch's own panel had no promote
+  chip, so a knob two boxes down stopped at the first edge; and a promoted knob could not be
+  given a jack from outside. *Done 2026-09-25: the subpatch's own panel has the promote chip
+  -- faint at the top of the patch, where there is nothing further to promote to -- and its
+  `[ ]` gives a knob a jack on the box (Open work, 2).*
 - **A module moves between scopes only by making or unpacking a subpatch.** A subpatch
   loaded into the wrong one can only be unpacked out of it. *Cut, copy and paste would answer
   it; later, unless the menu or the selection design needs it sooner.*
@@ -114,7 +114,8 @@ they are the work the theme implies. Where each stands after Forrest's review of
 - **A subpatch's panel opens only from its long-press menu**, because a tap goes inside.
   That was chosen on purpose in Phase 7 and is worth watching, since the promoted knobs are
   the whole of a subpatch's face from outside. *There is nothing better from outside; from
-  inside, a Controls chip beside the breadcrumb will reach the same panel (Open work, 2).*
+  inside, the "Controls…" chip beside the breadcrumb reaches the same panel since 2026-09-25
+  (Open work, 2).*
 
 ## Open work
 
@@ -138,10 +139,44 @@ that goes in its own section as it always has.
    patching, a held Drone note, the keypad, renaming through the system keyboard, a patch
    saved to the library and loaded back, and the licenses page. Not checked: an `SF` loading
    a bank, since the emulator has none.
-2. **Controls.** A knob promotes through every level: the subpatch's own panel gets the
-   promote chip, present but disabled at the top of the patch. A promoted knob can be given a
-   jack from outside. "Knobs..." becomes **"Controls..."**, since a knob reads as a rotary
-   dial, and inside a subpatch a **Controls** chip beside the breadcrumb opens the same panel.
+2. ~~**Controls.**~~ **Done 2026-09-25.** A knob promotes through every level: the subpatch's
+   own panel gets the promote chip, present but disabled at the top of the patch. A promoted
+   knob can be given a jack from outside. "Knobs..." becomes **"Controls..."**, since a knob
+   reads as a rotary dial, and inside a subpatch a **Controls** chip beside the breadcrumb
+   opens the same panel.
+
+   As built: one rule for the ↑ chip everywhere -- a row on a panel promotes into the box
+   that panel's module sits in -- so a module's own panel sends its knob into the first box
+   and that box's Controls panel sends it on. The chip is faint where there is nowhere to go
+   (the top of the patch, or a full box) and takes the tap without doing anything, so a
+   finger aimed at it never lands on the row behind. Taking a knob back takes it back from
+   every box further out, since those reached it through this one.
+
+   The jack from outside is the Controls panel's `[ ]` chip, the same chip that exposes a knob
+   on a module's own panel. It builds what a hand would: the knob exposed if it was not, then
+   a port on each box between it and the panel's box, each reaching the one inside -- so it
+   crosses to the engine as one modulation cable, like any chain of subpatch ports, and
+   tapping the chip sends nothing but the knob's range. A driven knob's chain ends at the
+   port that drives it (`Amp`'s gain at `mod`), since a knob has one way in. Turning it off
+   undoes exactly that, including the exposure, and follows the chain **outward** past the
+   panel's box as well: a jack left on an outer box after the inner one's went would reach
+   nothing. A box port that also fans out inside to something else loses only this cable.
+   The chip is **faint where the knob is already patched from inside** -- a filter an LFO in
+   the box already sweeps, or an `Amp` an `Env` already opens, which is every poly voice --
+   because a live one would silently swap the modulator inside for the cable outside.
+
+   The Controls chip beside the breadcrumb says **"Controls…"**, with the menu's ellipsis:
+   without it the chip read as one more level of the path. It shows only where the panel
+   would have rows, as the menu tile does. `ControlsTest` covers all of it; checked on the
+   emulator two boxes deep, down to `PatchSync` sending one `modulate` for an LFO patched into
+   the outer box's new jack and one `unmodulate` when the inner panel's chip was turned off.
+
+   **Found while building it, and open:** a box's jacks are centered in its body like every
+   module's (`portIn`), but a box is the one module whose port count changes, so a new input
+   moves its outputs down half a pitch and every cable on them with it. It is older than this
+   -- a port made at a rail slot does the same -- but the chip makes it a tap away. Laying a
+   box's jacks from the top would end it and would redraw every box already built; Forrest's
+   call.
 3. **Gesture tests through Compose's test tools**, before the menu redesign changes the
    gesture loop. Every gesture fault in this project was found by a finger; a test that
    drives the real loop is the missing layer.

@@ -2075,13 +2075,17 @@ private fun DrawScope.drawChip(
     measurer: TextMeasurer,
     /** Drawn after the label and never shortened; the label gives way to it. */
     suffix: String = "",
+    /** A chip that is there to be seen and does nothing yet, drawn faint. */
+    enabled: Boolean = true,
 ) {
     val corner = CornerRadius(7f * d, 7f * d)
+    val alpha = if (enabled) 1f else 0.35f
     drawRoundRect(
         color = if (open) accent else ChipFill,
         topLeft = rect.topLeft,
         size = rect.size,
         cornerRadius = corner,
+        alpha = alpha,
     )
     drawRoundRect(
         color = ChipEdge,
@@ -2089,6 +2093,7 @@ private fun DrawScope.drawChip(
         size = rect.size,
         cornerRadius = corner,
         style = Stroke(width = 1.5f * d),
+        alpha = alpha,
     )
     // A long label ends in an ellipsis rather than running off both ends of the chip,
     // which is what "Harmonic minor · 1 of 2" did on the device. The suffix keeps its
@@ -2104,7 +2109,7 @@ private fun DrawScope.drawChip(
         constraints = Constraints(maxWidth = (room - (tail?.size?.width ?: 0)).coerceAtLeast(0)),
     )
     val left = rect.center.x - (head.size.width + (tail?.size?.width ?: 0)) / 2f
-    drawText(head, topLeft = Offset(left, rect.center.y - head.size.height / 2f))
+    drawText(head, topLeft = Offset(left, rect.center.y - head.size.height / 2f), alpha = alpha)
     tail?.let {
         drawText(it, topLeft = Offset(left + head.size.width, rect.center.y - it.size.height / 2f))
     }
@@ -2887,47 +2892,252 @@ class Patch {
         modules.firstOrNull { it.parent == subpatch && it.type == type }
 
     /**
-     * Sends a knob inside this subpatch out to its edge, or takes it back.
+     * Sends a knob inside the subpatch being looked at out to its edge.
      *
-     * Only from inside, and only a module directly in this subpatch: the chip that calls this
-     * is on that module's panel, and a knob two levels down promotes to the subpatch it is in
-     * and then, once a subpatch's own panel offers the chip, onward. A promoted knob is a
-     * reference, so the value never moves and the engine is not told anything -- which is
-     * why subpatching's promise holds here too: promoting changes no sound.
+     * The scope-bound form, kept for callers that promote from a module's own panel: only a
+     * module directly inside the subpatch being looked at, which is where that panel opens.
+     * The panels themselves go through [togglePromotion], which also promotes onward from a
+     * subpatch's own Controls panel. A promoted knob is a reference, so the value never moves
+     * and the engine is not told anything -- promoting changes no sound.
      */
-    fun promote(module: PatchModule, index: Int): Boolean {
-        val subpatch = module(scopeOrTop)?.takeIf { it.type.box } ?: return false
-        if (module.parent != subpatch.id || module.isPinned) return false
-        if (index !in module.type.rowParams) return false
-        val ports = subpatch.subpatchPorts ?: return false
-        val ref = ParamRef(module.id, index)
-        if (ref in ports.promoted || ports.promoted.size >= roomToPromote(subpatch)) return false
-        ports.promoted.add(ref)
-        return true
-    }
+    fun promote(module: PatchModule, index: Int): Boolean =
+        module.parent == scopeOrTop && promoteChip(module, module, index) == ChipState.OFF &&
+            togglePromotion(module, module, index)
 
-    fun unpromote(module: PatchModule, index: Int): Boolean {
-        val ports = module(scopeOrTop)?.subpatchPorts ?: return false
-        return ports.promoted.remove(ParamRef(module.id, index))
-    }
+    fun unpromote(module: PatchModule, index: Int): Boolean =
+        module.parent == scopeOrTop && promoteChip(module, module, index) == ChipState.ON &&
+            togglePromotion(module, module, index)
 
-    /**
-     * Whether this knob could be sent out to the edge of the subpatch being looked at.
-     *
-     * The chip that does it is drawn only where this holds, so the panel says where
-     * promotion is possible rather than offering it everywhere and refusing most taps.
-     */
-    fun canPromote(module: PatchModule, index: Int): Boolean {
-        val subpatch = module(scopeOrTop)?.takeIf { it.type.box } ?: return false
-        if (module.parent != subpatch.id || module.isPinned) return false
-        if (index !in module.type.rowParams) return false
-        val ports = subpatch.subpatchPorts ?: return false
-        return ParamRef(module.id, index) in ports.promoted || ports.promoted.size < roomToPromote(subpatch)
-    }
+    /** Whether this knob could be sent out to, or back from, the subpatch being looked at. */
+    fun canPromote(module: PatchModule, index: Int): Boolean =
+        module.parent == scopeOrTop &&
+            promoteChip(module, module, index).let { it == ChipState.OFF || it == ChipState.ON }
 
     /** Whether this knob is already out at the edge of the subpatch being looked at. */
     fun isPromoted(module: PatchModule, index: Int): Boolean =
-        module(scopeOrTop)?.subpatchPorts?.promoted?.contains(ParamRef(module.id, index)) == true
+        module.parent == scopeOrTop && promoteChip(module, module, index) == ChipState.ON
+
+    /**
+     * What one of a row's chips shows, and whether a tap on it does anything: the promote
+     * chip ([promoteChip]) and, on a Controls panel, the jack chip ([jackChip]).
+     */
+    enum class ChipState {
+        /** No chip: a row this can never apply to -- a rail's, a box's own. */
+        NONE,
+        /**
+         * A chip that does nothing, drawn faint: a promotion at the top of the patch or into a
+         * full box, a jack for a control something inside is already patched into.
+         */
+        DISABLED,
+        /** Not done yet, and it can be. */
+        OFF,
+        /** Already out at the edge of the box. */
+        ON,
+    }
+
+    /**
+     * The box a row on [panel]'s panel is promoted into: the one [panel] sits in.
+     *
+     * For a module's own panel that is the subpatch around it, as it always was. For a
+     * subpatch's Controls panel it is the box around *that*, which is what lets a knob two
+     * boxes down reach the top: from its module into the first box, and from the first box's
+     * panel into the next. Null at the top of the patch, where there is nothing further out.
+     */
+    private fun promotionTarget(panel: PatchModule): PatchModule? =
+        module(panel.parent)?.takeIf { it.type.box }
+
+    /**
+     * What the promote chip beside [owner]'s knob [index] shows on [panel]'s panel.
+     *
+     * Present but disabled at the top of the patch, at Forrest's call: the chip is how anyone
+     * learns a knob can be sent outward, and one that appears only inside a subpatch teaches
+     * nothing where most patches are built. That is the opposite of the undo buttons, which
+     * hide when there is nothing to undo, and deliberately: those promise an action, and this
+     * one explains a structure.
+     */
+    fun promoteChip(panel: PatchModule, owner: PatchModule, index: Int): ChipState {
+        if (owner.isPinned || owner.type.box || index !in owner.type.rowParams) return ChipState.NONE
+        val ref = ParamRef(owner.id, index)
+        // The row has to be one this panel really shows: its own knob, or one promoted to it.
+        val shown = panel.id == owner.id ||
+            (panel.type.box && ref in panel.subpatchPorts?.promoted.orEmpty())
+        if (!shown) return ChipState.NONE
+        val target = promotionTarget(panel) ?: return ChipState.DISABLED
+        val ports = target.subpatchPorts ?: return ChipState.NONE
+        return when {
+            ref in ports.promoted -> ChipState.ON
+            ports.promoted.size < roomToPromote(target) -> ChipState.OFF
+            else -> ChipState.DISABLED
+        }
+    }
+
+    /**
+     * Sends [owner]'s knob [index] out from [panel]'s panel to the box around it, or takes it
+     * back. False for a chip that does nothing.
+     *
+     * Taking one back takes it back from every box further out too: those reached it through
+     * this one, and a knob still on a panel two levels up after its way there was closed
+     * would be a control reaching through a wall.
+     */
+    fun togglePromotion(panel: PatchModule, owner: PatchModule, index: Int): Boolean {
+        val chip = promoteChip(panel, owner, index)
+        if (chip != ChipState.OFF && chip != ChipState.ON) return false
+        val target = promotionTarget(panel) ?: return false
+        val ref = ParamRef(owner.id, index)
+        if (chip == ChipState.OFF) {
+            target.subpatchPorts?.promoted?.add(ref)
+            return true
+        }
+        var box: PatchModule? = target
+        while (box != null) {
+            box.subpatchPorts?.promoted?.remove(ref)
+            box = module(box.parent)?.takeIf { it.type.box }
+        }
+        return true
+    }
+
+    /**
+     * The jack a control's modulation arrives at inside the module that holds it: its driven
+     * port for a knob that has one (Param.drivenBy), since a knob has one way in, and
+     * otherwise its exposed jack. Null for a knob that can have neither.
+     */
+    private fun controlJack(owner: PatchModule, index: Int): PortRef? = when {
+        owner.isDriven(index) -> PortRef(owner.id, PortDirection.INPUT, owner.type.params[index].drivenBy)
+        owner.canExpose(index) -> PortRef(owner.id, PortDirection.MOD, index)
+        else -> null
+    }
+
+    /**
+     * What the [ ] chip beside [row] on [box]'s Controls panel shows.
+     *
+     * Disabled where the jack is spoken for inside: a knob can only be patched from one
+     * place, so a filter an LFO inside the box already sweeps, or an Amp whose gain an Env
+     * inside already drives -- which is every poly voice -- cannot also take a cable from
+     * outside, and a chip that quietly swapped one for the other would be an edit that looks
+     * like a toggle.
+     */
+    fun jackChip(box: PatchModule, row: ParamRow): ChipState {
+        if (!box.type.box || row.owner.id == box.id) return ChipState.NONE
+        var target = controlJack(row.owner, row.index) ?: return ChipState.NONE
+        for (level in boxesBetween(row.owner, box) ?: return ChipState.NONE) {
+            // Walked as far as it is already built; the first missing link must land free.
+            val k = portReaching(level, target)
+                ?: return if (connections.any { it.to == target }) ChipState.DISABLED else ChipState.OFF
+            target = PortRef(level.id, PortDirection.INPUT, k)
+        }
+        return ChipState.ON
+    }
+
+    /**
+     * The boxes from the one [owner] sits in out to [box], innermost first, or null when
+     * [owner] is not inside [box] at all.
+     */
+    private fun boxesBetween(owner: PatchModule, box: PatchModule): List<PatchModule>? {
+        val path = mutableListOf<PatchModule>()
+        var at = module(owner.parent)
+        while (at != null && at.type.box) {
+            path += at
+            if (at.id == box.id) return path
+            at = module(at.parent)
+        }
+        return null
+    }
+
+    /** Which of [box]'s input ports is cabled inside it straight to [inside], if any. */
+    private fun portReaching(box: PatchModule, inside: PortRef): Int? {
+        val rail = subpatchRail(box.id, Types.SubpatchIn) ?: return null
+        return connections.firstOrNull {
+            it.from.moduleId == rail.id && it.from.dir == PortDirection.OUTPUT && it.to == inside
+        }?.from?.index
+    }
+
+    /**
+     * The chain of ports that carries [box]'s jack for [row] in to its knob: each box's input
+     * port, innermost first. Null while the chain is not whole -- the box has no such jack.
+     */
+    private fun jackChain(box: PatchModule, row: ParamRow): List<Pair<PatchModule, Int>>? {
+        var target = controlJack(row.owner, row.index) ?: return null
+        val chain = mutableListOf<Pair<PatchModule, Int>>()
+        for (level in boxesBetween(row.owner, box) ?: return null) {
+            val k = portReaching(level, target) ?: return null
+            chain += level to k
+            target = PortRef(level.id, PortDirection.INPUT, k)
+        }
+        return chain
+    }
+
+    /** [box]'s input port that is the jack from outside for [row], if it has one. */
+    fun boxJackFor(box: PatchModule, row: ParamRow): Int? = jackChain(box, row)?.last()?.second
+
+    /**
+     * Gives a promoted control a jack on the outside of [box]: what the [ ] chip on a
+     * Controls panel does, where on a module's own panel it exposes the knob.
+     *
+     * Built from what a hand could build: the knob exposed if it has to be, then each box
+     * between it and [box] given a port reaching the one below, exactly as a jack taken to a
+     * rail's slot makes one (addSubpatchPort). Nothing new crosses to the engine -- the chain
+     * flattens to one modulation cable, as any chain of subpatch ports does. A driven knob's
+     * chain ends at the port that drives it rather than at a second jack.
+     */
+    fun exposeThrough(box: PatchModule, row: ParamRow): Boolean {
+        if (jackChip(box, row) != ChipState.OFF) return false
+        val owner = row.owner
+        if (!owner.isDriven(row.index) && !owner.isExposed(row.index)) {
+            val param = owner.type.params[row.index]
+            if (!expose(owner, row.index, initialModRange(param, owner.params[row.index]))) return false
+        }
+        var target = controlJack(owner, row.index) ?: return false
+        for (level in boxesBetween(owner, box) ?: return false) {
+            val k = portReaching(level, target) ?: run {
+                if (!addSubpatchPort(level.id, target)) return false
+                level.subpatchPorts!!.inputs.size - 1
+            }
+            target = PortRef(level.id, PortDirection.INPUT, k)
+        }
+        return true
+    }
+
+    /**
+     * Takes a Controls panel's jack away again, leaving what the tap that made it found.
+     *
+     * Outermost first, each box loses only the cable that carried this control inward: the
+     * whole port where that was all it did, which takes whatever was patched into the box
+     * from outside with it, and just the one cable where the port also fans out inside to
+     * something else, since cutting those would be an edit nobody asked for. Then the knob's
+     * own jack, if nothing is left in it -- the chip exposed it, and a toggle that leaves a
+     * bare jack on a module inside is one that does not undo itself.
+     *
+     * The chain is followed *outward* past [box] as well, as far as boxes further out were
+     * given jacks through it: turned off on an inner box's panel, the outer box's jack would
+     * otherwise be left reaching nothing, and a jack on a box that goes nowhere is the thing
+     * this project refuses to draw. The same reason unpromoting cascades outward.
+     */
+    fun unexposeThrough(box: PatchModule, row: ParamRow): Boolean {
+        if (jackChip(box, row) != ChipState.ON) return false
+        val chain = jackChain(box, row)?.toMutableList() ?: return false
+        while (true) {
+            val (level, k) = chain.last()
+            val parent = module(level.parent)?.takeIf { it.type.box } ?: break
+            chain += parent to (portReaching(parent, PortRef(level.id, PortDirection.INPUT, k)) ?: break)
+        }
+        val knob = controlJack(row.owner, row.index) ?: return false
+        // What each level's port reaches inside: the knob, then the port of the box below.
+        val reaches = listOf(knob) + chain.dropLast(1).map { (level, k) -> PortRef(level.id, PortDirection.INPUT, k) }
+        Snapshot.withMutableSnapshot {
+            for (i in chain.indices.reversed()) {
+                val (level, k) = chain[i]
+                val rail = subpatchRail(level.id, Types.SubpatchIn) ?: continue
+                val railEnd = PortRef(rail.id, PortDirection.OUTPUT, k)
+                val fansOut = connections.any { it.from == railEnd && it.to != reaches[i] }
+                if (fansOut) connections.removeAll { it.from == railEnd && it.to == reaches[i] }
+                else removeSubpatchPort(level, PortDirection.INPUT, k)
+            }
+            if (knob.dir == PortDirection.MOD && connections.none { it.to == knob }) {
+                unexpose(row.owner, row.index)
+            }
+        }
+        return true
+    }
 
     /**
      * The rows an open panel shows for [module].
@@ -3641,8 +3851,12 @@ sealed interface MenuItem {
     data class Unpack(val moduleId: Long) : MenuItem
     data class Rename(val moduleId: Long) : MenuItem
 
-    /** A subpatch's promoted knobs, which is the only way its panel opens: a tap goes inside. */
-    data class Knobs(val moduleId: Long) : MenuItem
+    /**
+     * A subpatch's promoted controls, which from outside is the only way its panel opens: a
+     * tap goes inside. Called Knobs until 2026-09-25, when Forrest pointed out that a knob
+     * reads as a rotary dial and nothing here is one.
+     */
+    data class Controls(val moduleId: Long) : MenuItem
 
     /** Takes a port off a subpatch, from the box outside or the rail inside. */
     data class RemovePort(val subpatchId: Long, val dir: PortDirection, val index: Int) : MenuItem
@@ -3751,7 +3965,7 @@ internal fun menuItems(
         MenuItem.Duplicate(targetId),
         // Only when it has any: an empty panel would be a door onto nothing, and the way
         // to put knobs there is inside the subpatch, where the chip is.
-        MenuItem.Knobs(targetId).takeIf { patch.panelRows(patch.module(targetId)!!).isNotEmpty() },
+        MenuItem.Controls(targetId).takeIf { patch.panelRows(patch.module(targetId)!!).isNotEmpty() },
         MenuItem.Rename(targetId),
         MenuItem.Save(targetId),
         MenuItem.Delete(targetId), MenuItem.Unpack(targetId),
@@ -3806,6 +4020,23 @@ internal fun Patch.breadcrumbAt(frame: Frame, screen: Offset): Long? {
         if (frame.breadcrumbChip(level).contains(screen)) return id
     }
     return null
+}
+
+/**
+ * The subpatch whose Controls chip is showing: the one being looked inside, while it has
+ * controls to show. From outside, a subpatch's panel opens from its menu, since a tap on the
+ * box goes inside; this is the same panel from the other side, so the controls a box offers
+ * can be tried while its insides are in view. Hidden where the panel would be empty, as the
+ * menu item is.
+ */
+internal fun Patch.controlsChipBox(): PatchModule? =
+    module(scopeOrTop)?.takeIf { it.type.box && panelRows(it).isNotEmpty() }
+
+/** The subpatch whose Controls chip is under [screen], beside the breadcrumb, or null. */
+internal fun Patch.controlsChipAt(frame: Frame, screen: Offset): PatchModule? {
+    if (modules.any { it.expanded }) return null
+    val box = controlsChipBox() ?: return null
+    return box.takeIf { frame.breadcrumbChip(scopePath().size).contains(screen) }
 }
 
 /** Looks inside a subpatch, or back out: closing any panel, which belongs to where you were. */
@@ -4755,7 +4986,8 @@ fun PatchCanvas(
                             // so a near miss on a knob never gives anything a jack, and the one
                             // that promotes is reached generously: five rows leave it 21dp.
                             val chipRow = if (onHistory) null else rows.withIndex().firstOrNull { (slot, r) ->
-                                r.owner.id == open.id && open.canExpose(r.index) &&
+                                val own = r.owner.id == open.id
+                                ((own && open.canExpose(r.index)) || (!own && patch.jackChip(open, r) != Patch.ChipState.NONE)) &&
                                     panelModChipOn(
                                         panelRowAt(panel, frame.density, open.type, rows.size, slot),
                                         frame.density,
@@ -4763,27 +4995,37 @@ fun PatchCanvas(
                             }
                             if (chipRow != null) {
                                 waitForUpRelease()
-                                val index = chipRow.value.index
-                                if (open.isExposed(index)) {
-                                    patch.unexpose(open, index)
-                                } else {
-                                    val param = open.type.params[index]
-                                    patch.expose(open, index, initialModRange(param, open.params[index]))
+                                val row = chipRow.value
+                                val index = row.index
+                                when {
+                                    // A Controls panel's row: the jack goes on the box. A
+                                    // disabled chip takes the tap and does nothing, as the
+                                    // promote chip's does.
+                                    row.owner.id != open.id ->
+                                        if (patch.jackChip(open, row) == Patch.ChipState.ON) patch.unexposeThrough(open, row)
+                                        else patch.exposeThrough(open, row)
+                                    open.isExposed(index) -> patch.unexpose(open, index)
+                                    else -> {
+                                        val param = open.type.params[index]
+                                        patch.expose(open, index, initialModRange(param, open.params[index]))
+                                    }
                                 }
                                 return@awaitEachGesture
                             }
 
                             val promoteRow = if (onHistory) null else rows.withIndex().firstOrNull { (slot, r) ->
-                                patch.canPromote(r.owner, r.index) &&
+                                patch.promoteChip(open, r.owner, r.index) != Patch.ChipState.NONE &&
                                     panelPromoteChipOn(
                                         panelRowAt(panel, frame.density, open.type, rows.size, slot),
                                         frame.density,
                                     ).inflate(6f * frame.density).contains(down.position)
                             }
                             if (promoteRow != null) {
+                                // A disabled chip still takes its tap, so a finger aimed at it
+                                // does nothing rather than landing on the row behind it.
                                 waitForUpRelease()
                                 val row = promoteRow.value
-                                if (!patch.unpromote(row.owner, row.index)) patch.promote(row.owner, row.index)
+                                patch.togglePromotion(open, row.owner, row.index)
                                 return@awaitEachGesture
                             }
 
@@ -5515,6 +5757,14 @@ fun PatchCanvas(
                         open = id == path.last(),
                         accent = Types.Subpatch.accent,
                         measurer = screenMeasurer,
+                    )
+                }
+                // With the menu's ellipsis, since a chip in that row that says only
+                // "Controls" reads as one more level of the path rather than a door.
+                patch.controlsChipBox()?.let {
+                    drawChip(
+                        frame.breadcrumbChip(path.size), d, "Controls\u2026", open = false,
+                        accent = Types.Subpatch.accent, measurer = screenMeasurer,
                     )
                 }
             }
@@ -7846,7 +8096,7 @@ private fun handleTap(
             is MenuItem.RemovePort -> patch.module(chosen.subpatchId)?.let {
                 patch.removeSubpatchPort(it, chosen.dir, chosen.index)
             }
-            is MenuItem.Knobs -> patch.module(chosen.moduleId)?.let { subpatch ->
+            is MenuItem.Controls -> patch.module(chosen.moduleId)?.let { subpatch ->
                 patch.modules.forEach { it.expanded = false }
                 subpatch.expanded = true
             }
@@ -7873,6 +8123,12 @@ private fun handleTap(
     // never lose a tap to whatever happens to be beneath it on the canvas.
     patch.breadcrumbAt(frame, screen)?.let { id ->
         if (id != patch.scopeOrTop) patch.enterScope(id)
+        return Interaction.Idle
+    }
+    // Beside it, the subpatch's own Controls panel, reached from inside it.
+    patch.controlsChipAt(frame, screen)?.let { box ->
+        patch.modules.forEach { it.expanded = false }
+        box.expanded = true
         return Interaction.Idle
     }
 
@@ -8235,7 +8491,7 @@ private fun MenuItem.label(): String = when (this) {
     is MenuItem.Add -> type.name
     is MenuItem.Duplicate -> "Duplicate"
     is MenuItem.Rename -> "Rename\u2026"
-    is MenuItem.Knobs -> "Knobs\u2026"
+    is MenuItem.Controls -> "Controls\u2026"
     is MenuItem.RemovePort -> "Remove port"
     is MenuItem.NewPatch -> "New patch"
     is MenuItem.Save -> if (moduleId == null) "Save patch\u2026" else "Save\u2026"
@@ -8254,7 +8510,7 @@ private fun MenuItem.label(): String = when (this) {
 private fun MenuItem.tint(): Color = when (this) {
     is MenuItem.Add -> type.accent
     is MenuItem.Duplicate, is MenuItem.Rename -> Color(0xFF8A93A3)
-    is MenuItem.Knobs -> Types.Subpatch.accent
+    is MenuItem.Controls -> Types.Subpatch.accent
     is MenuItem.RemovePort -> Color(0xFFE07A6B)
     is MenuItem.NewPatch -> Color(0xFFE07A6B)
     is MenuItem.Save, is MenuItem.OpenLibrary, is MenuItem.Load -> Types.Subpatch.accent
@@ -8793,12 +9049,25 @@ private fun DrawScope.drawPanel(
         val value = (if (own) live[index] else null) ?: owner.params.getOrElse(index) { param.default }
         if (own && module.canExpose(index)) {
             drawChip(panelModChipOn(row, d), d, "[ ]", range != null, ModulationColor, measurer)
+        } else if (!own) {
+            // On a Controls panel the same chip gives the control a jack on the box itself,
+            // where on a module's own panel it gives the module one.
+            val jack = patch.jackChip(module, entry)
+            if (jack != Patch.ChipState.NONE) {
+                drawChip(
+                    panelModChipOn(row, d), d, "[ ]", jack == Patch.ChipState.ON,
+                    ModulationColor, measurer, enabled = jack != Patch.ChipState.DISABLED,
+                )
+            }
         }
-        // Only inside the subpatch it would promote to, which is where the chip means anything.
-        if (patch.canPromote(owner, index)) {
+        // Wherever a knob could ever be sent outward -- faint at the top of the patch, where
+        // there is no box to send it to, so the chip is there to be learned. See promoteChip.
+        val promote = patch.promoteChip(module, owner, index)
+        if (promote != Patch.ChipState.NONE) {
             drawChip(
                 panelPromoteChipOn(row, d), d, "\u2191",
-                patch.isPromoted(owner, index), Types.Subpatch.accent, measurer,
+                promote == Patch.ChipState.ON, Types.Subpatch.accent, measurer,
+                enabled = promote != Patch.ChipState.DISABLED,
             )
         }
 

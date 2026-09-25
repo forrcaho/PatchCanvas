@@ -516,12 +516,21 @@ positional, and stale ones fail silently because both ends are wrong by the same
 so the engine hears the right thing while the jack draws off the end of the box. **Subpatching or unpacking a playing patch must send the engine
 nothing**, and `GraphSyncTest` asserts exactly that. Which subpatch you are looking at
 (`Patch.scope`) is view state: not saved, not undone. **A knob reaches out through the
-boundary the same way a cable does.** Inside a subpatch, the chip beside a row promotes that
-knob to the subpatch's edge, and the subpatch's panel -- opened from its menu, since a tap goes
-inside -- draws it. What is stored is a `ParamRef`, never a copy: the value stays on the
+boundary the same way a cable does.** The ↑ chip beside a row promotes that knob into the
+box the panel's module sits in, so a module's own panel sends it into the first box and that
+box's **Controls** panel -- opened from its menu, since a tap goes inside, or from the
+"Controls…" chip beside the breadcrumb when you are inside it -- sends it on
+(`Patch.promoteChip`). What is stored is a `ParamRef`, never a copy: the value stays on the
 module inside, so there is one number, the engine still reads the node that has it, and
 promoting sends the engine nothing. `panelRows` is what every panel draws and hit-tests
-against, which is why a subpatch can show knobs its own type never declared. A subpatch is named "Subpatch N" -- one
+against, which is why a subpatch can show knobs its own type never declared. **A chip that
+cannot act is faint, not gone, and still takes the tap** -- the ↑ at the top of the patch, the
+`[ ]` of a knob already patched from inside its box -- so it teaches where it would otherwise
+vanish, and a finger aimed at it never lands on the row behind. The Controls panel's `[ ]`
+gives a knob a jack on the box by building the chain of ports a hand would (`exposeThrough`),
+so it flattens to one cable like any other; taking it back, like unpromoting, **cascades
+outward**, since a jack on an outer box reaching through an inner one that closed would go
+nowhere. A subpatch is named "Subpatch N" -- one
 past the highest number in use anywhere in the patch -- on a `PatchModule.name` that every
 module has and that falls back to the type's name, so a file written before names still
 draws "Subpatch".
