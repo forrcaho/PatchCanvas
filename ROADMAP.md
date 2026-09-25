@@ -66,7 +66,9 @@ knob out of one sends a playing patch nothing (Phases 7 and 10).
 
 **No synth has an envelope.** Shaping is an `Env` inside a poly subpatch, one per note. An
 `Env` shapes a note while it is held; a tail that outlives the note needs a module that
-keeps sounding, which is one reason delay and reverb are in Phase 11.
+keeps sounding, which is one reason delay and reverb are in Phase 11. *Under discussion
+since 2026-09-25 -- how an envelope reaches a synth, and who owns the release, are open in
+Open work, and the answer may be a level with its own jack on every synth.*
 
 **A poly subpatch may not contain another.** Instances would multiply, and the id space
 that numbers them is one level deep on purpose. A plain subpatch nests as deep as you like,
@@ -86,25 +88,118 @@ changing it is the one rename an installed copy cannot follow.
 ### What subpatch-first still asks for
 
 Each of these was recorded where it was found. They are collected here because together
-they are the work the theme implies. None is designed yet.
+they are the work the theme implies. Where each stands after Forrest's review of
+2026-09-25 is in *Open work*, below; the notes here say which part of it.
 
 - **The add menu offers every built-in module before a subpatch.** The palette comes first,
-  and the empty `Subpatch` and `Poly` follow it.
+  and the empty `Subpatch` and `Poly` follow it. *Part of the menu redesign, which is up for
+  discussion.*
 - **A saved subpatch does not sit beside the built-ins.** The library is its own menu behind
   "Load...", where Phase 7's *Choosing from a library* said the picker has to treat a built-in
   `Osc` and a saved `BassVoice` the same. That menu stops at twelve tiles
   (`MAX_SAVED_TILES`) with no list past them, and a saved subpatch cannot be deleted from
-  inside the app.
+  inside the app. *Wanted, and more visible: part of the menu redesign.*
 - **A knob promotes one level and no further.** A subpatch's own panel has no promote chip,
   so a knob two boxes down stops at the first edge; and a promoted knob cannot be given a
-  jack from outside.
+  jack from outside. *Wanted. The subpatch's own panel gets the promote chip -- present but
+  disabled at the top of the patch, where there is nothing further to promote to.*
 - **A module moves between scopes only by making or unpacking a subpatch.** A subpatch
-  loaded into the wrong one can only be unpacked out of it.
-- **A box's kind is fixed when it is made.** Turning a finished voice into a poly one means
-  wrapping it in a `Poly` or unpacking it into one.
+  loaded into the wrong one can only be unpacked out of it. *Cut, copy and paste would answer
+  it; later, unless the menu or the selection design needs it sooner.*
+- ~~**A box's kind is fixed when it is made.**~~ *Decided 2026-09-25 that this is fine: a poly
+  box is special enough that nobody will want to change one often.*
 - **A subpatch's panel opens only from its long-press menu**, because a tap goes inside.
   That was chosen on purpose in Phase 7 and is worth watching, since the promoted knobs are
-  the whole of a subpatch's face from outside.
+  the whole of a subpatch's face from outside. *There is nothing better from outside; from
+  inside, a chip could reach the same panel.*
+
+## Open work
+
+**Revised 2026-09-25**, from Forrest's answers to a review of everything the phases below
+left open. This is the one list; the phases keep the reasoning, and where one of them
+disagrees with this, this is current. v0.2.1, released 2026-09-24, is the first build shared
+with anyone.
+
+### Wanted, and settled enough to build
+
+- **A knob promotes through every level**, from the subpatch's own panel, and a promoted knob
+  can be given a jack from outside. The menu item that opens that panel is called "Knobs...",
+  and a knob suggests a rotary dial: **"Controls..."** is Forrest's suggestion, open to others.
+- **The patch library, finished**: a saved subpatch or patch can be deleted, the library
+  scrolls past twelve, and loading is visible rather than behind "Load...". Rethought as part
+  of the menu redesign, below.
+- **Always-on recording** (Phase 8's rolling window), with the saved file somewhere other
+  than app-specific storage -- see *Files* below.
+- **Smaller release builds**: `isMinifyEnabled`, and a check that nothing reflective breaks.
+- **Gesture tests through Compose's test tools.** Every gesture fault in this project was
+  found by a finger; a test that drives the real loop is the missing layer.
+- **The `fm` port on `Osc`** (Phase 11), medium priority. The tune knob, its other half, is in.
+- **A ladder filter** (Phase 11), medium priority.
+- **LFO synced to the beat**, as `Delay` is -- and the division controls shared by `Seq`,
+  `LFO` and `Delay` in one place, so a change to how time is divided is one change.
+
+### For discussion
+
+Options were put to Forrest on 2026-09-25; none of these is decided.
+
+- **The add menu, in categories**, two taps to a module. Bespoke's are synths, modulators,
+  audio effects, instruments and note effects, where "instruments" are its sequencers and
+  keyboards -- a name that reads as another word for synths. Names have to fit a tile, and
+  the saved subpatches, the patch's own actions and perhaps settings need a place.
+- **`Env` and `Amp`.** The pair is unwieldy. `Amp` reads as amp simulation, and "Gain" is
+  what it is. The options are a level with its own jack on every synth -- which raises the
+  question of a base every sound source shares -- or `Env` and `Amp` as one module, with
+  notes and audio in and audio out, which would also work after a delay or a reverb.
+- **The release on `Osc` and `FM`.** A synth with no envelope stops at note-off, and that is
+  a defensible answer: "the note stops there". But `Env`'s editor draws a release that
+  nothing can hear on those two. Elsewhere the release belongs to something: Bespoke's
+  oscillator and Helio's built-in synth carry their own ADSR, a SoundFont preset brings its
+  own, and in Eurorack the oscillator never stops and the VCA's envelope decides. Tied to the
+  `Env` and `Amp` question.
+- **Stereo.** `Reverb` is the only module with two outputs. A mixer with a pan and a level per
+  input, and a configurable number of inputs, is wanted -- a mixer of one being a gain.
+- **Time divisions beyond Bespoke's**: five beats a bar with five subdivisions each should be
+  possible. The interface needs investigating and probably some trial and error.
+- **Files.** SoundFonts, tunings, patches and recordings live in app-specific storage, which is
+  obscure, and a SoundFont may be wanted by more than one app. Pagan moved its projects out
+  of that storage in 1.7.7 and keeps a SoundFont folder chosen through the system's folder
+  picker; Helio opens SF2s through the system's file picker. Whether this needs a Settings
+  page is part of it.
+- **A poly subpatch's sliders** animate while simultaneous notes hold different values,
+  which is confusing: they show the first instance, whatever the others are doing.
+- **A module turning notes into modulation** (Phase 11's *The cutoff follows the note*):
+  pitch, velocity or gate as a modulation signal any knob can follow, like Bespoke's
+  `pitchtocv` and `velocitytocv`.
+- **The module catalog** (Phase 4's *Growing the library*): an internal question -- a module is
+  declared in about eight places across Kotlin and C++ -- with a user-facing edge once modules
+  have categories.
+- **Collapsing a module to a title strip**, which saves space and has to say what happens to
+  its ports.
+
+### Later
+
+- **Cut, copy and paste of modules**, unless the menu or the selection design needs it sooner.
+- **Audio that keeps playing in the background** (Phase 8's foreground service). A
+  nice-to-have at the bottom of the list rather than the essential thing Phase 8 called it:
+  Helio and Pagan play only while they are open.
+- **Typing the sequencer grid's and the scale card's numbers.** Low priority; they may not be
+  needed.
+- **A name's 16-character ceiling**, which may be too short. Left for now.
+- **Amp emulation** -- a tube stage, the response-shaping thing "Amp" sounds like it should be.
+  An aside, and a good one.
+
+### Settled by use, no change
+
+- The output starts switched off until the Out rail is tapped.
+- A box's kind is fixed when it is made.
+- What the sequencer grid shows while a scale list cycles, whether the Drone grid's scroll
+  reads as cut off, and whether a sequencer patched mid-note should start the note late: the
+  behavior as it stands, for all three.
+
+### Dropped
+
+- **MIDI in.** Nobody is expected to connect a MIDI device to a phone for this.
+- **Typing a subpatch's port count.** Nobody could say what it would mean.
 
 ## Stack
 
@@ -202,10 +297,9 @@ Bookkeeping that should not be discovered at release time.
 
 ## Phase 1 -- A patch editor worth using, still silent
 
-**Code complete; only partly exercised on the device.** Everything below is written,
-compiles clean and is covered by 28 unit tests. The unit fix and the port pitch were
-verified on hardware by screenshot and tap test; the rails, the long-press menu and
-reload have not been.
+**Done, and long since used on the device** -- everything here is exercised by every patch
+built since. The paragraph this replaced said the rails, the long-press menu and reload had
+not been tried on hardware; they have, daily.
 
 Everything here is independent of the audio engine, and all of it is load-bearing for
 what follows. Right now you cannot tell `pitch` from `fm` on screen, cannot add a
@@ -510,7 +604,8 @@ from parts, which is exactly when a curated module earns its place.
 Some variety is already paid for: `Svf` has low, high, band, notch and peak taps, so a
 mode parameter turns one module into five filters.
 
-**Fix the cost of adding one before adding the fifth.** A module currently touches five
+**Fix the cost of adding one before adding the fifth.** *Still open, 2026-09-25, when a
+module touched about eight places: see Open work.* A module currently touches five
 places across two languages -- a C++ node class, the C++ enum, the Kotlin enum, a
 `ModuleType`, and the palette -- and the two enums must agree. There is already a test
 asserting they do, which is a smell rather than a solution. The engine should own the
@@ -866,8 +961,8 @@ need the stack in the file, and that is a patch-library question rather than an 
 
 ## Phase 6 -- Notes, time and tuning
 
-**Designed, not built.** Settled in discussion on 2026-09-12, before any code, because it
-reverses several things recorded above.
+**Built.** Settled in discussion on 2026-09-12, before any code, because it reverses
+several things recorded above; each section below says when it landed.
 
 The goal that forced it is a polyphonic sequencer in the shape of Bespoke's
 `dotsequencer` -- a grid where a column can hold a chord -- and the current engine cannot
@@ -1218,7 +1313,7 @@ mechanism rather than a static mode and a progression mode.
 
 The sequencer grid while the scale cycles is undecided: its rows are the scale, so it
 either reflows every few bars or shows the scale being edited rather than the one playing.
-The device should settle it.
+The device should settle it. *It did: the behavior as it stands was kept, 2026-09-25.*
 
 ### Chips that float
 
@@ -1292,7 +1387,7 @@ Android, so an installed copy cannot update into it.
 
 ## Phase 7 -- Subpatches, and the end of CV
 
-**Designed, not built.** The screen-space reasoning below predates it; everything from
+**Built** (it was called groups until Phase 10). The screen-space reasoning below predates it; everything from
 *Opening a module is going inside it* onward was settled in discussion on 2026-09-14,
 before any code. It answers open question 7, retires an invariant CLAUDE.md marked
 do-not-touch, and changes most of the module catalog. Four layouts were drawn against
@@ -2244,11 +2339,14 @@ buys back a good deal of the same screen space for far less work.
 
 ## Phase 8 -- App-ness
 
-- Patch library: name, save, load, duplicate, browse.
+- Patch library: name, save, load, duplicate, browse. *Partly there through the subpatch
+  library; finishing it is wanted, with the menu redesign -- see Open work.*
 - Undo/redo. Falls out of Phase 3's command structs nearly free if they are designed to
-  be invertible -- worth spending ten minutes on then rather than a refactor here.
+  be invertible -- worth spending ten minutes on then rather than a refactor here. *Done, as
+  whole-patch snapshots rather than inverted commands; see Undo.*
 - Foreground service so audio survives backgrounding and screen-off. An instrument that
-  stops when the screen times out is not one.
+  stops when the screen times out is not one. *Overruled 2026-09-25: a nice-to-have at the
+  bottom of the list. Helio and Pagan play only while they are open, and nobody minds.*
 - **Always recording**, as Bespoke is, so that something found while exploring can be
   saved rather than reconstructed. A rolling ten-minute window -- Bespoke defaults to
   thirty, held in memory -- kept **on disk** instead. Ten minutes of float stereo at 48kHz
@@ -2260,7 +2358,8 @@ buys back a good deal of the same screen space for far less work.
   clear the window. It grows out of the debug capture.
 
   An idea rather than a decision: undo snapshots timestamped against the window would let
-  a saved recording carry the patch that made it.
+  a saved recording carry the patch that made it. *Wanted, 2026-09-25, and the saved file
+  should not land in app-specific storage.*
 - In-app open-source licenses screen. MIT requires the notice ship with the binary;
   DaisySP alone brings three (DaisySP, Plaits, Soundpipe) and Oboe brings Apache-2.0.
   *(Done 2026-09-24, before the first release shared with anyone. The notices ship inside
@@ -2270,9 +2369,10 @@ buys back a good deal of the same screen space for far less work.
   words and splitting every rule. `NoticesTest` asserts every vendored library's LICENSE is
   in the file word for word, so vendoring something new cannot ship without its notice.
   v0.1.0 carried none, and v0.2.0 had the file without the page.)*
-- Turn `isMinifyEnabled` on for release and confirm nothing reflective breaks.
-- MIDI in over USB/BLE via `android.media.midi`, translated at the edge into Phase 6's
-  note events, if it still seems worth it by then.
+- Turn `isMinifyEnabled` on for release and confirm nothing reflective breaks. *Wanted.*
+- ~~MIDI in over USB/BLE via `android.media.midi`, translated at the edge into Phase 6's
+  note events, if it still seems worth it by then.~~ *Dropped 2026-09-25: nobody is expected
+  to connect a MIDI device to a phone for this.*
 
 ## Phase 9 -- Instruments and sequencers
 
@@ -3532,6 +3632,9 @@ as `fixturePatch()`, since fifty of them know its shape.
 
 ### The fm port comes back to Osc
 
+> **Designed, not built**; medium priority in Open work. The tune knob this section names as
+> its other half went in on 2026-09-23.
+
 **Now that an `Osc` is one voice again**, the objection that retired it is gone: it used to
 send the sum of eight voices, so one feeding another bent every note of a chord by the same
 mixture. One voice feeding one voice is what FM means.
@@ -3707,12 +3810,12 @@ was pinned. Mutation-checking a new test area is now the habit.
 
 Still to cover:
 
-- Camera and hit-test math. Pure functions, and the most novel code in the project.
-- The C++ graph, via a host-side binary that runs it offline and compares buffers.
-  Audio bugs are miserable to diagnose on a device; catching them on the desktop is
-  worth the build plumbing.
+- ~~Camera and hit-test math.~~ Covered piecemeal since -- every panel, rail and editor
+  target has geometry tests -- though the camera's own transforms are tested only through them.
+- ~~The C++ graph, via a host-side binary.~~ Done: `graph_test` and `node_test`, under ASan
+  and UBSan, run by every `testDebugUnitTest`.
 - Gesture classification through `ComposeTestRule.performTouchInput`, once the loop
-  stops changing shape.
+  stops changing shape. *Wanted, 2026-09-25 -- see Open work.*
 
 ## Open questions
 
