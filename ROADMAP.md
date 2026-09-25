@@ -129,8 +129,15 @@ Forrest took the recommended option on every item that was open for discussion, 
 order below. Each is the plan, not yet the build; where building one turns something up,
 that goes in its own section as it always has.
 
-1. **Smaller release builds.** `isMinifyEnabled`, and a check that nothing reflective breaks
-   -- the JNI entry points above all, which are found by name.
+1. ~~**Smaller release builds.**~~ **Done 2026-09-25: 25MB to 3.9MB.** The two dex files
+   were 22.6MB of Compose and Material 3 kept whole; R8 and resource shrinking leave the
+   native libraries as most of what is left. Nothing in the app is found by name but the JNI
+   entry points, which the default rules keep -- every class with a native method, and those
+   methods, unrenamed -- and the engine calls back into nothing but `java.lang.String`.
+   Checked on the emulator from a fresh install of the shrunk release: the engine starting,
+   patching, a held Drone note, the keypad, renaming through the system keyboard, a patch
+   saved to the library and loaded back, and the licenses page. Not checked: an `SF` loading
+   a bank, since the emulator has none.
 2. **Controls.** A knob promotes through every level: the subpatch's own panel gets the
    promote chip, present but disabled at the top of the patch. A promoted knob can be given a
    jack from outside. "Knobs..." becomes **"Controls..."**, since a knob reads as a rotary
@@ -2378,7 +2385,8 @@ buys back a good deal of the same screen space for far less work.
   words and splitting every rule. `NoticesTest` asserts every vendored library's LICENSE is
   in the file word for word, so vendoring something new cannot ship without its notice.
   v0.1.0 carried none, and v0.2.0 had the file without the page.)*
-- Turn `isMinifyEnabled` on for release and confirm nothing reflective breaks. *Wanted.*
+- Turn `isMinifyEnabled` on for release and confirm nothing reflective breaks. *Done
+  2026-09-25: see Open work.*
 - ~~MIDI in over USB/BLE via `android.media.midi`, translated at the edge into Phase 6's
   note events, if it still seems worth it by then.~~ *Dropped 2026-09-25: nobody is expected
   to connect a MIDI device to a phone for this.*

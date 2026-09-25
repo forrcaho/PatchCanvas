@@ -82,7 +82,13 @@ android {
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
             }
-            isMinifyEnabled = false
+            // R8, and the resources nothing refers to. 25MB to what the app uses: the two dex
+            // files were 22.6MB of Compose and Material 3 kept whole. The JNI entry points are
+            // looked up by name, and survive because the default rules keep every class with a
+            // native method, and those methods, unrenamed; the engine calls nothing back but
+            // java.lang.String, and nothing here uses reflection.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
