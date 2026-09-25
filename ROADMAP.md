@@ -2263,9 +2263,13 @@ buys back a good deal of the same screen space for far less work.
   a saved recording carry the patch that made it.
 - In-app open-source licenses screen. MIT requires the notice ship with the binary;
   DaisySP alone brings three (DaisySP, Plaits, Soundpipe) and Oboe brings Apache-2.0.
-  *(Half done for v0.2.0, the first release shared with anyone: the notices ship inside the
-  APK as `assets/THIRD_PARTY_NOTICES.txt` and beside it on every release, which is what the
-  licenses ask. v0.1.0 carried none. What is left is the screen that shows them.)*
+  *(Done 2026-09-24, before the first release shared with anyone. The notices ship inside
+  the APK as `assets/THIRD_PARTY_NOTICES.txt` and beside it on every release, and
+  **Licenses…** at the end of the empty-canvas menu shows them -- reflowed, because the file
+  is hard-wrapped at 79 columns and at font scale 1.5 it wrapped a second time, stranding
+  words and splitting every rule. `NoticesTest` asserts every vendored library's LICENSE is
+  in the file word for word, so vendoring something new cannot ship without its notice.
+  v0.1.0 carried none, and v0.2.0 had the file without the page.)*
 - Turn `isMinifyEnabled` on for release and confirm nothing reflective breaks.
 - MIDI in over USB/BLE via `android.media.midi`, translated at the edge into Phase 6's
   note events, if it still seems worth it by then.
@@ -3632,6 +3636,14 @@ scene on the host without the reverb: 115dB clean with a linear read or a Hermit
 is the room smearing a tone that sweeps an octave, which is what a reverb does. (The capture's
 steady tone also carries odd harmonics about 45dB down; that is `Out`'s limiter at 0.4, which
 the Phase 10 notes already measured as no longer transparent there.)
+
+**The add menu ran off the screen, and the review the next day found it.** Three modules at
+once took the empty-canvas menu to 25 tiles on any patch with something in it -- seven rows of
+four, 464dp at font scale 1.5 on a 443dp screen, with New patch the tile below the edge. The
+emulator pass had opened the menu on an empty patch, which is two tiles shorter, and the test
+that should have caught it listed the menu's items by hand and had never included New patch.
+It builds the menu as the app does now, and the menu widens past four columns when four would
+need more rows than the screen holds.
 
 **For the morning, by ear**, since none of this has been heard:
 - the three new colors, and especially `Noise`'s olive, which is faint against the canvas;

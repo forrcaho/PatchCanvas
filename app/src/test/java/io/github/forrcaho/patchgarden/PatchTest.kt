@@ -607,12 +607,13 @@ class MenuLayoutTest {
      */
     @Test
     fun `at a large text size the tiles grow and the whole menu still fits`() {
-        val everything = Types.palette.map { MenuItem.Add(it) } +
-            listOf(
-                MenuItem.Add(Types.Subpatch), MenuItem.Add(Types.Poly),
-                MenuItem.StartSubpatch(Types.Subpatch), MenuItem.StartSubpatch(Types.Poly),
-                MenuItem.OpenLibrary, MenuItem.Save(null),
-            )
+        // The menu as the app builds it, for a patch with something in it -- which is when it
+        // is longest. This list was written out by hand once, and it left out New patch: with
+        // three modules added on 2026-09-23 the real menu reached a seventh row, 464dp against
+        // the reference device's 443, while this test went on counting six.
+        val patch = Patch().apply { add(Types.Osc, Offset.Zero) }
+        val everything = menuItems(patch, null)
+        assertTrue("the longest menu there is", MenuItem.NewPatch in everything)
         val normal = menuLayout(everything, Offset(1200f, 540f), d, screen)
         val large = menuLayout(everything, Offset(1200f, 540f), d, screen, textScale = 1.5f)
 

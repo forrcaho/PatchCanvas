@@ -4,6 +4,11 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -3604,6 +3609,12 @@ sealed interface Interaction {
      * [moduleId] is null. Over the canvas like [Renaming], and for the same reason.
      */
     data class Saving(val moduleId: Long?) : Interaction
+
+    /**
+     * The open-source notices, over the canvas like [Renaming] and for a similar reason: a page
+     * of text that scrolls wants a real scrolling composable, not a shape drawn in the canvas.
+     */
+    data object Licenses : Interaction
 }
 
 /** What a typed number is going to be written to. */
@@ -3650,6 +3661,9 @@ sealed interface MenuItem {
 
     /** The library with nothing in it yet: a tile that says so and dismisses. */
     data object LibraryEmpty : MenuItem
+
+    /** The notices of what the app bundles; see [Interaction.Licenses]. */
+    data object Licenses : MenuItem
 
     /** Makes envelope node [node] the one the envelope waits at while a note is held. */
     data class ReleaseAt(val moduleId: Long, val node: Int) : MenuItem
@@ -3729,6 +3743,9 @@ internal fun menuItems(
             MenuItem.Save(null).takeIf { patch.free.any { m -> m.parent == TOP } },
             // Next to Save, and only when there is something to clear.
             MenuItem.NewPatch.takeIf { patch.free.isNotEmpty() },
+            // Last, and on this menu because it is about the app rather than about anything on
+            // the canvas -- the one menu that already speaks for the whole of what is open.
+            MenuItem.Licenses,
         )
     patch.module(targetId)?.type?.box == true -> listOfNotNull(
         MenuItem.Duplicate(targetId),
@@ -5554,6 +5571,9 @@ fun PatchCanvas(
         (interaction as? Interaction.Typing)?.let { typing ->
             NumberKeypad(patch, typing.target) { interaction = Interaction.Idle }
         }
+        if (interaction == Interaction.Licenses) {
+            LicensesOverlay { interaction = Interaction.Idle }
+        }
         (interaction as? Interaction.Saving)?.let { saving ->
             val subpatch = saving.moduleId?.let { patch.module(it) }
             SaveOverlay(
@@ -5566,6 +5586,128 @@ fun PatchCanvas(
                     else patch.patchToSubpatchJson(name)
                 },
             ) { interaction = Interaction.Idle }
+        }
+    }
+}
+
+/** The notices file the build carries in its assets; see THIRD_PARTY_NOTICES.txt. */
+internal const val NOTICES_ASSET = "THIRD_PARTY_NOTICES.txt"
+
+/** One block of the notices as the page shows it: a heading, or a paragraph. */
+internal data class NoticeBlock(val text: String, val heading: Boolean)
+
+/**
+ * The notices file, reflowed for a screen of any width at any font size.
+ *
+ * The file is hard-wrapped at 79 columns so it reads in a terminal, and shown as written it
+ * wrapped a second time at the reference device's font scale, leaving single words stranded on
+ * lines of their own and every rule broken in two. So a block framed by rules of `=` becomes a
+ * heading, the rules dropped; and within a paragraph a line joins the one before it when it is
+ * indented the same, since that is a wrap, and starts a line of its own when the indent changes,
+ * since that is structure -- which keeps the Apache license's numbered sections and the list of
+ * components as they were laid out. The file itself stays exactly as the licenses ask.
+ */
+internal fun reflowNotices(text: String): List<NoticeBlock> =
+    text.replace("\r", "").split(Regex("\n[ \t]*\n")).mapNotNull { block ->
+        val isRule = { line: String -> line.isNotBlank() && line.trim().all { it == '=' } }
+        val lines = block.lines().filter { it.isNotBlank() }
+        val heading = lines.any(isRule)
+        val kept = lines.filterNot(isRule)
+        if (kept.isEmpty()) return@mapNotNull null
+        val out = StringBuilder()
+        var indent = -1
+        kept.forEach { line ->
+            val lead = line.length - line.trimStart().length
+            when {
+                out.isEmpty() -> out.append(line.trimEnd())
+                // A web address is a line of its own, whatever its indent: joined to the
+                // copyright above it, it read as part of the holder's name.
+                lead == indent && !heading && !line.trimStart().startsWith("http") ->
+                    out.append(' ').append(line.trim())
+                else -> out.append('\n').append(line.trimEnd())
+            }
+            indent = lead
+        }
+        NoticeBlock(out.toString(), heading)
+    }
+
+/**
+ * The open-source notices, as the app carries them: the file in its assets, shown whole.
+ *
+ * The licenses of what is bundled ask for their notices to travel with every copy, which the
+ * file inside the APK already does; this is the page that lets someone holding the phone read
+ * them, which is what the README called a release requirement. The text is read off the main
+ * thread and reflowed for the screen ([reflowNotices]), in the app's own face.
+ *
+ * Closed by a tap outside the page, by the close chip, or by the back gesture -- the three
+ * ways out of anything that covers the screen, and a page this long is one where someone who
+ * scrolled to the bottom should not have to scroll back up to find the way out.
+ */
+@Composable
+private fun LicensesOverlay(onDone: () -> Unit) {
+    val context = LocalContext.current
+    val blocks by produceState<List<NoticeBlock>>(initialValue = emptyList()) {
+        value = withContext(Dispatchers.IO) {
+            reflowNotices(
+                runCatching { context.assets.open(NOTICES_ASSET).bufferedReader().use { it.readText() } }
+                    .getOrElse { "The notices could not be read: ${it.message}" },
+            )
+        }
+    }
+    BackHandler(onBack = onDone)
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0xCC000000))
+            .pointerInput(Unit) { detectTapGestures { onDone() } },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier
+                .padding(horizontal = 72.dp, vertical = 20.dp)
+                .widthIn(max = 760.dp)
+                .fillMaxSize()
+                .background(Color(0xFF1B1F26), RoundedCornerShape(12.dp))
+                .border(1.5.dp, ChipEdge, RoundedCornerShape(12.dp))
+                // Swallows taps on the page itself, which would otherwise reach the scrim and
+                // close it under a finger that was only scrolling.
+                .pointerInput(Unit) { detectTapGestures { } }
+                .padding(horizontal = 20.dp, vertical = 14.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                BasicText(
+                    "PatchGarden ${BuildConfig.VERSION_NAME}  \u00b7  open-source licenses",
+                    style = TextStyle(color = Color(0xFFE6E9EF), fontSize = 18.sp, fontWeight = FontWeight.Medium),
+                    modifier = Modifier.weight(1f),
+                )
+                BasicText(
+                    "\u2715",
+                    style = TextStyle(color = Color(0xFFB7C0CE), fontSize = 22.sp),
+                    modifier = Modifier
+                        .border(1.5.dp, ChipEdge, RoundedCornerShape(8.dp))
+                        .pointerInput(Unit) { detectTapGestures { onDone() } }
+                        .padding(horizontal = 14.dp, vertical = 6.dp),
+                )
+            }
+            Column(
+                Modifier
+                    .padding(top = 8.dp)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                blocks.forEach { block ->
+                    BasicText(
+                        block.text,
+                        style = if (block.heading) {
+                            TextStyle(color = Color(0xFFE6E9EF), fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                        } else {
+                            TextStyle(color = Color(0xFFC9D0DA), fontSize = 13.sp)
+                        },
+                        modifier = Modifier.padding(top = if (block.heading) 18.dp else 8.dp),
+                    )
+                }
+            }
         }
     }
 }
@@ -7717,6 +7859,7 @@ private fun handleTap(
                 if (env.segments.getOrNull(chosen.node)?.sustain == true) env.setSustain(chosen.node)
             }
             is MenuItem.RemoveNode -> patch.module(chosen.moduleId)?.removeSegment(chosen.node)
+            is MenuItem.Licenses -> return Interaction.Licenses
         }
         return Interaction.Idle
     }
@@ -7817,7 +7960,7 @@ private fun handleTap(
         // both are returned above. Renaming never arrives here at all: its scrim is a
         // composable over the canvas and takes every touch while it is up.
         is Interaction.Menu, is Interaction.Selecting,
-        is Interaction.Renaming, is Interaction.Typing, is Interaction.Saving,
+        is Interaction.Renaming, is Interaction.Typing, is Interaction.Saving, is Interaction.Licenses,
         -> Interaction.Idle
     }
 }
@@ -8058,9 +8201,17 @@ internal fun menuLayout(
 ): MenuLayout {
     val tileW = MenuMetrics.TILE_W * textScale.coerceAtLeast(1f)
     val tileH = MenuMetrics.TILE_H * textScale.coerceAtLeast(1f)
+    // The column cap is a preference, not a limit: past the rows that fit the screen's
+    // height, the menu goes wider instead of running off the bottom. A landscape phone has
+    // width to spare and no height to spare -- the add menu reached seven rows at font scale
+    // 1.5 when three modules arrived at once, 464dp on a 443dp screen, and New patch was the
+    // tile below the edge.
+    val fitRows = ((canvas.height / d - 2f * MenuMetrics.SCREEN_MARGIN - 2f * MenuMetrics.PAD +
+        MenuMetrics.GAP) / (tileH + MenuMetrics.GAP)).toInt().coerceAtLeast(1)
+    val columnCap = maxOf(MenuMetrics.COLS, ceil(items.size / fitRows.toFloat()).toInt())
     // Use as few rows as the column cap allows, then spread the items evenly across
     // them, so four items are 2x2 rather than a row of three and a lonely orphan.
-    val rows = ceil(items.size / MenuMetrics.COLS.toFloat()).toInt().coerceAtLeast(1)
+    val rows = ceil(items.size / columnCap.toFloat()).toInt().coerceAtLeast(1)
     val cols = ceil(items.size / rows.toFloat()).toInt().coerceAtLeast(1)
     val w = (MenuMetrics.PAD * 2 + cols * tileW + (cols - 1) * MenuMetrics.GAP) * d
     val h = (MenuMetrics.PAD * 2 + rows * tileH + (rows - 1) * MenuMetrics.GAP) * d
@@ -8097,6 +8248,7 @@ private fun MenuItem.label(): String = when (this) {
     is MenuItem.ReleaseAt -> "Release here"
     is MenuItem.NoRelease -> "No release"
     is MenuItem.RemoveNode -> "Remove"
+    is MenuItem.Licenses -> "Licenses\u2026"
 }
 
 private fun MenuItem.tint(): Color = when (this) {
@@ -8113,6 +8265,7 @@ private fun MenuItem.tint(): Color = when (this) {
     // The release's own blue, so the tile is the color of the region it makes.
     is MenuItem.ReleaseAt, is MenuItem.NoRelease -> EnvReleaseMark
     is MenuItem.RemoveNode -> Color(0xFFE07A6B)
+    is MenuItem.Licenses -> Color(0xFF8A93A3)
 }
 
 private fun DrawScope.drawMenu(layout: MenuLayout, d: Float, measurer: TextMeasurer) {

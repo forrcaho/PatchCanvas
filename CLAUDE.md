@@ -594,6 +594,8 @@ steps. This is why `Mix` exists and why there is no `Mult`: outputs already fan 
 ## Vendored DaisySP
 
 `app/src/main/cpp/vendor/daisysp` is a copied subset, MIT, documented in its own README.
+**Anything vendored carries its LICENSE into `assets/THIRD_PARTY_NOTICES.txt`**, which the app
+shows under Licenses… and every release attaches; `NoticesTest` fails until it does.
 **Do not convert it to a submodule**: DaisySP carries `DaisySP-LGPL` as *its* submodule, so
 `git clone --recursive` would pull the LGPL half and acquire a relinking obligation. Clone
 upstream without `--recursive` when updating. It builds as its own CMake target with

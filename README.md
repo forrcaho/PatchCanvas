@@ -99,5 +99,6 @@ the DaisySP core (MIT, which itself bundles the Plaits and Soundpipe MIT notices
 and TinySoundFont (MIT). The `DaisySP-LGPL` submodule is deliberately *not* used -- clone DaisySP
 without `--recursive` -- so nothing here carries a copyleft relinking obligation.
 Their notices ship with every copy: in the APK as
-[`THIRD_PARTY_NOTICES.txt`](app/src/main/assets/THIRD_PARTY_NOTICES.txt), and beside the APK on
-each release. A screen in the app that shows them is still to come.
+[`THIRD_PARTY_NOTICES.txt`](app/src/main/assets/THIRD_PARTY_NOTICES.txt), beside the APK on
+each release, and in the app itself -- **Licenses…** at the end of the menu a long press on
+empty canvas opens.
