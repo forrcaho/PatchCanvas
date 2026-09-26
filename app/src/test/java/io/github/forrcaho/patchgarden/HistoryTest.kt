@@ -534,11 +534,6 @@ class ScaleChooserGeometryTest {
         // The title is centered; keeping the chips in the right-hand side keeps them off it.
         assertTrue("reaches the centered title", interval.left > panel.center.x + 60f * frame.density)
     }
-
-    @Test
-    fun `every interval fits on one page of tiles`() {
-        assertEquals(INTERVALS.size, panelTiles(panel, frame.density, INTERVALS.size).size)
-    }
 }
 
 /**

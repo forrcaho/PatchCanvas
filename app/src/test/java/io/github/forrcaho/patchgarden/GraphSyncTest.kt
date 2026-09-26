@@ -1045,15 +1045,29 @@ class TransportSyncTest {
         assertEquals(1, tempos().size)
     }
 
-    /** Mirrors kIntervals in nodes.h. A mismatch is a button that plays the wrong length. */
+    /**
+     * Mirrors kIntervals in nodes.h entry for entry, read out of the header. A mismatch is a
+     * tile that plays another length than it says -- or, for "free", a Delay that is synced.
+     */
     @Test
-    fun `the interval selector offers exactly the divisions the engine has`() {
-        assertEquals(ENGINE_INTERVALS, INTERVALS.size)
-        assertEquals(ENGINE_DEFAULT_INTERVAL, DEFAULT_INTERVAL)
+    fun `the interval table is the engine's, entry for entry`() {
+        val header = java.io.File("src/main/cpp/nodes.h").readText()
+        val table = header.substringAfter("constexpr Interval kIntervals[] = {").substringBefore("};")
+        val engine = Regex("""\{\s*(\d+),\s*(\d+)\s*\}""").findAll(table)
+            .map { Interval(it.groupValues[1].toInt(), it.groupValues[2].toInt()) }.toList()
+        assertEquals(engine, INTERVALS)
+        fun constant(name: String) =
+            Regex("""constexpr int32_t $name = (\d+);""").find(header)!!.groupValues[1].toInt()
+        assertEquals(constant("kDefaultInterval"), DEFAULT_INTERVAL)
+        assertEquals(constant("kFreeInterval"), FREE_INTERVAL)
+        assertTrue("and free is no length", INTERVALS[FREE_INTERVAL].free)
 
-        val interval = Types.Steps.params[Types.Steps.intervalParam]
-        assertEquals(INTERVALS.size, interval.steps)
-        assertTrue("the interval belongs in the header", interval.header)
+        // Every clocked module's knob reaches the whole table, from the header.
+        Types.byName.values.filter { it.intervalParam >= 0 }.forEach { type ->
+            val interval = type.params[type.intervalParam]
+            assertEquals(type.name, INTERVALS.size, interval.steps)
+            assertTrue("${type.name}: the interval belongs in the header", interval.header)
+        }
     }
 
     /** Mirrors kMinTempo and kMaxTempo in transport.h, so the chip and the sound agree. */
@@ -1072,11 +1086,6 @@ class TransportSyncTest {
         )
     }
 
-    private companion object {
-        /** kIntervalCount and kDefaultInterval in nodes.h. */
-        const val ENGINE_INTERVALS = 9
-        const val ENGINE_DEFAULT_INTERVAL = 3
-    }
 }
 
 /** The limits the engine's fixed tables impose. A disagreement fails silently, at the top of a scale. */

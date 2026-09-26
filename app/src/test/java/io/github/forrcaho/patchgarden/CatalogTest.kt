@@ -2,6 +2,7 @@ package io.github.forrcaho.patchgarden
 
 import androidx.compose.ui.geometry.Offset
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -23,10 +24,10 @@ class CatalogTest {
         val osc = patch.add(Types.Osc, Offset.Zero)!!
         osc.setParam(0, 3f) // a sine, so the file says something about the Osc
         val current = patch.toJson()
-        assertTrue(current.contains("\"version\":16"))
+        assertTrue(current.contains("\"version\":17"))
 
         // What a 15 build wrote: the same file, with no tune in it.
-        val older = current.replace("\"version\":16", "\"version\":15").replace(",\"tune\":0", "")
+        val older = current.replace("\"version\":17", "\"version\":15").replace(",\"tune\":0", "")
         assertTrue("the edit took: $older", !older.contains("tune"))
         val back = patchFromJson(older)
         assertNotNull("15 is still read", back)
@@ -71,12 +72,9 @@ class CatalogTest {
         assertAModule(Types.Delay, NodeType.Delay)
         val interval = Types.Delay.params[Types.Delay.intervalParam]
         assertTrue("the interval is a header chip", interval.header)
-        assertEquals(
-            "which offers every division, then free",
-            INTERVALS + FREE_TIME, intervalChoices(Types.Delay),
-        )
+        assertTrue("which can be free", Types.Delay.canBeFree)
         assertEquals("and defaults to an eighth", DEFAULT_INTERVAL.toFloat(), interval.default)
-        assertEquals("a sequencer's chip has no free", INTERVALS, intervalChoices(Types.Seq))
+        assertFalse("a sequencer's cannot", Types.Seq.canBeFree)
     }
 
     /**
@@ -89,7 +87,7 @@ class CatalogTest {
         val delay = patch.add(Types.Delay, Offset.Zero)!!
         val time = Types.Delay.params.indexOfFirst { it.name == "time" }
         assertTrue(!delay.isLive(time))
-        delay.setParam(Types.Delay.intervalParam, INTERVALS.size.toFloat())
+        delay.setParam(Types.Delay.intervalParam, FREE_INTERVAL.toFloat())
         assertTrue("free, the knob is the time", delay.isLive(time))
         assertTrue("and every other knob always is", delay.isLive(time + 1))
 

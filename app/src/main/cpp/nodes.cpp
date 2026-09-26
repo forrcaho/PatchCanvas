@@ -567,10 +567,7 @@ void StepsNode::setParam(int32_t index, float value) {
             break;
         }
         case 1: transposeCents_ = clampf(value, -kTuneRange, kTuneRange); break;
-        case 2:
-            intervalIndex_ = static_cast<int32_t>(
-                    clampf(value, 0.0f, static_cast<float>(kIntervalCount - 1)) + 0.5f);
-            break;
+        case 2: intervalIndex_ = intervalIndex(value); break;
         default: break;
     }
 }
@@ -710,10 +707,7 @@ void SeqNode::setParam(int32_t index, float value) {
     switch (index) {
         case 0: length_ = static_cast<int32_t>(clampf(value, 1.0f, static_cast<float>(kSteps)) + 0.5f); break;
         case 1: transposeCents_ = clampf(value, -kTuneRange, kTuneRange); break;
-        case 2:
-            intervalIndex_ = static_cast<int32_t>(
-                    clampf(value, 0.0f, static_cast<float>(kIntervalCount - 1)) + 0.5f);
-            break;
+        case 2: intervalIndex_ = intervalIndex(value); break;
         default: break;
     }
 }
@@ -945,7 +939,17 @@ void FmNode::setParam(int32_t index, float value) {
 void LfoNode::process(int32_t frames) {
     float *o = out(0);
     const double step = static_cast<double>(rateHz_) / static_cast<double>(sampleRate_);
+    // Synced, the phase is read off the transport rather than counted, so a cycle begins on
+    // every boundary of the interval -- on the beat, with the sequencers dividing the same
+    // one -- and cannot drift from them. It holds still while the transport does, which is
+    // only ever while the output is off.
+    const Interval &sync = kIntervals[interval_];
+    const double cyclesPerBeat = sync.none() ? 0.0 : static_cast<double>(sync.den) / sync.num;
     for (int32_t i = 0; i < frames; ++i) {
+        if (cyclesPerBeat > 0.0) {
+            const double cycles = (beat_ + static_cast<double>(i) * beatsPerFrame_) * cyclesPerBeat;
+            phase_ = cycles - std::floor(cycles);
+        }
         const auto phase = static_cast<float>(phase_);
         switch (wave_) {
             case 0: o[i] = phase; break;                                  // saw, rising
@@ -957,6 +961,7 @@ void LfoNode::process(int32_t frames) {
         }
         // Naive, not band-limited. Nothing reads this at audio rate -- a parameter samples
         // it once a block -- and a square that is a clean 1 or 0 is the useful kind.
+        if (cyclesPerBeat > 0.0) continue;
         phase_ += step;
         if (phase_ >= 1.0) phase_ -= std::floor(phase_);
     }
@@ -966,6 +971,9 @@ void LfoNode::setParam(int32_t index, float value) {
     switch (index) {
         case 0: rateHz_ = clampf(value, 0.01f, 40.0f); break;
         case 1: wave_ = static_cast<int32_t>(clampf(value, 0.0f, 3.0f) + 0.5f); break;
+        // Switched back to free, it carries on from the phase it had reached, so leaving
+        // sync is not a jump.
+        case 2: interval_ = intervalIndex(value); break;
         default: break;
     }
 }
@@ -1237,7 +1245,7 @@ void NoiseNode::setParam(int32_t index, float value) {
 
 float DelayNode::targetSamples() const {
     float samples;
-    if (interval_ >= kFree) {
+    if (interval_ == kFree) {
         samples = timeMs_ * 0.001f * static_cast<float>(sampleRate_);
     } else {
         // 120bpm until a graph says otherwise, which only a test that never sets one does.
@@ -1281,7 +1289,7 @@ void DelayNode::process(int32_t frames) {
 
 void DelayNode::setParam(int32_t index, float value) {
     switch (index) {
-        case 0: interval_ = static_cast<int32_t>(clampf(value, 0.0f, static_cast<float>(kFree)) + 0.5f); break;
+        case 0: interval_ = intervalIndex(value); break;
         case 1: timeMs_ = clampf(value, 1.0f, 4000.0f); break;
         // Below 1, so every echo is quieter than the one before and the tail always ends.
         case 2: feedback_ = clampf(value, 0.0f, 0.95f); break;

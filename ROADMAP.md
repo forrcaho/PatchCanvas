@@ -209,12 +209,44 @@ that goes in its own section as it always has.
    frame loop that never ends never lets a test's clock go idle, so every sequencer test hung.
    Robolectric 4.17 is pinned to SDK 36 for these tests, since its image of 37 lacks what
    touch injection calls.
-4. **Shared time divisions, and LFO synced to the beat.** A step is 1/n of a beat for any n
-   from 1 to 16 -- five to a beat is n = 5 -- plus lengths of whole beats for slow LFOs and
-   long delays; the transport's beats per bar is the other half. One definition, shared by
-   `Seq`, `LFO`, `Delay` and the rest, so a change to how time is divided is one change. The
-   interface to try first: the division chip opens a row of steps-per-beat numbers, with
-   "1/8" and "1/8T" as labels on the ones they are. Settled on the phone, by trial.
+4. ~~**Shared time divisions, and LFO synced to the beat.**~~ **Built 2026-09-25; the chooser
+   is to be settled on the phone.** A step is 1/n of a beat for any n from 1 to 16 -- five to a
+   beat is n = 5 -- plus lengths of whole beats for slow LFOs and long delays; the transport's
+   beats per bar is the other half. One definition, shared by `Seq`, `LFO`, `Delay` and the
+   rest, so a change to how time is divided is one change. The interface to try first: the
+   division chip opens a row of steps-per-beat numbers, with "1/8" and "1/8T" as labels on the
+   ones they are. Settled on the phone, by trial.
+
+   As built. **One table**, `INTERVALS` / `kIntervals`, grown by appending: 1 to 16 steps to a
+   beat, 2 to 16 beats to a step, and the quarter triplet, which the old list had and the plain
+   1/n model does not -- kept rather than dropped, since a patch may be using it. The first
+   nine entries and "free" at index 9 kept their places, so **format 17 reads 16 and 15**
+   unchanged; nothing was refused. **One knob**, `intervalParam()`, for Steps, Seq, Arp, Euclid,
+   Delay and LFO, and one `intervalIndex()` reading it in the engine. "Free" is offered exactly
+   where a knob is live only then -- a Delay's time, an LFO's rate -- which is derived from the
+   knobs rather than declared.
+
+   **The chooser** is option (a): two rows across the panel, "steps per beat" 1 to 16 and
+   "beats per step" (1/4T, then 2 to 16, then free where the module has it), each tile a count
+   with its note name small beneath it where it has one. The header chip says the note name
+   where there is one and the count where not -- "5/beat", "7 beats" -- and grows with the text
+   size. **The grids mark beats and bars**: a faint line where each beat begins, when a step is
+   shorter than one, and a heavier one at each bar, from the patch's beats per bar -- so five
+   to a beat reads as fives. Counted from the top of the loop, which is exact when the loop is
+   a whole number of beats.
+
+   **The LFO syncs** from the same chip: one cycle per step of its interval, its phase read
+   straight off the transport's beat (handed to every node with `setTiming` now), so its cycles
+   start on the beat and hold still while the transport does -- which is only while the output
+   is off. Free by default, and free is where every LFO saved before 17 comes back. Leaving
+   sync carries on from the phase it had, rather than jumping.
+
+   Checked on the emulator: the chooser, five to a beat drawn in fives, the LFO synced with its
+   rate gone faint. Not yet on the phone, which is where the chooser is to be decided. Open for
+   that trial: whether seventeen tiles a row is too many at the phone's text size, and whether
+   the dotted eighth -- the commonest synced delay there is, and not in any of these rows --
+   earns a tile.
+
 5. **The add menu in categories**, two taps to a module, grouped by what a module sends --
    which is what its color already says: **Synths** (Osc, Pluck, FM, SF, Noise), **Notes**
    (Seq, Drone, Euclid), **Note fx** (Arp, Chord, Chance), **Effects** (Filter, Delay, Reverb,

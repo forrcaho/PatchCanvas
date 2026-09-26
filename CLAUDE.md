@@ -179,7 +179,11 @@ exists and using it would be the silent conversion 10 was drawn against. **15 re
 but 15 as well**: Amp's `mod` port became its gain's own jack, and a 14 Amp whose gain was
 exposed *and* patched had two modulators on one number, which 15 cannot say. Forrest chose
 refusing every 14 file over a refusal that looks inside the file, since nothing saved during
-development is worth keeping. **A knob or
+development is worth keeping. **16 and 17 are additive again**, so 17 reads 16 and 15: 16 gave
+`Osc` a tune knob and added three modules; 17 grew the interval table past its old end and gave
+`LFO` an interval, free when a file names none. **A table a knob indexes grows by appending,
+never by reordering** -- the old entries keep their indices, which is what made 17 additive
+rather than a refusal. **A knob or
 a port added to an existing module bumps the version too**, for that same reason: knobs are
 keyed by name and port indices are positional, so an 11 build would read a bandpass, ignore
 the two knobs it does not know, and autosave it as a lowpass. **Adding a module type bumps the version** even though
@@ -570,7 +574,26 @@ listening to.
 **Timed in beats but not by the transport reads `tempo_`.** `setTiming` hands every node the
 running rate, which is zero while stopped so anything stepping in beats holds still, *and*
 the tempo, which is not. A synced Delay reads the second: an eighth is an eighth long whether
-or not anything is playing, and reading the first made a stopped delay no length at all.
+or not anything is playing, and reading the first made a stopped delay no length at all. It
+also hands over `beat_`, where the transport is at the block's first frame, for what has to be
+*in phase* with it and not just at its rate: a synced LFO reads its phase straight off it, so
+its cycles start on the beat and cannot drift from the sequencers, where counting ticks would.
+
+**Time is divided in one table, for every module the transport times.** `INTERVALS` in Kotlin
+and `kIntervals` in `nodes.h` (asserted entry for entry by `GraphSyncTest`, read out of the
+header): a step of 1/n of a beat for n from 1 to 16, of whole beats from 2 to 16, and the
+quarter triplet. One `intervalParam()` builds the knob for Steps, Seq, Arp, Euclid, Delay and
+LFO, one `intervalIndex()` reads it in C++, and one chooser draws it -- Forrest asked for "one
+place to change for all modules", and a sixth module drifting from the other five is what that
+prevents. **Index 9 is `FREE_INTERVAL` / `kFreeInterval`**, no length at all: it was one past
+the end while the table was Bespoke's nine note lengths, and the table grew around it because
+moving it would have made every free Delay already saved a synced one. **A module offers free
+only when one of its knobs is live only then** (`ModuleType.canBeFree`, from `Param.liveWhen`)
+-- a Delay's time, an LFO's rate -- so free cannot be offered where nothing would answer it.
+The chooser is numbers, not names, because five to a beat has no name: a row of steps per
+beat and a row of beats per step, with "1/8" and "1/8T" worn small on the tiles that are one.
+The grids draw a line where each beat begins and a heavier one at each bar (`beatLines`),
+counted from the top of the loop.
 
 **Nothing carries a pulse yet, and the kind stays anyway.** `Env` was the last thing taking
 a gate and it takes *notes* now: a pulse is an event with no duration, so it could never

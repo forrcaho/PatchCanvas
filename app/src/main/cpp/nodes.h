@@ -56,9 +56,17 @@ enum class NodeType : int32_t {
 };
 
 /**
- * The note lengths a clocked module can step at. Mirrored by INTERVALS in
- * PatchCanvas.kt and indexed by the parameter that chooses one, so append rather than
- * reorder.
+ * The step lengths a clocked module can take, in beats: every one is a step of 1/n of a beat
+ * for n from 1 to 16, or of whole beats from 2 to 16, plus the quarter triplet. One table for
+ * every module the transport times -- sequencers, Arp, Euclid, Delay, LFO -- so a change to
+ * how time is divided is one change. Mirrored by INTERVALS in PatchCanvas.kt and indexed by
+ * the parameter that chooses one, so append rather than reorder: a saved patch names an
+ * index, and the first nine were Bespoke's note lengths before the rest existed.
+ *
+ * Index 9 is kFreeInterval and is no length at all ({0, 1}, which none() says): a Delay or
+ * an LFO keeping time of its own, in milliseconds or hertz. It sat one past the end when the
+ * table stopped at nine, and the table grew around it rather than moving it, since moving it
+ * would have made every free Delay already saved a synced one.
  */
 constexpr Interval kIntervals[] = {
         {4, 1}, // 1/1
@@ -70,9 +78,41 @@ constexpr Interval kIntervals[] = {
         {2, 3}, // 1/4 triplet
         {1, 3}, // 1/8 triplet
         {1, 6}, // 1/16 triplet
+        {0, 1}, // free: no division
+        {1, 5},
+        {1, 7},
+        {1, 9},
+        {1, 10},
+        {1, 11},
+        {1, 12}, // 1/32 triplet
+        {1, 13},
+        {1, 14},
+        {1, 15},
+        {1, 16}, // 1/64
+        {3, 1},  // dotted half
+        {5, 1},
+        {6, 1},  // dotted whole
+        {7, 1},
+        {8, 1},
+        {9, 1},
+        {10, 1},
+        {11, 1},
+        {12, 1},
+        {13, 1},
+        {14, 1},
+        {15, 1},
+        {16, 1},
 };
 constexpr int32_t kIntervalCount = static_cast<int32_t>(sizeof(kIntervals) / sizeof(kIntervals[0]));
 constexpr int32_t kDefaultInterval = 3; // 1/8
+constexpr int32_t kFreeInterval = 9;
+
+/** A parameter's value as an index into kIntervals: rounded, and held inside the table. */
+inline int32_t intervalIndex(float value) {
+    if (!(value > 0.0f)) return 0;
+    const float last = static_cast<float>(kIntervalCount - 1);
+    return static_cast<int32_t>((value < last ? value : last) + 0.5f);
+}
 
 /**
  * The note edge of a poly subpatch: one note input, one note output per instance.
@@ -832,8 +872,8 @@ private:
 class DelayNode : public Node {
 public:
     static constexpr int32_t kMaxSamples = 192000;
-    /** The division index that means "free": one past kIntervals. Mirrors FREE_TIME. */
-    static constexpr int32_t kFree = kIntervalCount;
+    /** The division index that means "free". Mirrors FREE_INTERVAL. */
+    static constexpr int32_t kFree = kFreeInterval;
 
     DelayNode() { line_.Init(); }
     int32_t inputCount() const override { return 1; }
@@ -907,6 +947,8 @@ private:
     float rateHz_ = 1.0f;
     /** Order mirrors kWaves in OscNode::setParam: saw, square, triangle, sine. */
     int32_t wave_ = 3;
+    /** One cycle per step of this interval, or kFreeInterval to run at rateHz_. */
+    int32_t interval_ = kFreeInterval;
 };
 
 /**

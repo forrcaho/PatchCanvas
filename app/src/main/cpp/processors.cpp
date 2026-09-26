@@ -209,7 +209,7 @@ void ArpNode::setParam(int32_t index, float value) {
     switch (index) {
         case 0: mode_ = whole(value, 0, 3); break;
         case 1: octaves_ = whole(value, 1, 4); break;
-        case 2: intervalIndex_ = whole(value, 0, kIntervalCount - 1); break;
+        case 2: intervalIndex_ = intervalIndex(value); break;
         default: break;
     }
 }
@@ -362,7 +362,7 @@ void EuclidNode::setParam(int32_t index, float value) {
         case 1: pulses_ = whole(value, 0, kMaxSteps); break;
         case 2: rotate_ = whole(value, 0, kMaxSteps - 1); break;
         case 3: degree_ = whole(value, -24, 24); break;
-        case 4: intervalIndex_ = whole(value, 0, kIntervalCount - 1); break;
+        case 4: intervalIndex_ = intervalIndex(value); break;
         default: break;
     }
 }

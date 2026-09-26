@@ -2539,6 +2539,87 @@ void anLfoStaysInsideItsRangeAtItsRate() {
     check(first[0] < 0.01f, "a sine starts from the bottom of the range, not its middle");
 }
 
+/**
+ * Synced, an LFO's phase is read off the transport: one cycle per step of its interval,
+ * starting on the boundaries, wherever it was switched on. A saw's output is its phase, so
+ * the saw is what is measured.
+ */
+void aSyncedLfoIsInPhaseWithTheBeat() {
+    std::printf("a synced lfo is in phase with the beat\n");
+    const double perFrame = 2.0 / kRate; // 120bpm
+    auto frac = [](double x) { return static_cast<float>(x - std::floor(x)); };
+    LfoNode lfo;
+    lfo.prepare(kRate);
+    lfo.setParam(0, 7.3f); // a free rate, which synced must not matter
+    lfo.setParam(1, 0.0f); // saw
+    lfo.setParam(2, 2.0f); // a quarter: one cycle a beat
+
+    for (double beat : {0.0, 0.25, 3.5, 1000.75}) {
+        lfo.setTiming(perFrame, true, nullptr, perFrame, beat);
+        lfo.process(kBlockSize);
+        const float *o = lfo.output(0);
+        const std::string at = " at beat " + std::to_string(beat);
+        check(std::fabs(o[0] - frac(beat)) < 1e-4f, "starts the block where the beat is" + at);
+        const double last = beat + (kBlockSize - 1) * perFrame;
+        check(std::fabs(o[kBlockSize - 1] - frac(last)) < 1e-4f, "and moves at the tempo" + at);
+    }
+
+    // Five to a beat, which no note length is: five cycles in every beat.
+    lfo.setParam(2, 10.0f);
+    lfo.setTiming(perFrame, true, nullptr, perFrame, 0.1);
+    lfo.process(kBlockSize);
+    check(std::fabs(lfo.output(0)[0] - 0.5f) < 1e-4f, "a tenth of a beat is half a fifth of one");
+
+    // Every four beats, for a slow sweep: a quarter of the way through at beat one.
+    lfo.setParam(2, 0.0f);
+    lfo.setTiming(perFrame, true, nullptr, perFrame, 1.0);
+    lfo.process(kBlockSize);
+    check(std::fabs(lfo.output(0)[0] - 0.25f) < 1e-4f, "a whole note's LFO is a quarter through at beat one");
+
+    // Stopped, the transport holds and so does it.
+    lfo.setTiming(0.0, false, nullptr, perFrame, 2.3);
+    lfo.process(kBlockSize);
+    const float held = lfo.output(0)[0];
+    bool still = true;
+    for (int32_t i = 1; i < kBlockSize; ++i) still = still && lfo.output(0)[i] == held;
+    check(still, "holds still while the transport does");
+
+    // Back to free, it carries on from where it was rather than jumping.
+    lfo.setParam(2, static_cast<float>(kFreeInterval));
+    lfo.process(kBlockSize);
+    check(std::fabs(lfo.output(0)[0] - held) < 1e-6f, "leaving sync is not a jump");
+    check(lfo.output(0)[kBlockSize - 1] > held, "and runs at its own rate again, stopped or not");
+}
+
+/**
+ * The table the parameters index. Every old entry kept its place, "free" among them, and
+ * everything past it is new: a patch saved before the table grew reads as it was saved.
+ */
+void theIntervalTableOnlyEverGrew() {
+    std::printf("the interval table only ever grew\n");
+    const Interval before[] = {{4, 1}, {2, 1}, {1, 1}, {1, 2}, {1, 4}, {1, 8}, {2, 3}, {1, 3}, {1, 6}};
+    for (int i = 0; i < 9; ++i) {
+        check(kIntervals[i].num == before[i].num && kIntervals[i].den == before[i].den,
+              "entry " + std::to_string(i) + " is where it was");
+    }
+    check(kIntervals[kFreeInterval].none() && kFreeInterval == 9 && DelayNode::kFree == 9,
+          "and 9 is still free, as every free Delay saved says");
+    for (int n = 1; n <= 16; ++n) {
+        int found = 0;
+        for (const Interval &it : kIntervals) found += (it.num == 1 && it.den == n) ? 1 : 0;
+        check(found == 1, std::to_string(n) + " to a beat is there, once");
+    }
+    for (int k = 2; k <= 16; ++k) {
+        int found = 0;
+        for (const Interval &it : kIntervals) found += (it.num == k && it.den == 1) ? 1 : 0;
+        check(found == 1, "a step of " + std::to_string(k) + " beats is there, once");
+    }
+    // A sequencer set to free never ticks, rather than reading a length that is not one.
+    StepsNode steps;
+    steps.setParam(2, static_cast<float>(kFreeInterval));
+    check(steps.interval().none(), "a sequencer at free is not ticked");
+}
+
 // ---------------------------------------------------------------- a drone follows the scale
 
 namespace {
@@ -3491,6 +3572,8 @@ int main() {
     anArpPlaysWhatIsHeld();
     euclidSpreadsItsPulses();
     anLfoStaysInsideItsRangeAtItsRate();
+    aSyncedLfoIsInPhaseWithTheBeat();
+    theIntervalTableOnlyEverGrew();
     aDroneHoldsItsNoteWithTheTransportStopped();
     aDroneSoundsSeveralCellsAtOnce();
     aDroneNoteTakesTheBeatOfTheLastTick();

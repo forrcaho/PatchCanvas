@@ -59,8 +59,14 @@ import java.io.File
  * file names none of the new modules. The bump is for the older build, which would ignore a
  * tune it does not know and read the new modules as retired, then autosave without either.
  * All four landed in one night with no build installed between them, so they share it.
+ * 17: an interval can be any number of steps to a beat, or of beats to a step, and an LFO
+ * has one. Additive, so 16 and 15 still read: the table the interval knob indexes only grew
+ * -- its first nine entries and "free" at 9 kept their places -- and an LFO that names no
+ * interval was free, which is what it comes back as. The bump is for the older build, which
+ * would clamp five to a beat onto a sixteenth-note triplet and ignore a synced LFO's interval,
+ * then autosave both as though that were what had been written.
  */
-private const val FORMAT_VERSION = 16
+private const val FORMAT_VERSION = 17
 
 /**
  * The older formats this build reads as they stand. See [upgrade].
@@ -69,7 +75,7 @@ private const val FORMAT_VERSION = 16
  * file already sounded like. Anything that would have to be *converted* is not on this list
  * and never will be.
  */
-private val READABLE = setOf(15, FORMAT_VERSION)
+private val READABLE = setOf(15, 16, FORMAT_VERSION)
 private const val TAG = "PatchStore"
 
 fun Patch.toJson(): String {

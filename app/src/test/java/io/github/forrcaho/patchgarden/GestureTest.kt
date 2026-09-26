@@ -475,6 +475,59 @@ class GestureTest {
         assertTrue("softer: ${dot.velocity} -> ${after.velocity}", after.velocity < dot.velocity)
     }
 
+    // ------------------------------------------------------------------ the interval chooser
+
+    /** Opens [module]'s chooser from its header chip and taps the tile for [choice]. */
+    private fun Host.chooseInterval(module: PatchModule, choice: Int) {
+        val panel = panelRect(frame)
+        tap(panelIntervalChip(panel, d, frame.fontScale).center)
+        val tile = intervalChooser(panel, d, frame.fontScale, module.type.canBeFree)
+            .tiles.firstOrNull { it.second == choice }
+        assertNotNull("${INTERVALS[choice].label} is not offered", tile)
+        tap(tile!!.first.center)
+    }
+
+    @Test
+    fun `a sequencer is set to five to a beat from its header`() {
+        val rig = SeqRig()
+        rig.host.chooseInterval(rig.seq, INTERVALS.indexOf(Interval(1, 5)))
+        assertEquals(Interval(1, 5), rig.seq.interval)
+        assertTrue("and the panel is still open, on its grid", rig.seq.expanded)
+    }
+
+    @Test
+    fun `a tap away from the chooser's tiles closes it and changes nothing`() {
+        val rig = SeqRig()
+        val before = rig.seq.interval
+        val panel = panelRect(rig.host.frame)
+        rig.host.tap(panelIntervalChip(panel, rig.host.d, rig.host.frame.fontScale).center)
+        // Between the caption and the first tile, where nothing is chosen.
+        val chooser = intervalChooser(panel, rig.host.d, rig.host.frame.fontScale, false)
+        rig.host.tap(chooser.captions.first().first + Offset(200f * rig.host.d, 2f))
+        assertEquals(before, rig.seq.interval)
+        // Closed: the next tap lands on the grid, as it would with no chooser ever opened.
+        rig.host.tap(rig.cell(1, 1))
+        assertEquals(1, rig.seq.dots.size)
+    }
+
+    @Test
+    fun `an LFO synced from its header leaves its rate faint, and free brings it back`() {
+        val host = Host()
+        val lfo = host.patch.add(Types.Lfo, Offset(40f, 40f))!!
+        compose.waitForIdle()
+        host.tap(host.body(lfo))
+        val rate = Types.Lfo.params.indexOfFirst { it.name == "rate" }
+        assertTrue(lfo.isLive(rate))
+
+        host.chooseInterval(lfo, INTERVALS.indexOf(Interval(4, 1)))
+        assertEquals(Interval(4, 1), lfo.interval)
+        assertFalse(lfo.isLive(rate))
+
+        host.chooseInterval(lfo, FREE_INTERVAL)
+        assertTrue(lfo.interval.free)
+        assertTrue(lfo.isLive(rate))
+    }
+
     // ------------------------------------------------------------------ subpatch controls
 
     @Test

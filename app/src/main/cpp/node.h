@@ -245,13 +245,20 @@ public:
      * transport at its tempo, running or not. For what keeps time without advancing -- a delay
      * set to an eighth is an eighth long whether or not anything is playing, and reading the
      * zero above would make it no length at all. Zero from a caller that never set a tempo.
+     *
+     * [beat] is where the transport is at the block's first frame, held while it is stopped.
+     * For what has to be *in phase* with it rather than merely at its rate -- a synced LFO,
+     * whose cycles start on the beat rather than wherever it happened to be switched on. A
+     * tick says the same thing only at the boundaries, and a phase read between them from a
+     * count of ticks would drift the way two clocks do.
      */
     void setTiming(double beatsPerFrame, bool running, const ScaleList *scales = nullptr,
-                   double tempo = 0.0) {
+                   double tempo = 0.0, double beat = 0.0) {
         beatsPerFrame_ = beatsPerFrame;
         running_ = running;
         scales_ = scales;
         tempo_ = tempo;
+        beat_ = beat;
     }
 
     /**
@@ -325,6 +332,8 @@ protected:
     bool running_ = false;
     /** See setTiming: beats per frame at the tempo, whether or not the transport runs. */
     double tempo_ = 0.0;
+    /** See setTiming: the transport's beat at this block's first frame. */
+    double beat_ = 0.0;
     /** Owned by the graph, and valid for the block it was set for. */
     const ScaleList *scales_ = nullptr;
 

@@ -1138,6 +1138,50 @@ void patchingAndUnpatchingAnAmpFade() {
 }
 
 /**
+ * The graph hands every node where the transport is (Node::setTiming), and a synced LFO reads
+ * its phase off it: a saw at one cycle a beat reads how far through the beat the transport
+ * is, from the top after a reset. Watched through the knob it sweeps, since that is where
+ * anyone would see it.
+ */
+void aSyncedLfoFollowsTheTransportsBeat() {
+    std::printf("a synced lfo follows the transport's beat\n");
+    Graph graph;
+    graph.setSampleRate(48000);
+    graph.postAdd(2, NodeType::Lfo);
+    graph.postAdd(3, NodeType::Mix);
+    graph.postSetParam(2, 1, 0.0f); // saw, whose value is its phase
+    graph.postSetParam(2, 2, 2.0f); // a quarter: a cycle a beat
+    graph.postSetModRange(3, 0, 0.0f, 1.0f, false);
+    graph.postConnectMod(2, 0, 3, 0);
+    graph.postSetTempo(120.0f);
+    graph.applyCommands();
+    render(graph, 64); // stopped, and past the cable's fade-in
+
+    auto apart = [](double a, double b) {
+        const double d = std::fabs(a - b);
+        return std::min(d, 1.0 - d);
+    };
+    const double blockBeats = kBlockSize * 2.0 / 48000.0;
+    graph.setTransportRunning(true);
+    int checked = 0;
+    for (int b = 0; b < 3000; ++b) {
+        graph.process(kBlockSize);
+        if (b % 211 != 0) continue;
+        const double start = graph.transportBeat() - blockBeats;
+        const double phase = start - std::floor(start);
+        check(apart(graph.paramOf(3, 0), phase) < 0.01,
+              "the knob is where the beat is, at beat " + std::to_string(start));
+        ++checked;
+    }
+    check(checked > 10, "and was looked at across many beats");
+
+    graph.postResetTransport();
+    graph.applyCommands();
+    graph.process(kBlockSize);
+    check(graph.paramOf(3, 0) < 0.01, "a reset starts its cycle again from the top");
+}
+
+/**
  * A delay synced to the transport keeps time while the transport is stopped, at the tempo the
  * graph was given -- which only works because the graph hands every node the tempo as well as
  * the running rate (Node::setTiming). The running rate is zero while stopped, and a node that
@@ -1592,6 +1636,7 @@ int main() {
     anAmpWithNoRangeSweepsFromNothingToItsKnob();
     patchingAndUnpatchingAnAmpFade();
     aSyncedDelayKeepsTheGraphsTempoWhileStopped();
+    aSyncedLfoFollowsTheTransportsBeat();
     aFlattenedPolySubpatchSoundsTwoNotesAtOnce();
     aModulatorDrivesAParameterAcrossItsRange();
     anExponentialRangeSweepsGeometrically();

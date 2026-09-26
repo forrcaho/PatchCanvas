@@ -749,7 +749,8 @@ void Graph::process(int32_t frames) {
         if (!record.used || record.node == nullptr) continue;
         Node *node = record.node;
 
-        node->setTiming(beatsPerFrame, running, scales_, transport_.beatsPerFrame());
+        node->setTiming(beatsPerFrame, running, scales_, transport_.beatsPerFrame(),
+                        transport_.beatAt(0));
         const Interval interval = node->interval();
         if (!interval.none()) {
             const int32_t count = transport_.ticks(interval, frames, ticks.data(), kMaxTicks);
