@@ -1046,11 +1046,11 @@ class TransportSyncTest {
     }
 
     /**
-     * Mirrors kIntervals in nodes.h entry for entry, read out of the header. A mismatch is a
-     * tile that plays another length than it says -- or, for "free", a Delay that is synced.
+     * Mirrors kIntervals and the interval code in nodes.h, read out of the header. A mismatch is
+     * a tile that plays another length than it says -- or, for "free", a Delay that is synced.
      */
     @Test
-    fun `the interval table is the engine's, entry for entry`() {
+    fun `the interval table and code are the engine's, entry for entry`() {
         val header = java.io.File("src/main/cpp/nodes.h").readText()
         val table = header.substringAfter("constexpr Interval kIntervals[] = {").substringBefore("};")
         val engine = Regex("""\{\s*(\d+),\s*(\d+)\s*\}""").findAll(table)
@@ -1060,12 +1060,15 @@ class TransportSyncTest {
             Regex("""constexpr int32_t $name = (\d+);""").find(header)!!.groupValues[1].toInt()
         assertEquals(constant("kDefaultInterval"), DEFAULT_INTERVAL)
         assertEquals(constant("kFreeInterval"), FREE_INTERVAL)
+        assertEquals(constant("kIntervalCode"), INTERVAL_CODE)
+        assertEquals(constant("kMaxBeats"), MAX_BEATS)
+        assertTrue("the code starts past the old table", INTERVAL_CODE >= INTERVALS.size)
         assertTrue("and free is no length", INTERVALS[FREE_INTERVAL].free)
 
         // Every clocked module's knob reaches the whole table, from the header.
         Types.byName.values.filter { it.intervalParam >= 0 }.forEach { type ->
             val interval = type.params[type.intervalParam]
-            assertEquals(type.name, INTERVALS.size, interval.steps)
+            assertEquals(type.name, (INTERVAL_CODE + MAX_BEATS * MAX_BEATS - 1).toFloat(), interval.max)
             assertTrue("${type.name}: the interval belongs in the header", interval.header)
         }
     }

@@ -1384,8 +1384,7 @@ class PatchModule(
         get() {
             val index = type.intervalParam
             if (index < 0) return INTERVALS[FREE_INTERVAL]
-            val chosen = params.getOrElse(index) { type.params[index].default }.roundToInt()
-            return INTERVALS[chosen.coerceIn(0, INTERVALS.size - 1)]
+            return intervalOf(params.getOrElse(index) { type.params[index].default })
         }
 
     /** Whether knob [index] means anything as the other knobs stand; see [Param.liveWhen]. */
@@ -2222,18 +2221,8 @@ private fun DrawScope.drawTile(
     )
 }
 
-/**
- * One tile of the interval chooser: the count large -- steps to the beat, or beats to the
- * step -- and its name as a note length small beneath it, where it has one. Centered, since a
- * row of seventeen is narrow and a count read at a glance is the point.
- */
-private fun DrawScope.drawIntervalTile(
-    rect: Rect,
-    d: Float,
-    interval: Interval,
-    chosen: Boolean,
-    measurer: TextMeasurer,
-) {
+/** One tile of the interval chooser: a count, or "free", centered, lit when it is the one chosen. */
+private fun DrawScope.drawIntervalTile(rect: Rect, d: Float, label: String, chosen: Boolean, measurer: TextMeasurer) {
     drawRoundRect(
         color = if (chosen) scaleAccent else TileFill,
         topLeft = rect.topLeft,
@@ -2249,29 +2238,12 @@ private fun DrawScope.drawIntervalTile(
             style = Stroke(width = 1.5f * d),
         )
     }
-    val big = when {
-        interval.free -> "free"
-        interval.perBeat > 0 -> interval.perBeat.toString()
-        interval.beats > 0 -> interval.beats.toString()
-        else -> interval.label
-    }
-    val small = interval.noteName.takeIf { it != big }.orEmpty()
-    val room = Constraints(maxWidth = (rect.width - 4f * d).toInt().coerceAtLeast(0))
     val title = measurer.measure(
-        big, if (chosen) PanelChipOnStyle else PanelChipStyle,
-        overflow = TextOverflow.Ellipsis, maxLines = 1, constraints = room,
+        label, if (chosen) PanelChipOnStyle else PanelChipStyle,
+        overflow = TextOverflow.Ellipsis, maxLines = 1,
+        constraints = Constraints(maxWidth = (rect.width - 4f * d).toInt().coerceAtLeast(0)),
     )
-    // Dark on the lit tile, as its count is: the grid's gray all but vanished on the accent.
-    val nameStyle = if (chosen) GridLabelStyle.copy(color = Color(0xFF14171C)) else GridLabelStyle
-    val name = if (small.isEmpty()) null else measurer.measure(
-        small, nameStyle, overflow = TextOverflow.Ellipsis, maxLines = 1, constraints = room,
-    )
-    val height = title.size.height + (name?.size?.height ?: 0)
-    val top = rect.top + (rect.height - height) / 2f
-    drawText(title, topLeft = Offset(rect.center.x - title.size.width / 2f, top))
-    name?.let {
-        drawText(it, topLeft = Offset(rect.center.x - it.size.width / 2f, top + title.size.height))
-    }
+    drawText(title, topLeft = Offset(rect.center.x - title.size.width / 2f, rect.center.y - title.size.height / 2f))
 }
 
 /**
@@ -2434,50 +2406,48 @@ internal fun presetDetail(preset: SoundFontPreset): String = when (preset.bank) 
 
 /** Where each of [count] chooser tiles lands inside a panel's body. */
 /**
- * The interval chooser, laid out: where each tile is and which entry of [INTERVALS] it
- * chooses, and the caption over each row. One function for the drawing and the hit test.
+ * The interval chooser, laid out: where each tile is and what it picks, the caption over each
+ * row, and where the line saying what they make goes. One function for the drawing and the hit
+ * test.
  */
 internal class IntervalChooser(
-    val tiles: List<Pair<Rect, Int>>,
+    val tiles: List<Pair<Rect, IntervalPick>>,
     val captions: List<Pair<Offset, String>>,
+    val readout: Offset,
 )
 
 /**
- * Two rows across the panel: steps to a beat, 1 to 16, and steps longer than a beat -- the
- * quarter triplet, then 2 to 16 whole beats, then "free" where the module has one
- * ([ModuleType.canBeFree]).
+ * Two rows across the panel, as Forrest sketched them: **beats**, 1 to 16, over **divisions**,
+ * 1 to 16 -- a step is that many beats divided into that many -- and "free" at the end of the
+ * beats row where the module has one ([ModuleType.canBeFree]).
  *
- * The first thing tried rather than the answer: the roadmap left the interface to be settled
- * on the phone, by trial, and this is option (a) from that list. Numbers rather than names,
- * because five to a beat has no name, with the name worn small on the tiles that have one.
- * One row each rather than a page of tiles, so the count runs left to right the way it is
- * said, and the columns of the two rows line up.
+ * It stays open while both are chosen, since a step is two choices; a tap anywhere but a tile
+ * closes it. Above the rows, one line says what they make, with its note name where it has one
+ * ("1 beat ÷ 3 = 1/8T, an eighth triplet"), because two bare numbers do not say "triplet" and
+ * the name is how a musician recognizes one.
  */
 internal fun intervalChooser(panel: Rect, d: Float, fontScale: Float, free: Boolean): IntervalChooser {
-    fun indexOf(num: Int, den: Int) = INTERVALS.indexOfFirst { it.num == num && it.den == den }
-    val perBeat = (1..16).map { indexOf(1, it) }
-    val longer = listOf(indexOf(2, 3)) + (2..16).map { indexOf(it, 1) } +
-        listOfNotNull(FREE_INTERVAL.takeIf { free })
     val area = panelBody(panel, d).deflate(10f * d)
     val text = fontScale.coerceAtLeast(1f)
     val gap = 4f * d
+    val readoutH = 30f * d * text
     val captionH = 22f * d * text
-    val columns = maxOf(perBeat.size, longer.size)
+    val columns = MAX_BEATS + 1
     val tileW = (area.width - gap * (columns - 1)) / columns
-    val tileH = minOf(60f * d * text, (area.height - 2f * captionH - 3f * gap) / 2f)
-    // The pair of rows sits in the middle of the body rather than hanging from its top.
-    val block = 2f * captionH + 2f * tileH + 3f * gap
-    val firstCaption = area.top + (area.height - block) / 2f
+    val tileH = minOf(56f * d * text, (area.height - readoutH - 2f * captionH - 3f * gap) / 2f)
+    // The whole block sits in the middle of the body rather than hanging from its top.
+    val block = readoutH + 2f * captionH + 2f * tileH + 3f * gap
+    val readout = Offset(area.left, area.top + (area.height - block) / 2f)
+    val firstCaption = readout.y + readoutH
     val secondCaption = firstCaption + captionH + tileH + 3f * gap
-    fun row(indices: List<Int>, top: Float) = indices.mapIndexed { i, index ->
-        Rect(Offset(area.left + i * (tileW + gap), top), Size(tileW, tileH)) to index
-    }
+    fun tile(i: Int, top: Float) = Rect(Offset(area.left + i * (tileW + gap), top), Size(tileW, tileH))
+    val beats = (1..MAX_BEATS).map { tile(it - 1, firstCaption + captionH) to IntervalPick.Beats(it) } +
+        listOfNotNull((tile(MAX_BEATS, firstCaption + captionH) to IntervalPick.Free).takeIf { free })
+    val divisions = (1..MAX_BEATS).map { tile(it - 1, secondCaption + captionH) to IntervalPick.Divisions(it) }
     return IntervalChooser(
-        row(perBeat, firstCaption + captionH) + row(longer, secondCaption + captionH),
-        listOf(
-            Offset(area.left, firstCaption) to "steps per beat",
-            Offset(area.left, secondCaption) to "beats per step",
-        ),
+        beats + divisions,
+        listOf(Offset(area.left, firstCaption) to "beats", Offset(area.left, secondCaption) to "divisions"),
+        readout,
     )
 }
 
@@ -5058,9 +5028,14 @@ fun PatchCanvas(
                                     panel, frame.density, frame.fontScale, open.type.canBeFree,
                                 )
                                 waitForUpRelease()
-                                chooser.tiles.firstOrNull { it.first.contains(down.position) }
-                                    ?.let { (_, index) -> open.setParam(intervalParam, index.toFloat()) }
-                                intervalMenu = false
+                                // A tile changes its row and leaves the chooser open for the
+                                // other; anywhere else closes it.
+                                val pick = chooser.tiles.firstOrNull { it.first.contains(down.position) }?.second
+                                if (pick != null) {
+                                    open.setParam(intervalParam, open.interval.with(pick).code.toFloat())
+                                } else {
+                                    intervalMenu = false
+                                }
                                 return@awaitEachGesture
                             }
 
@@ -7642,7 +7617,7 @@ private fun DrawScope.drawChoices(
             drawWave(box, d, i, ink)
         } else {
             val word = when (param.choice) {
-                Choice.DIVISION -> INTERVALS.getOrNull(i)?.label.orEmpty()
+                Choice.DIVISION -> intervalOf(i.toFloat()).label
                 Choice.ARP -> ARP_MODES.getOrNull(i).orEmpty()
                 Choice.FILTER -> FILTER_TYPES.getOrNull(i).orEmpty()
                 Choice.SLOPE -> SLOPES.getOrNull(i).orEmpty()
@@ -8519,52 +8494,64 @@ internal const val DRONE_OCTAVES = 4
 internal const val TUNE_RANGE = 2400f
 
 /**
- * How long a clocked module's step is: [num]/[den] of a beat. Or no length at all, "free", for a
- * Delay or an LFO keeping time of its own ([free]).
+ * How long a clocked module's step is: [num] beats divided into [den] steps. Or no length at
+ * all, "free", for a Delay or an LFO keeping time of its own ([free]).
  *
- * The model is steps to a beat -- any n from 1 to 16, so five to a beat is simply 5 -- and
- * steps of whole beats for slow sweeps and long echoes, rather than a list of note lengths:
- * Forrest wanted five beats to a bar with five steps to each, and no list of names has that
- * in it. A step that has a name as a note length still wears it ([noteName]), because "1/8"
- * is how an eighth is recognized, but the number is what it is.
+ * A fraction of a beat, numerator and denominator both chosen, because that is what a step is
+ * -- Forrest's model, after a first version offered 1/n of a beat and whole beats and had to
+ * keep the quarter triplet (2 ÷ 3) as a special case and leave out the dotted eighth (3 ÷ 4).
+ * Here neither is special: five beats to a bar with five steps to each is 1 ÷ 5, a quarter
+ * triplet 2 ÷ 3, a dotted quarter 3 ÷ 2. Kept as chosen rather than reduced, so 2 ÷ 4 stays
+ * what the rows show; it plays as 1 ÷ 2, since only the ratio reaches the engine's arithmetic.
  */
 internal data class Interval(val num: Int, val den: Int) {
     /** No length: the module's own time knob is in charge. */
     val free: Boolean get() = num <= 0
 
-    /** n, for a step of 1/n of a beat; 0 for anything else. */
-    val perBeat: Int get() = if (num == 1) den else 0
+    private val reduced: Pair<Int, Int>
+        get() {
+            if (free) return 0 to 1
+            tailrec fun gcd(a: Int, b: Int): Int = if (b == 0) a else gcd(b, a % b)
+            val g = gcd(num, den)
+            return num / g to den / g
+        }
 
-    /** k, for a step of k whole beats from 2 up; 0 for anything else. */
-    val beats: Int get() = if (den == 1 && num >= 2) num else 0
+    /** Its name as a note length, where it has one: "1/8", "1/8T", "1/8.". */
+    val noteName: String? get() = NOTE_LENGTHS[reduced]?.first
 
-    /** Its name as a note length, where it has one: "1/8", "1/8T", "1/2.". */
-    val noteName: String? get() = NOTE_LENGTHS[num to den]
+    /** The same, in words: "eighth triplet". */
+    val noteWords: String? get() = NOTE_LENGTHS[reduced]?.second
 
-    /** What the header chip says: the note name where there is one, and the count where not. */
+    /** What the header chip says: the note name where there is one, and the fraction where not. */
     val label: String get() = when {
         free -> "free"
         noteName != null -> noteName!!
-        perBeat > 0 -> "$perBeat/beat"
-        else -> "$beats beats"
+        den == 1 -> "$num beats"
+        else -> "$num\u00F7$den"
     }
+
+    /** How the interval knob writes it; see [INTERVAL_CODE]. */
+    val code: Int get() = if (free) FREE_INTERVAL else INTERVAL_CODE + (num - 1) * MAX_BEATS + (den - 1)
 }
 
+/** Reduced fractions of a beat that are note lengths, with their names. */
 private val NOTE_LENGTHS = mapOf(
-    (4 to 1) to "1/1", (2 to 1) to "1/2", (1 to 1) to "1/4", (1 to 2) to "1/8", (1 to 4) to "1/16",
-    (1 to 8) to "1/32", (1 to 16) to "1/64",
-    (2 to 3) to "1/4T", (1 to 3) to "1/8T", (1 to 6) to "1/16T", (1 to 12) to "1/32T",
-    (3 to 1) to "1/2.", (6 to 1) to "1/1.",
+    (4 to 1) to ("1/1" to "whole"), (2 to 1) to ("1/2" to "half"), (1 to 1) to ("1/4" to "quarter"),
+    (1 to 2) to ("1/8" to "eighth"), (1 to 4) to ("1/16" to "sixteenth"),
+    (1 to 8) to ("1/32" to "thirty-second"), (1 to 16) to ("1/64" to "sixty-fourth"),
+    (4 to 3) to ("1/2T" to "half triplet"), (2 to 3) to ("1/4T" to "quarter triplet"),
+    (1 to 3) to ("1/8T" to "eighth triplet"), (1 to 6) to ("1/16T" to "sixteenth triplet"),
+    (1 to 12) to ("1/32T" to "thirty-second triplet"),
+    (6 to 1) to ("1/1." to "dotted whole"), (3 to 1) to ("1/2." to "dotted half"),
+    (3 to 2) to ("1/4." to "dotted quarter"), (3 to 4) to ("1/8." to "dotted eighth"),
+    (3 to 8) to ("1/16." to "dotted sixteenth"), (3 to 16) to ("1/32." to "dotted thirty-second"),
 )
 
 /**
- * Every step length a clocked module can take, indexed by its interval knob. Mirrors
- * kIntervals in nodes.h entry for entry, which GraphSyncTest reads out of the header.
- *
- * **Append, never reorder**: a saved patch names an index. The first nine were Bespoke's note
- * lengths and keep their places; 9 is [FREE_INTERVAL], which was one past the end while the
- * list stopped there and stays put now it does not, since moving it would turn every free
- * Delay already saved into a synced one. Everything after it arrived with steps to the beat.
+ * What the interval knob meant while it was an index: read, never written, so a patch saved by
+ * an older build reads as it was saved. Mirrors kIntervals in nodes.h entry for entry, which
+ * GraphSyncTest reads out of the header. 9 is [FREE_INTERVAL], which is still how "free" is
+ * written.
  */
 internal val INTERVALS = listOf(
     Interval(4, 1), Interval(2, 1), Interval(1, 1), Interval(1, 2), Interval(1, 4), Interval(1, 8),
@@ -8577,11 +8564,30 @@ internal val INTERVALS = listOf(
     Interval(15, 1), Interval(16, 1),
 )
 
-/** Mirrors kDefaultInterval: an eighth. */
-internal const val DEFAULT_INTERVAL = 3
+/**
+ * How the interval knob writes a step: INTERVAL_CODE + (beats - 1) * MAX_BEATS + (divisions - 1),
+ * beats and divisions each 1 to [MAX_BEATS]. Self-describing, above the old table so the two
+ * cannot be confused. Mirrors kIntervalCode and kMaxBeats.
+ */
+internal const val INTERVAL_CODE = 64
+internal const val MAX_BEATS = 16
 
-/** Mirrors kFreeInterval: no division, a time of the module's own. See [INTERVALS]. */
+/** Mirrors kDefaultInterval: one beat divided into one, a step a beat. */
+internal const val DEFAULT_INTERVAL = INTERVAL_CODE
+
+/** Mirrors kFreeInterval: no division, a time of the module's own. */
 internal const val FREE_INTERVAL = 9
+
+/** The step an interval knob's value stands for. Mirrors intervalOf in nodes.h. */
+internal fun intervalOf(value: Float): Interval {
+    if (!(value > 0f)) return INTERVALS[0]
+    val v = value.coerceAtMost((INTERVAL_CODE + MAX_BEATS * MAX_BEATS - 1).toFloat()).roundToInt()
+    if (v >= INTERVAL_CODE) {
+        val code = v - INTERVAL_CODE
+        return Interval(code / MAX_BEATS + 1, code % MAX_BEATS + 1)
+    }
+    return INTERVALS.getOrNull(v) ?: Interval(1, 1)
+}
 
 /**
  * The interval knob, one definition for every module the transport times: Steps, Seq, Arp,
@@ -8591,7 +8597,7 @@ internal const val FREE_INTERVAL = 9
  * see [ModuleType.canBeFree].
  */
 internal fun intervalParam(default: Int = DEFAULT_INTERVAL) = Param(
-    "interval", 0f, (INTERVALS.size - 1).toFloat(), default.toFloat(),
+    "interval", 0f, (INTERVAL_CODE + MAX_BEATS * MAX_BEATS - 1).toFloat(), default.toFloat(),
     curve = ParamCurve.STEPPED, choice = Choice.DIVISION, header = true,
 )
 
@@ -8602,6 +8608,31 @@ internal fun intervalParam(default: Int = DEFAULT_INTERVAL) = Param(
  */
 internal val ModuleType.canBeFree: Boolean
     get() = intervalParam >= 0 && params.any { it.liveWhen == LiveWhen(intervalParam, FREE_INTERVAL) }
+
+/** What a tap on one of the interval chooser's tiles picks. */
+internal sealed interface IntervalPick {
+    data class Beats(val n: Int) : IntervalPick
+    data class Divisions(val n: Int) : IntervalPick
+    data object Free : IntervalPick
+}
+
+/**
+ * [this] interval with [pick] applied: the row tapped changes and the other stays. From free,
+ * the other row starts at 1 -- Forrest's default for both.
+ */
+internal fun Interval.with(pick: IntervalPick): Interval = when (pick) {
+    is IntervalPick.Beats -> Interval(pick.n, if (free) 1 else den)
+    is IntervalPick.Divisions -> Interval(if (free) 1 else num, pick.n)
+    IntervalPick.Free -> INTERVALS[FREE_INTERVAL]
+}
+
+/** The line over the chooser saying what the two rows make: "2 beats ÷ 3 = 1/4T, a quarter triplet". */
+internal fun Interval.readout(): String {
+    if (free) return "free: its own knob sets the time"
+    val beats = if (num == 1) "1 beat" else "$num beats"
+    val name = noteName?.let { " = $it, ${if (noteWords!!.first() in "aeiou") "an" else "a"} $noteWords" }.orEmpty()
+    return "$beats \u00F7 $den$name"
+}
 
 /** The transport's rate. The range mirrors kMinTempo and kMaxTempo in transport.h. */
 internal val TEMPO = Param("tempo", 20f, 300f, 120f, " bpm")
@@ -9187,10 +9218,9 @@ private fun DrawScope.drawPanel(
     }
 
     val intervalParam = module.type.intervalParam
-    val chosenInterval = if (intervalParam < 0) -1
-        else module.params.getOrElse(intervalParam) { DEFAULT_INTERVAL.toFloat() }.roundToInt()
-    INTERVALS.getOrNull(chosenInterval)?.let {
-        drawChip(panelIntervalChip(panel, d, fontScale), d, it.label, intervalMenu, scaleAccent, measurer)
+    val chosenInterval = module.interval
+    if (intervalParam >= 0) {
+        drawChip(panelIntervalChip(panel, d, fontScale), d, chosenInterval.label, intervalMenu, scaleAccent, measurer)
     }
 
     // Only where there are dots to pin: it is the lock on their position, not a panel
@@ -9221,11 +9251,17 @@ private fun DrawScope.drawPanel(
             size = panelBody(panel, d).size,
         )
         val chooser = intervalChooser(panel, d, fontScale, module.type.canBeFree)
+        drawText(measurer.measure(chosenInterval.readout(), PanelChipStyle), topLeft = chooser.readout)
         chooser.captions.forEach { (at, caption) ->
             drawText(measurer.measure(caption, GridLabelStyle), topLeft = at)
         }
-        chooser.tiles.forEach { (tile, index) ->
-            drawIntervalTile(tile, d, INTERVALS[index], index == chosenInterval, measurer)
+        chooser.tiles.forEach { (tile, pick) ->
+            val (label, lit) = when (pick) {
+                is IntervalPick.Beats -> pick.n.toString() to (!chosenInterval.free && chosenInterval.num == pick.n)
+                is IntervalPick.Divisions -> pick.n.toString() to (!chosenInterval.free && chosenInterval.den == pick.n)
+                IntervalPick.Free -> "free" to chosenInterval.free
+            }
+            drawIntervalTile(tile, d, label, lit, measurer)
         }
         return
     }

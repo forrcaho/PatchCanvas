@@ -217,35 +217,41 @@ that goes in its own section as it always has.
    division chip opens a row of steps-per-beat numbers, with "1/8" and "1/8T" as labels on the
    ones they are. Settled on the phone, by trial.
 
-   As built. **One table**, `INTERVALS` / `kIntervals`, grown by appending: 1 to 16 steps to a
-   beat, 2 to 16 beats to a step, and the quarter triplet, which the old list had and the plain
-   1/n model does not -- kept rather than dropped, since a patch may be using it. The first
-   nine entries and "free" at index 9 kept their places, so **format 17 reads 16 and 15**
-   unchanged; nothing was refused. **One knob**, `intervalParam()`, for Steps, Seq, Arp, Euclid,
-   Delay and LFO, and one `intervalIndex()` reading it in the engine. "Free" is offered exactly
-   where a knob is live only then -- a Delay's time, an LFO's rate -- which is derived from the
-   knobs rather than declared.
+   **Revised the same evening, from Forrest's first look:** the first build offered 1/n of a
+   beat and whole beats, kept the quarter triplet (2/3 of a beat) as a special case, and was
+   about to be asked to add the dotted eighth (3/4). He pointed out that those are just
+   fractions of a beat, and that what is wanted is **both the numerator and the denominator**.
+   So a step is now **beats divided into divisions**, each 1 to 16, chosen in two rows --
+   beats over divisions, his sketch -- with both defaulting to 1: a step a beat.
 
-   **The chooser** is option (a): two rows across the panel, "steps per beat" 1 to 16 and
-   "beats per step" (1/4T, then 2 to 16, then free where the module has it), each tile a count
-   with its note name small beneath it where it has one. The header chip says the note name
-   where there is one and the count where not -- "5/beat", "7 beats" -- and grows with the text
-   size. **The grids mark beats and bars**: a faint line where each beat begins, when a step is
+   As built. **The chooser** stays open while both rows are picked, since a step is two
+   choices, and closes on a tap anywhere but a tile. A line above the rows says what they make,
+   with the note name where there is one -- "2 beats ÷ 3 = 1/4T, a quarter triplet" -- because
+   two bare numbers never say "triplet". "Free" ends the beats row on a Delay or an LFO, offered
+   exactly where a knob is live only then. The header chip says the note name, "5 beats", or the
+   fraction ("3÷5" -- a bare "3/5" would read as a note length), and grows with the text size.
+   A choice is kept as made: 2 ÷ 4 stays 2 ÷ 4 on the rows and plays as an eighth.
+
+   **The knob writes beats and divisions outright**, 64 + (beats − 1) × 16 + (divisions − 1),
+   and one `intervalParam()` builds it for Steps, Seq, Arp, Euclid, Delay and LFO. Values under
+   64 are the old table's indices -- Bespoke's nine note lengths, then the first build's
+   additions -- read and never written, every one of them some beats divided into some
+   divisions. So **format 18 reads 17, 16 and 15** unchanged, and nothing was refused. The
+   encoding is written once in Kotlin and once in C++, and two literals asserted on both sides
+   (82 is 2 ÷ 3, 97 is 3 ÷ 2) hold them together.
+
+   **The grids mark beats and bars**: a faint line where each beat begins, when a step is
    shorter than one, and a heavier one at each bar, from the patch's beats per bar -- so five
    to a beat reads as fives. Counted from the top of the loop, which is exact when the loop is
    a whole number of beats.
 
-   **The LFO syncs** from the same chip: one cycle per step of its interval, its phase read
-   straight off the transport's beat (handed to every node with `setTiming` now), so its cycles
-   start on the beat and hold still while the transport does -- which is only while the output
-   is off. Free by default, and free is where every LFO saved before 17 comes back. Leaving
-   sync carries on from the phase it had, rather than jumping.
+   **The LFO syncs** from the same chip: one cycle per step, its phase read straight off the
+   transport's beat (handed to every node with `setTiming` now), so its cycles start on the
+   beat and hold still while the transport does -- only ever while the output is off. Free by
+   default, which is where every older LFO comes back. Leaving sync carries on from the phase it
+   had rather than jumping.
 
-   Checked on the emulator: the chooser, five to a beat drawn in fives, the LFO synced with its
-   rate gone faint. Not yet on the phone, which is where the chooser is to be decided. Open for
-   that trial: whether seventeen tiles a row is too many at the phone's text size, and whether
-   the dotted eighth -- the commonest synced delay there is, and not in any of these rows --
-   earns a tile.
+   Checked on the emulator. The chooser is still to be settled on the phone.
 
 5. **The add menu in categories**, two taps to a module, grouped by what a module sends --
    which is what its color already says: **Synths** (Osc, Pluck, FM, SF, Noise), **Notes**

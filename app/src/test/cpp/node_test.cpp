@@ -25,6 +25,13 @@ namespace {
 
 constexpr int32_t kRate = 48000;
 
+/**
+ * An eighth -- one beat divided in two -- as the interval knob writes it. The sequencer tests
+ * were timed against it when it was the default, and state it now that the default is a step
+ * a beat.
+ */
+constexpr float kEighth = 65.0f;
+
 std::array<float, kBlockSize> constantBuffer(float value) {
     std::array<float, kBlockSize> buffer{};
     buffer.fill(value);
@@ -731,6 +738,7 @@ void idle(StepsNode &steps, int blocks, bool running = true) {
 void stepsTakeTheirStepFromTheCount() {
     std::printf("steps take their step from the count\n");
     StepsNode steps;
+    steps.setParam(2, kEighth);
     steps.prepare(kRate);
     steps.setParam(0, 4.0f);
 
@@ -751,6 +759,7 @@ void stepsTakeTheirStepFromTheCount() {
 void stepsPlayTheirOwnPattern() {
     std::printf("steps play the pattern they are given\n");
     StepsNode steps;
+    steps.setParam(2, kEighth);
     steps.prepare(kRate);
 
     // One octave up on step 1, which no default pattern contains.
@@ -772,6 +781,7 @@ void stepsPlayTheirOwnPattern() {
 void aClosedGateIsARestNotASkip() {
     std::printf("a closed gate is a rest, not a skip\n");
     StepsNode steps;
+    steps.setParam(2, kEighth);
     steps.prepare(kRate);
     steps.setSlot(stepSlot(0, 6, true));
     steps.setSlot(stepSlot(1, 3, false));  // a rest, remembering a pitch of its own
@@ -795,6 +805,7 @@ void aClosedGateIsARestNotASkip() {
 void aRestKeepsTheNoteItRemembers() {
     std::printf("a rest keeps the note it remembers\n");
     StepsNode steps;
+    steps.setParam(2, kEighth);
     steps.prepare(kRate);
     steps.setParam(0, 2.0f);          // a two-step loop, so step 1 comes round quickly
     steps.setSlot(stepSlot(0, 6, true));
@@ -818,6 +829,7 @@ void aRestKeepsTheNoteItRemembers() {
 void aNoteLastsHalfItsStep() {
     std::printf("a note lasts half its step\n");
     StepsNode steps;
+    steps.setParam(2, kEighth);
     steps.prepare(kRate);
     steps.setSlot(stepSlot(0, 0, true));
 
@@ -842,6 +854,7 @@ void aNoteLastsHalfItsStep() {
 void aStoppedTransportHoldsTheNote() {
     std::printf("a stopped transport holds the note\n");
     StepsNode steps;
+    steps.setParam(2, kEighth);
     steps.prepare(kRate);
     steps.setSlot(stepSlot(0, 0, true));
 
@@ -860,6 +873,7 @@ void aStoppedTransportHoldsTheNote() {
 void aTickLandsOnItsOwnSample() {
     std::printf("a tick lands on its own sample\n");
     StepsNode steps;
+    steps.setParam(2, kEighth);
     steps.prepare(kRate);
     steps.setSlot(stepSlot(0, 0, true));
     steps.setSlot(stepSlot(1, 12, true));
@@ -902,6 +916,7 @@ const ScaleList &chromaticThenMajor() {
 void aNoteTakesTheScaleOfTheBeatItStartsOn() {
     std::printf("a note takes the scale of the beat it starts on\n");
     StepsNode steps;
+    steps.setParam(2, kEighth);
     steps.prepare(kRate);
     steps.setParam(0, 16.0f);
     steps.setSlot(stepSlot(7, 2, true));
@@ -928,6 +943,7 @@ void aNoteTakesTheScaleOfTheBeatItStartsOn() {
 void aTripletOnTheSwitchBeatTakesTheNewScale() {
     std::printf("a triplet on the switch beat takes the new scale\n");
     StepsNode steps;
+    steps.setParam(2, kEighth);
     steps.prepare(kRate);
     steps.setParam(0, 16.0f);
     steps.setParam(2, 7.0f); // 1/8 triplet
@@ -963,6 +979,7 @@ const ScaleList &cThenG() {
 void aKeyChangeLandsOnItsBeat() {
     std::printf("a key change lands on its beat\n");
     StepsNode steps;
+    steps.setParam(2, kEighth);
     steps.prepare(kRate);
     steps.setParam(0, 16.0f);
     steps.setSlot(stepSlot(7, 0, true));
@@ -982,16 +999,23 @@ void theIntervalIsChosenByParameter() {
     steps.prepare(kRate);
 
     const Interval initial = steps.interval();
-    check(initial.num == kIntervals[kDefaultInterval].num &&
-          initial.den == kIntervals[kDefaultInterval].den, "starts on the default interval");
+    check(initial.num == 1 && initial.den == 1, "starts on a step a beat, one beat divided into one");
+
+    steps.setParam(2, kEighth);
+    check(steps.interval().num == 1 && steps.interval().den == 2, "one beat in two is an eighth");
+    // Literals, and the same ones IntervalTest writes: the formula lives once on each side of
+    // the boundary, and these numbers are what hold the two to each other.
+    steps.setParam(2, 82.0f);
+    check(steps.interval().num == 2 && steps.interval().den == 3, "82 is two beats in three, a quarter triplet");
+    steps.setParam(2, 97.0f);
+    check(steps.interval().num == 3 && steps.interval().den == 2, "97 is three beats in two, a dotted quarter");
 
     steps.setParam(2, 4.0f);
-    check(steps.interval().num == 1 && steps.interval().den == 4, "index 4 is a sixteenth");
+    check(steps.interval().num == 1 && steps.interval().den == 4, "an old file's index 4 is still a sixteenth");
 
-    steps.setParam(2, 99.0f);
-    const Interval last = kIntervals[kIntervalCount - 1];
-    check(steps.interval().num == last.num && steps.interval().den == last.den,
-          "an out-of-range choice clamps rather than reading past the table");
+    steps.setParam(2, 9999.0f);
+    check(steps.interval().num == kMaxBeats && steps.interval().den == kMaxBeats,
+          "an out-of-range value clamps to the last there is rather than reading past it");
 }
 
 void mixSumsRatherThanAverages() {
@@ -1075,6 +1099,7 @@ const NoteBuffer &notesOf(const StepsNode &steps) { return *steps.noteOutput(0);
 void theNotesOutputSaysWhatTheGateSays() {
     std::printf("the notes output says what the gate says\n");
     StepsNode steps;
+    steps.setParam(2, kEighth);
     steps.prepare(kRate);
     steps.setSlot(stepSlot(0, 5, true));
 
@@ -1244,6 +1269,7 @@ void aDroneIgnoresACellOutsideItsGrid() {
 void aRestStartsNothing() {
     std::printf("a rest starts nothing\n");
     StepsNode steps;
+    steps.setParam(2, kEighth);
     steps.prepare(kRate);
     steps.setParam(0, 2.0f); // two steps, so the rest comes round quickly
     steps.setSlot(stepSlot(0, 0, true));
@@ -1259,6 +1285,7 @@ void aRestStartsNothing() {
 void aTransposeRidesOnTheNote() {
     std::printf("a transpose rides on the note\n");
     StepsNode steps;
+    steps.setParam(2, kEighth);
     steps.prepare(kRate);
     steps.setSlot(stepSlot(0, 0, true));
     steps.setParam(1, 700.0f);
@@ -2129,6 +2156,7 @@ int countKind(const NoteBuffer &notes, NoteKind kind) {
 void aDotLastsItsLength() {
     std::printf("a dot lasts its length, in steps\n");
     SeqNode dots;
+    dots.setParam(2, kEighth);
     dots.setSlot(dotSlot(0, 0, 7, Q(3), 1.0f));
     const NoteBuffer first = tickDots(dots, 0);
     check(countKind(first, NoteKind::On) == 1 && first.events[0].degree == 7, "starts on its step");
@@ -2143,6 +2171,7 @@ void aDotIsStruckAtItsVelocity() {
     std::printf("a dot is struck at its own velocity\n");
     const auto same = [](float a, float b) { return std::fabs(a - b) < 1e-5f; };
     SeqNode dots;
+    dots.setParam(2, kEighth);
     dots.setSlot(dotSlot(0, 0, 0, Q(1), 0.4f));
     dots.setSlot(dotSlot(1, 0, 7, Q(1), 1.0f));
     const NoteBuffer said = tickDots(dots, 0);
@@ -2153,6 +2182,7 @@ void aDotIsStruckAtItsVelocity() {
     // Out of range from a hand-edited file or some future interface: clamped rather than
     // trusted, since a velocity above one is an oscillator amplitude above one.
     SeqNode wild;
+    wild.setParam(2, kEighth);
     wild.setSlot(dotSlot(0, 0, 0, Q(1), 4.0f));
     wild.setSlot(dotSlot(1, 0, 7, Q(1), -1.0f));
     const NoteBuffer clamped = tickDots(wild, 0);
@@ -2241,6 +2271,7 @@ void velocityIsHeard() {
 void aColumnOfDotsIsAChord() {
     std::printf("a column of dots is a chord, each note its own length\n");
     SeqNode dots;
+    dots.setParam(2, kEighth);
     dots.setSlot(dotSlot(0, 0, 0, Q(1), 1.0f));
     dots.setSlot(dotSlot(1, 0, 4, Q(2), 1.0f));
     dots.setSlot(dotSlot(2, 0, 7, Q(4), 1.0f));
@@ -2256,6 +2287,7 @@ void aColumnOfDotsIsAChord() {
 void aDotEndsBeforeTheNextStarts() {
     std::printf("a dot ends before the next one at its degree starts\n");
     SeqNode dots;
+    dots.setParam(2, kEighth);
     dots.setSlot(dotSlot(0, 0, 5, Q(2), 1.0f));
     dots.setSlot(dotSlot(1, 2, 5, Q(1), 1.0f));
     tickDots(dots, 0);
@@ -2269,6 +2301,7 @@ void aDotEndsBeforeTheNextStarts() {
 void dotsLoopAtTheLength() {
     std::printf("dots loop at the sequence's length\n");
     SeqNode dots;
+    dots.setParam(2, kEighth);
     dots.setParam(0, 4.0f);
     dots.setSlot(dotSlot(0, 1, 2, Q(1), 1.0f));
     int ons = 0;
@@ -2289,6 +2322,7 @@ void dotsLoopAtTheLength() {
 void aJumpInTimeEndsWhatWasHeld() {
     std::printf("a jump in time ends what was held\n");
     SeqNode dots;
+    dots.setParam(2, kEighth);
     dots.setSlot(dotSlot(0, 0, 0, Q(8), 1.0f));
     tickDots(dots, 0);
     check(dots.notesHeld() == 1, "held");
@@ -2358,6 +2392,7 @@ void aDotEndsPartwayThroughAStep() {
     };
 
     SeqNode seq;
+    seq.setParam(2, kEighth);
     seq.setSlot(dotSlot(0, 0, 0, Q(1) + 2, 1.0f)); // a step and a half
     check(countKind(tickAt(seq, 0), NoteKind::On) == 1, "starts");
     check(offsIn(seq, stepFrames - kBlockSize) == 0, "sounds all through its first step");
@@ -2369,12 +2404,14 @@ void aDotEndsPartwayThroughAStep() {
     // Shorter than a step: it has no whole steps at all, so its part starts on the tick it
     // does -- the case that has to be counted out after the starts rather than before them.
     SeqNode half;
+    half.setParam(2, kEighth);
     half.setSlot(dotSlot(0, 0, 0, 2, 1.0f));
     check(countKind(tickAt(half, 0), NoteKind::On) == 1, "a half-step note starts");
     check(offsIn(half, stepFrames / 2 - 2 * kBlockSize) == 0, "and holds half a step");
     check(offsIn(half, 4 * kBlockSize) == 1, "then ends, without waiting for a tick");
 
     SeqNode legato;
+    legato.setParam(2, kEighth);
     legato.setSlot(dotSlot(0, 0, 0, Q(1), 1.0f));
     tickAt(legato, 0);
     check(offsIn(legato, stepFrames - kBlockSize) == 0, "a whole-step note sounds its whole step");
@@ -2616,6 +2653,7 @@ void theIntervalTableOnlyEverGrew() {
     }
     // A sequencer set to free never ticks, rather than reading a length that is not one.
     StepsNode steps;
+    steps.setParam(2, kEighth);
     steps.setParam(2, static_cast<float>(kFreeInterval));
     check(steps.interval().none(), "a sequencer at free is not ticked");
 }

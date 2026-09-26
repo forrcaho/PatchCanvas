@@ -141,7 +141,7 @@ public:
     void setParam(int32_t index, float value) override;
     void notesCut(int32_t port, int32_t source) override;
     void heldNotes(int32_t port, NoteBuffer &into) const override;
-    Interval interval() const override { return kIntervals[intervalIndex_]; }
+    Interval interval() const override { return interval_; }
     void tick(int32_t offset, int64_t count) override;
     int32_t position() const override { return position_; }
 
@@ -170,7 +170,7 @@ private:
 
     int32_t mode_ = 0;
     int32_t octaves_ = 1;
-    int32_t intervalIndex_ = kDefaultInterval;
+    Interval interval_ = intervalOf(kDefaultInterval);
     /** Where in the pattern it is: -1 before the first note. */
     int32_t position_ = -1;
     /** Up-and-down's direction. */
@@ -203,7 +203,7 @@ public:
     void process(int32_t frames) override;
     void setParam(int32_t index, float value) override;
     void heldNotes(int32_t port, NoteBuffer &into) const override;
-    Interval interval() const override { return kIntervals[intervalIndex_]; }
+    Interval interval() const override { return interval_; }
     void tick(int32_t offset, int64_t count) override;
     int32_t position() const override { return step_; }
 
@@ -219,7 +219,7 @@ private:
     int32_t pulses_ = 3;
     int32_t rotate_ = 0;
     int32_t degree_ = 0;
-    int32_t intervalIndex_ = kDefaultInterval;
+    Interval interval_ = intervalOf(kDefaultInterval);
     int32_t step_ = -1;
 
     uint32_t soundingId_ = 0;

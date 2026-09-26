@@ -567,7 +567,7 @@ void StepsNode::setParam(int32_t index, float value) {
             break;
         }
         case 1: transposeCents_ = clampf(value, -kTuneRange, kTuneRange); break;
-        case 2: intervalIndex_ = intervalIndex(value); break;
+        case 2: interval_ = intervalOf(value); break;
         default: break;
     }
 }
@@ -607,7 +607,7 @@ void SeqNode::endAll(NoteBuffer &notes, uint16_t offset) {
 }
 
 void SeqNode::onTick(NoteBuffer &notes, uint16_t offset, int64_t count) {
-    const Interval interval = kIntervals[intervalIndex_];
+    const Interval interval = interval_;
 
     // The ticks a held note is waiting for are consecutive; anything else and it may
     // wait forever, so it ends here instead.
@@ -707,7 +707,7 @@ void SeqNode::setParam(int32_t index, float value) {
     switch (index) {
         case 0: length_ = static_cast<int32_t>(clampf(value, 1.0f, static_cast<float>(kSteps)) + 0.5f); break;
         case 1: transposeCents_ = clampf(value, -kTuneRange, kTuneRange); break;
-        case 2: intervalIndex_ = intervalIndex(value); break;
+        case 2: interval_ = intervalOf(value); break;
         default: break;
     }
 }
@@ -943,7 +943,7 @@ void LfoNode::process(int32_t frames) {
     // every boundary of the interval -- on the beat, with the sequencers dividing the same
     // one -- and cannot drift from them. It holds still while the transport does, which is
     // only ever while the output is off.
-    const Interval &sync = kIntervals[interval_];
+    const Interval &sync = interval_;
     const double cyclesPerBeat = sync.none() ? 0.0 : static_cast<double>(sync.den) / sync.num;
     for (int32_t i = 0; i < frames; ++i) {
         if (cyclesPerBeat > 0.0) {
@@ -973,7 +973,7 @@ void LfoNode::setParam(int32_t index, float value) {
         case 1: wave_ = static_cast<int32_t>(clampf(value, 0.0f, 3.0f) + 0.5f); break;
         // Switched back to free, it carries on from the phase it had reached, so leaving
         // sync is not a jump.
-        case 2: interval_ = intervalIndex(value); break;
+        case 2: interval_ = intervalOf(value); break;
         default: break;
     }
 }
@@ -1245,12 +1245,12 @@ void NoiseNode::setParam(int32_t index, float value) {
 
 float DelayNode::targetSamples() const {
     float samples;
-    if (interval_ == kFree) {
+    if (interval_.none()) {
         samples = timeMs_ * 0.001f * static_cast<float>(sampleRate_);
     } else {
         // 120bpm until a graph says otherwise, which only a test that never sets one does.
         const double perFrame = tempo_ > 0.0 ? tempo_ : 2.0 / static_cast<double>(sampleRate_);
-        const Interval &step = kIntervals[interval_];
+        const Interval &step = interval_;
         samples = static_cast<float>(static_cast<double>(step.num) / step.den / perFrame);
     }
     // Two short of the line, since a fractional read looks one sample past where it points.
@@ -1289,7 +1289,7 @@ void DelayNode::process(int32_t frames) {
 
 void DelayNode::setParam(int32_t index, float value) {
     switch (index) {
-        case 0: interval_ = intervalIndex(value); break;
+        case 0: interval_ = intervalOf(value); break;
         case 1: timeMs_ = clampf(value, 1.0f, 4000.0f); break;
         // Below 1, so every echo is quieter than the one before and the tail always ends.
         case 2: feedback_ = clampf(value, 0.0f, 0.95f); break;

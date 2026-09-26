@@ -24,10 +24,10 @@ class CatalogTest {
         val osc = patch.add(Types.Osc, Offset.Zero)!!
         osc.setParam(0, 3f) // a sine, so the file says something about the Osc
         val current = patch.toJson()
-        assertTrue(current.contains("\"version\":17"))
+        assertTrue(current.contains("\"version\":18"))
 
         // What a 15 build wrote: the same file, with no tune in it.
-        val older = current.replace("\"version\":17", "\"version\":15").replace(",\"tune\":0", "")
+        val older = current.replace("\"version\":18", "\"version\":15").replace(",\"tune\":0", "")
         assertTrue("the edit took: $older", !older.contains("tune"))
         val back = patchFromJson(older)
         assertNotNull("15 is still read", back)
@@ -73,7 +73,7 @@ class CatalogTest {
         val interval = Types.Delay.params[Types.Delay.intervalParam]
         assertTrue("the interval is a header chip", interval.header)
         assertTrue("which can be free", Types.Delay.canBeFree)
-        assertEquals("and defaults to an eighth", DEFAULT_INTERVAL.toFloat(), interval.default)
+        assertEquals("and defaults to a step a beat", Interval(1, 1), intervalOf(interval.default))
         assertFalse("a sequencer's cannot", Types.Seq.canBeFree)
     }
 

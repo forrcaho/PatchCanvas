@@ -65,8 +65,14 @@ import java.io.File
  * interval was free, which is what it comes back as. The bump is for the older build, which
  * would clamp five to a beat onto a sixteenth-note triplet and ignore a synced LFO's interval,
  * then autosave both as though that were what had been written.
+ * 18: an interval says its beats and its divisions outright -- 64 + (beats - 1) * 16 +
+ * (divisions - 1) -- where it was an index into the table 17 grew. Additive all the same, so
+ * 17, 16 and 15 still read: the table is still how every value under 64 is read, and every
+ * entry in it is exactly some beats divided into some divisions. Nothing is converted; the
+ * old values are simply still understood. The bump is for the older build, which would clamp
+ * any value past its table to sixteen beats a step.
  */
-private const val FORMAT_VERSION = 17
+private const val FORMAT_VERSION = 18
 
 /**
  * The older formats this build reads as they stand. See [upgrade].
@@ -75,7 +81,7 @@ private const val FORMAT_VERSION = 17
  * file already sounded like. Anything that would have to be *converted* is not on this list
  * and never will be.
  */
-private val READABLE = setOf(15, 16, FORMAT_VERSION)
+private val READABLE = setOf(15, 16, 17, FORMAT_VERSION)
 private const val TAG = "PatchStore"
 
 fun Patch.toJson(): String {

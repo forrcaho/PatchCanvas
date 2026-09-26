@@ -209,7 +209,7 @@ void ArpNode::setParam(int32_t index, float value) {
     switch (index) {
         case 0: mode_ = whole(value, 0, 3); break;
         case 1: octaves_ = whole(value, 1, 4); break;
-        case 2: intervalIndex_ = intervalIndex(value); break;
+        case 2: interval_ = intervalOf(value); break;
         default: break;
     }
 }
@@ -295,7 +295,7 @@ void ArpNode::step(NoteBuffer &notes, uint16_t offset, int64_t count) {
 
     const In &note = held_[position_ % heldCount_];
     const int32_t octave = position_ / heldCount_;
-    const Interval interval = kIntervals[intervalIndex_];
+    const Interval interval = interval_;
     const int64_t beat = floorDiv(count * interval.num, interval.den);
     // An octave is the scale's period, in degrees: as many as the scale sounding has.
     int32_t size = scales_ != nullptr ? scales_->tableAt(beat).size : 12;
@@ -362,7 +362,7 @@ void EuclidNode::setParam(int32_t index, float value) {
         case 1: pulses_ = whole(value, 0, kMaxSteps); break;
         case 2: rotate_ = whole(value, 0, kMaxSteps - 1); break;
         case 3: degree_ = whole(value, -24, 24); break;
-        case 4: intervalIndex_ = intervalIndex(value); break;
+        case 4: interval_ = intervalOf(value); break;
         default: break;
     }
 }
@@ -396,7 +396,7 @@ void EuclidNode::process(int32_t frames) {
             }
             step_ = static_cast<int32_t>(((count % steps_) + steps_) % steps_);
             if (!hit(step_, steps_, pulses_, rotate_)) continue;
-            const Interval interval = kIntervals[intervalIndex_];
+            const Interval interval = interval_;
             NoteEvent on;
             on.id = nextId_++;
             on.kind = NoteKind::On;

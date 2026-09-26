@@ -477,33 +477,42 @@ class GestureTest {
 
     // ------------------------------------------------------------------ the interval chooser
 
-    /** Opens [module]'s chooser from its header chip and taps the tile for [choice]. */
-    private fun Host.chooseInterval(module: PatchModule, choice: Int) {
+    /**
+     * Opens [module]'s chooser from its header chip, taps [picks] in turn -- it stays open between
+     * them, since a step is two choices -- and closes it with a tap away from the tiles.
+     */
+    private fun Host.chooseInterval(module: PatchModule, vararg picks: IntervalPick) {
         val panel = panelRect(frame)
         tap(panelIntervalChip(panel, d, frame.fontScale).center)
-        val tile = intervalChooser(panel, d, frame.fontScale, module.type.canBeFree)
-            .tiles.firstOrNull { it.second == choice }
-        assertNotNull("${INTERVALS[choice].label} is not offered", tile)
-        tap(tile!!.first.center)
+        val chooser = intervalChooser(panel, d, frame.fontScale, module.type.canBeFree)
+        picks.forEach { pick ->
+            val tile = chooser.tiles.firstOrNull { it.second == pick }
+            assertNotNull("$pick is not offered", tile)
+            tap(tile!!.first.center)
+        }
+        tap(chooser.readout + Offset(5f * d, 5f * d))
     }
 
     @Test
-    fun `a sequencer is set to five to a beat from its header`() {
+    fun `a sequencer is set to five to a beat by its divisions alone`() {
         val rig = SeqRig()
-        rig.host.chooseInterval(rig.seq, INTERVALS.indexOf(Interval(1, 5)))
-        assertEquals(Interval(1, 5), rig.seq.interval)
+        rig.host.chooseInterval(rig.seq, IntervalPick.Divisions(5))
+        assertEquals("one beat, the default, into five", Interval(1, 5), rig.seq.interval)
         assertTrue("and the panel is still open, on its grid", rig.seq.expanded)
+    }
+
+    @Test
+    fun `a quarter triplet is two beats in three, chosen with the chooser open throughout`() {
+        val rig = SeqRig()
+        rig.host.chooseInterval(rig.seq, IntervalPick.Beats(2), IntervalPick.Divisions(3))
+        assertEquals(Interval(2, 3), rig.seq.interval)
     }
 
     @Test
     fun `a tap away from the chooser's tiles closes it and changes nothing`() {
         val rig = SeqRig()
         val before = rig.seq.interval
-        val panel = panelRect(rig.host.frame)
-        rig.host.tap(panelIntervalChip(panel, rig.host.d, rig.host.frame.fontScale).center)
-        // Between the caption and the first tile, where nothing is chosen.
-        val chooser = intervalChooser(panel, rig.host.d, rig.host.frame.fontScale, false)
-        rig.host.tap(chooser.captions.first().first + Offset(200f * rig.host.d, 2f))
+        rig.host.chooseInterval(rig.seq)
         assertEquals(before, rig.seq.interval)
         // Closed: the next tap lands on the grid, as it would with no chooser ever opened.
         rig.host.tap(rig.cell(1, 1))
@@ -519,11 +528,11 @@ class GestureTest {
         val rate = Types.Lfo.params.indexOfFirst { it.name == "rate" }
         assertTrue(lfo.isLive(rate))
 
-        host.chooseInterval(lfo, INTERVALS.indexOf(Interval(4, 1)))
-        assertEquals(Interval(4, 1), lfo.interval)
+        host.chooseInterval(lfo, IntervalPick.Beats(4))
+        assertEquals("from free, divisions start at one", Interval(4, 1), lfo.interval)
         assertFalse(lfo.isLive(rate))
 
-        host.chooseInterval(lfo, FREE_INTERVAL)
+        host.chooseInterval(lfo, IntervalPick.Free)
         assertTrue(lfo.interval.free)
         assertTrue(lfo.isLive(rate))
     }

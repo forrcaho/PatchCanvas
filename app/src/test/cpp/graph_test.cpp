@@ -1258,6 +1258,8 @@ void twoSequencersMergeIntoOnePolySubpatch() {
     graph.postConnect(1, 0, kEdge, 0);
     graph.postConnect(2, 0, kEdge, 0); // the same input: a note input merges rather than replaces
     graph.postSetParam(2, 1, 700.0f);  // a fifth up, so the two are not the same note
+    graph.postSetParam(1, 2, 3.0f);    // both at an eighth, the index an older file names it by
+    graph.postSetParam(2, 2, 3.0f);
     graph.postSetTempo(300.0f);        // and fast, so both keep starting notes throughout
     graph.applyCommands();
     graph.setTransportRunning(true);
@@ -1506,6 +1508,7 @@ void aModulatorIsEvaluatedBeforeTheKnobItTurns() {
     // and with it the gain -- is shut until that second step lands.
     graph.postSetStep(4, 0, 0, false);
     graph.postSetStep(4, 1, 0, true);
+    graph.postSetParam(4, 2, 65.0f); // one beat in two: an eighth, as the knob writes it
     graph.postSetParam(5, 0, 0.001f); // an instant attack, so the note is heard at once
     graph.postConnect(4, 0, 5, 0);
     graph.postSetParam(2, 0, 0.0f);

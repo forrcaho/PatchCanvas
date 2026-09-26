@@ -56,17 +56,13 @@ enum class NodeType : int32_t {
 };
 
 /**
- * The step lengths a clocked module can take, in beats: every one is a step of 1/n of a beat
- * for n from 1 to 16, or of whole beats from 2 to 16, plus the quarter triplet. One table for
- * every module the transport times -- sequencers, Arp, Euclid, Delay, LFO -- so a change to
- * how time is divided is one change. Mirrored by INTERVALS in PatchCanvas.kt and indexed by
- * the parameter that chooses one, so append rather than reorder: a saved patch names an
- * index, and the first nine were Bespoke's note lengths before the rest existed.
+ * What the interval knob meant before it said beats and divisions outright (see intervalOf):
+ * an index into this table, which only ever grew. Read, never written -- a patch saved by an
+ * older build still names these, and each one is exactly some number of beats divided into
+ * some number of steps, so it reads as it was saved. Mirrored by INTERVALS in PatchCanvas.kt.
  *
  * Index 9 is kFreeInterval and is no length at all ({0, 1}, which none() says): a Delay or
- * an LFO keeping time of its own, in milliseconds or hertz. It sat one past the end when the
- * table stopped at nine, and the table grew around it rather than moving it, since moving it
- * would have made every free Delay already saved a synced one.
+ * an LFO keeping time of its own, in milliseconds or hertz. It is still how "free" is written.
  */
 constexpr Interval kIntervals[] = {
         {4, 1}, // 1/1
@@ -104,14 +100,33 @@ constexpr Interval kIntervals[] = {
         {16, 1},
 };
 constexpr int32_t kIntervalCount = static_cast<int32_t>(sizeof(kIntervals) / sizeof(kIntervals[0]));
-constexpr int32_t kDefaultInterval = 3; // 1/8
 constexpr int32_t kFreeInterval = 9;
 
-/** A parameter's value as an index into kIntervals: rounded, and held inside the table. */
-inline int32_t intervalIndex(float value) {
-    if (!(value > 0.0f)) return 0;
-    const float last = static_cast<float>(kIntervalCount - 1);
-    return static_cast<int32_t>((value < last ? value : last) + 0.5f);
+/**
+ * How the interval knob writes a step of [beats] beats divided into [divisions] steps, each
+ * from 1 to kMaxBeats: kIntervalCode + (beats - 1) * kMaxBeats + (divisions - 1). Self-
+ * describing, where an index had to be looked up in a table and could only name what the table
+ * held -- and a fraction of a beat, a numerator and a denominator, is Forrest's model of what a
+ * step is: 2 ÷ 3 is a quarter triplet and 3 ÷ 2 a dotted quarter, neither a special case.
+ * Above the old table so the two can never be confused. Mirrors INTERVAL_CODE.
+ */
+constexpr int32_t kIntervalCode = 64;
+constexpr int32_t kMaxBeats = 16;
+constexpr int32_t kLastIntervalValue = kIntervalCode + kMaxBeats * kMaxBeats - 1;
+/** One beat divided into one: a step a beat. Mirrors DEFAULT_INTERVAL. */
+constexpr int32_t kDefaultInterval = 64;
+
+/** The step an interval knob's value stands for; see kIntervalCode and kIntervals. */
+inline Interval intervalOf(float value) {
+    if (!(value > 0.0f)) return kIntervals[0];
+    const float last = static_cast<float>(kLastIntervalValue);
+    const auto v = static_cast<int32_t>((value < last ? value : last) + 0.5f);
+    if (v >= kIntervalCode) {
+        const int32_t code = v - kIntervalCode;
+        return {code / kMaxBeats + 1, code % kMaxBeats + 1};
+    }
+    if (v < kIntervalCount) return kIntervals[v];
+    return {1, 1}; // between the two, where nothing is written
 }
 
 /**
@@ -408,7 +423,7 @@ public:
     void setParam(int32_t index, float value) override;
     void setSlot(const SlotValue &slot) override;
     int32_t position() const override { return step_; }
-    Interval interval() const override { return kIntervals[intervalIndex_]; }
+    Interval interval() const override { return interval_; }
     void tick(int32_t offset, int64_t count) override;
 
 private:
@@ -428,7 +443,7 @@ private:
      */
     int64_t voicedBeat_ = 0;
     int32_t length_ = 8;
-    int32_t intervalIndex_ = kDefaultInterval;
+    Interval interval_ = intervalOf(kDefaultInterval);
     /** Frames of gate left on the note that last started. Counts only while the transport runs. */
     int64_t gateRemaining_ = 0;
     /**
@@ -497,7 +512,7 @@ public:
     void setParam(int32_t index, float value) override;
     void setSlot(const SlotValue &slot) override;
     int32_t position() const override { return step_; }
-    Interval interval() const override { return kIntervals[intervalIndex_]; }
+    Interval interval() const override { return interval_; }
     void tick(int32_t offset, int64_t count) override;
     void heldNotes(int32_t port, NoteBuffer &into) const override;
 
@@ -529,7 +544,7 @@ private:
     int32_t step_ = -1;
     int64_t lastCount_ = -1;
     int32_t length_ = 16;
-    int32_t intervalIndex_ = kDefaultInterval;
+    Interval interval_ = intervalOf(kDefaultInterval);
     float transposeCents_ = 0.0f;
 
     int32_t dotStep_[kMaxDots] = {};
@@ -886,7 +901,8 @@ public:
 
 private:
     daisysp::DelayLine<float, kMaxSamples> line_;
-    int32_t interval_ = kDefaultInterval;
+    /** Synced to this, or free while it is none(). */
+    Interval interval_ = intervalOf(kDefaultInterval);
     float timeMs_ = 250.0f;
     float feedback_ = 0.35f;
     float mix_ = 0.35f;
@@ -947,8 +963,8 @@ private:
     float rateHz_ = 1.0f;
     /** Order mirrors kWaves in OscNode::setParam: saw, square, triangle, sine. */
     int32_t wave_ = 3;
-    /** One cycle per step of this interval, or kFreeInterval to run at rateHz_. */
-    int32_t interval_ = kFreeInterval;
+    /** One cycle per step of this interval, or free -- none() -- to run at rateHz_. */
+    Interval interval_ = intervalOf(kFreeInterval);
 };
 
 /**
