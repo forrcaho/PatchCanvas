@@ -43,6 +43,7 @@ layers several of its voices under one note.
 ./gradlew nativeGraphTest               # just the C++ suites
 ./gradlew lint
 ./gradlew testDebugUnitTest --tests '*GraphSyncTest*'          # one class
+./gradlew testDebugUnitTest --tests '*GestureTest*'            # the gesture loop, on the JVM
 ./gradlew testDebugUnitTest --tests '*unchanged patch*'        # one test
 
 # Kotlin test names are backtick-quoted sentences, so the filter takes them with
@@ -615,6 +616,24 @@ upstream without `--recursive` when updating. It builds as its own CMake target 
 Three suites, all run by `testDebugUnitTest`: JVM tests, `graph_test` and `node_test`. The
 C++ suites compile on the host under **ASan and UBSan** because `graph.cpp` and `nodes.cpp`
 depend on nothing from Android or Oboe; they are skipped where there is no host compiler.
+
+**`GestureTest` drives the real gesture loop**, on the JVM under Robolectric: the real
+`PatchCanvas`, real pointer events, targets found with the drawing's own geometry (`Frame`,
+`panelRect`, `envNodes`, `menuLayout`...) and outcomes read off the model. It runs at the
+reference device's density, 2.4375, never 1.0, and one test at font scale 1.5. Each test is
+aimed at a fault a finger once found -- the frozen undo button, the envelope that swallowed
+the tap closing its panel, the wrong timeout caught -- and each was mutation-checked by putting
+that fault back. **A new gesture gets a test here**, and one that changes what a touch means
+gets its old fault reintroduced to prove the test still sees it. The camera is a parameter of
+`PatchCanvas` for this alone, so a test can aim through it. Three things it needs that are easy
+to lose:
+- Robolectric is pinned to **SDK 36** on the class (`@Config(sdk = [36])`), because 4.17's
+  image of 37 lacks what touch injection calls. Try removing the pin when Robolectric moves.
+- The JDK has to open `jdk.internal.access` and `java.io` to it; `build.gradle.kts` does.
+- **Anything polling the engine per frame goes through `pollEachFrame`**, which returns at
+  once when the native library is not loaded. A `withFrameNanos` loop that runs forever never
+  lets the test clock go idle, and every test that opens that panel hangs for a minute and
+  fails -- the sequencer's playing step did exactly that.
 
 **Mutation-check a new test area.** Reintroduce the bug it should catch and confirm it
 fails. This found a missing `Graph` destructor, a declick ramp that still clicked, and a

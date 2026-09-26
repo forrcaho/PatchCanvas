@@ -121,6 +121,18 @@ android {
             // android.util.Log is a throwing stub in the unit-test android.jar; the
             // error paths in PatchStore call it deliberately, so let it no-op instead.
             isReturnDefaultValues = true
+            // Robolectric's gesture tests host the real composable, which needs the manifest
+            // and resources merged as the app would have them.
+            isIncludeAndroidResources = true
+            // Robolectric reaches into FileDescriptor's internals, which JDK 17 and later
+            // close to it unless they are opened by name.
+            all {
+                it.jvmArgs(
+                    "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED",
+                    "--add-opens=java.base/jdk.internal.access=ALL-UNNAMED",
+                    "--add-opens=java.base/java.io=ALL-UNNAMED",
+                )
+            }
         }
     }
 }
@@ -151,6 +163,15 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     testImplementation("junit:junit:4.13.2")
+    // Gesture tests: the real PatchCanvas, driven by real pointer events, on the JVM. In the
+    // unit suite rather than androidTest so they run with everything else and need no
+    // device -- every gesture fault so far was found by a finger, and a suite that needs a
+    // phone plugged in is one that does not get run.
+    testImplementation(composeBom)
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("org.robolectric:robolectric:4.17")
+    // The empty activity createComposeRule hosts its content in. Debug only.
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
     // The android.jar used for unit tests stubs org.json with methods that throw, so the
     // real implementation goes on the test classpath ahead of it.
     testImplementation("org.json:json:20250107")

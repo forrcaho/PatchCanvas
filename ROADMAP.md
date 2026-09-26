@@ -177,9 +177,38 @@ that goes in its own section as it always has.
    -- a port made at a rail slot does the same -- but the chip makes it a tap away. Laying a
    box's jacks from the top would end it and would redraw every box already built; Forrest's
    call.
-3. **Gesture tests through Compose's test tools**, before the menu redesign changes the
+3. ~~**Gesture tests through Compose's test tools**~~, before the menu redesign changes the
    gesture loop. Every gesture fault in this project was found by a finger; a test that
-   drives the real loop is the missing layer.
+   drives the real loop is the missing layer. **Done 2026-09-25: `GestureTest`, 24 tests.**
+
+   On the JVM under Robolectric rather than as instrumented tests on a device, so they run in
+   `testDebugUnitTest` with everything else, in about seven seconds -- a suite that needs a
+   phone plugged in is one that does not get run. Native graphics, so text is measured as the
+   app measures it; the reference device's density, since world units and pixels agree only at
+   a density of one; one test at font scale 1.5. Targets come from the drawing's own geometry
+   and outcomes from the model, so the menu redesign can change where a tile is without
+   rewriting the tests that tap it.
+
+   What they cover: patching by two taps, and a mismatch refused; a module following the
+   finger in dp; a pan; a pinch; the rail switch; the undo button once there is something to
+   undo; the add menu and a module's menu; a panel opened by a tap and closed by one outside
+   it; typing a knob; making a subpatch from a selection; going in and out through a box and
+   the breadcrumb; the envelope's node menu, the tap on a node that does nothing, the tap on
+   the line that adds one, the drag in the fill that bends it the way the finger went, and a
+   time typed in milliseconds; the dot grid's tap, stretch and locked velocity drag; and both
+   ways into a subpatch's Controls. Twelve mutants, seven of them faults a finger actually
+   found -- the undo button frozen at launch, the envelope claiming the whole screen, kotlinx's
+   timeout caught for Compose's, a curve following the number instead of the finger, a drag
+   forgetting density, a tap removing a node, a chip that did not answer -- each caught by the
+   test aimed at it.
+
+   Two changes to the app came with it. The camera is a parameter of `PatchCanvas`, defaulting
+   to the one it always made, so a test can aim through it. And the four per-frame engine polls
+   -- playing step, scale entry, live knobs, transport beat -- now return at once when the
+   native library is not loaded: with no engine they could only ever read "not running", and a
+   frame loop that never ends never lets a test's clock go idle, so every sequencer test hung.
+   Robolectric 4.17 is pinned to SDK 36 for these tests, since its image of 37 lacks what
+   touch injection calls.
 4. **Shared time divisions, and LFO synced to the beat.** A step is 1/n of a beat for any n
    from 1 to 16 -- five to a beat is n = 5 -- plus lengths of whole beats for slow LFOs and
    long delays; the transport's beats per bar is the other half. One definition, shared by

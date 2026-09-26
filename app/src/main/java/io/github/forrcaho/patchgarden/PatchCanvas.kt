@@ -4051,6 +4051,31 @@ internal fun Patch.enterScope(id: Long) {
  * Density lives here rather than at every call site so there is exactly one place where
  * world units become pixels.
  */
+/**
+ * Runs [read] once a frame for as long as the calling effect lives -- or not at all when there
+ * is no engine to read.
+ *
+ * Without the native library every reading is its not-running answer, so a poll has nothing to
+ * show; and a loop that asks for a frame forever never lets a test's clock go idle, which is the
+ * first thing a gesture test on the JVM ran into. [AudioEngine.available] rather than whether
+ * the engine has started, because that is settled when the class loads and cannot turn true
+ * after the effect has already given up.
+ */
+private suspend inline fun pollEachFrame(read: () -> Unit) {
+    if (!AudioEngine.available) return
+    while (true) {
+        withFrameNanos { }
+        read()
+    }
+}
+
+/** A camera for the density the composition is drawn at, kept across recompositions. */
+@Composable
+internal fun rememberCamera(): Camera {
+    val density = LocalDensity.current.density
+    return remember(density) { Camera(density) }
+}
+
 class Camera(private val density: Float) {
     var zoom by mutableFloatStateOf(1f)
     var pan by mutableStateOf(Offset.Zero)
@@ -4579,7 +4604,7 @@ internal fun subpatchPortSlot(frame: Frame, rail: PatchModule, dir: PortDirectio
 }
 
 /** Screen position of any port, whether its module is pinned or free. */
-private fun portScreen(
+internal fun portScreen(
     patch: Patch,
     ref: PortRef,
     camera: Camera,
@@ -4628,13 +4653,17 @@ fun PatchCanvas(
     scaleLibrary: ScaleLibrary = ScaleLibrary.of(null),
     /** The SoundFonts an SF panel chooses from. Null in previews and tests. */
     soundFonts: SoundFontLibrary? = null,
+    /**
+     * The view onto the world. Hoisted only so a gesture test can aim where things are drawn;
+     * the app leaves it to the default.
+     */
+    camera: Camera = rememberCamera(),
 ) {
     val density = LocalDensity.current
     val layoutDirection = LocalLayoutDirection.current
     // Safe to capture in the gesture loop's closure: it delegates to the view, like a
     // callback, rather than being a value that goes stale -- see rememberUpdatedState below.
     val haptics = LocalHapticFeedback.current
-    val camera = remember(density.density) { Camera(density.density) }
     var interaction by remember { mutableStateOf<Interaction>(Interaction.Idle) }
 
     // Text inside the world transform has to be laid out in world units. A density of 1
@@ -4719,10 +4748,7 @@ fun PatchCanvas(
     var transportBeat by remember { mutableDoubleStateOf(0.0) }
     LaunchedEffect(card) {
         if (card != FloatingCard.Transport) return@LaunchedEffect
-        while (true) {
-            withFrameNanos { }
-            transportBeat = AudioEngine.transportBeat()
-        }
+        pollEachFrame { transportBeat = AudioEngine.transportBeat() }
     }
 
     // Which entry of the scale list is sounding, from the engine, so the grid cannot
@@ -4735,10 +4761,7 @@ fun PatchCanvas(
             playingEntry = 0
             return@LaunchedEffect
         }
-        while (true) {
-            withFrameNanos { }
-            playingEntry = AudioEngine.scaleEntry()
-        }
+        pollEachFrame { playingEntry = AudioEngine.scaleEntry() }
     }
     // What the grid's rows and the tuning marks show: the scale sounding now.
     val playing = patch.scales.getOrElse(playingEntry) { patch.scales.first() }.scale
@@ -4758,10 +4781,7 @@ fun PatchCanvas(
             playingStep = -1
             return@LaunchedEffect
         }
-        while (true) {
-            withFrameNanos { }
-            playingStep = AudioEngine.stepOf(id)
-        }
+        pollEachFrame { playingStep = AudioEngine.stepOf(id) }
     }
 
     // Where each modulated parameter of the open module has got to, polled per frame for the
@@ -4783,8 +4803,7 @@ fun PatchCanvas(
             liveParams = emptyMap()
             return@LaunchedEffect
         }
-        while (true) {
-            withFrameNanos { }
+        pollEachFrame {
             liveParams = modulated.mapNotNull { i -> AudioEngine.paramOf(id, i)?.let { i to it } }.toMap()
         }
     }
